@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Закупки</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .purchase-layout {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 1rem;
+            height: calc(100vh - 180px)
+        }
+
+        .suppliers-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow-y: auto
+        }
+
+        .supplier-item {
+            padding: .6rem .8rem;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: .85rem
+        }
+
+        .supplier-item:hover {
+            background: rgba(99, 102, 241, .1)
+        }
+
+        .supplier-item.active {
+            background: rgba(99, 102, 241, .2);
+            border-left: 3px solid var(--accent)
+        }
+
+        .supplier-item .del-btn {
+            opacity: .5;
+            cursor: pointer
+        }
+
+        .supplier-item .del-btn:hover {
+            opacity: 1;
+            color: var(--danger)
+        }
+
+        .tabs-bar {
+            display: flex;
+            gap: .5rem;
+            margin-bottom: 1rem
+        }
+
+        .tab-btn {
+            padding: .5rem 1rem;
+            border-radius: 8px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            cursor: pointer
+        }
+
+        .tab-btn.active {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent)
+        }
+
+        .mml-note {
+            padding: 2rem;
+            text-align: center;
+            opacity: .7
+        }
+
+        #table-area table th,
+        #table-area table td {
+            border: 1px solid var(--border);
+        }
+
+        #table-area {
+            max-height: calc(100vh - 350px);
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Закупки</h1>
+                <div class="toolbar">
+                    <label>Дата: <input type="date" id="purchase-date"
+                            style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                    <button id="btn-suppliers" class="btn btn-primary">📚 Поставщики</button>
+                    <button id="btn-save" class="btn btn-success">💾 Сохранить закупки</button>
+                    <button id="btn-save-price" class="btn btn-warning">📋 Сохранить прайс</button>
+                </div>
+            </div>
+            <div class="tabs-bar">
+                <button class="tab-btn active" data-tab="purchases">Закупки</button>
+                <button class="tab-btn" data-tab="prices">Цены / Прайс-лист</button>
+            </div>
+            <div class="tabs" id="category-tabs" style="margin-bottom:1rem;flex-wrap:wrap;"></div>
+            <div class="purchase-layout">
+                <div class="suppliers-panel" id="suppliers-panel">
+                    <div class="mml-note">Добавьте поставщиков</div>
+                </div>
+                <div class="card" id="content-area">
+                    <div class="table-wrapper" id="table-area"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="suppliers-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Поставщики</h3><button class="modal-close" onclick="closeModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div id="all-suppliers-list"></div>
+                <hr style="margin:1rem 0;border-color:var(--border)">
+                <div class="form-group"><label>Новый поставщик</label><input type="text" id="new-supplier-name"
+                        placeholder="Название"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-success" onclick="addNewSupplier()">➕
+                    Добавить</button><button class="btn btn-secondary" onclick="closeModal()">Закрыть</button></div>
+        </div>
+    </div>
+    <div id="products-modal" class="modal-overlay">
+        <div class="modal" style="max-width:700px;width:90%;">
+            <div class="modal-header">
+                <h3>Выбор товара</h3><button class="modal-close" onclick="closeProductsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="products-search" placeholder="🔍 Поиск товара..."
+                    style="width:100%;padding:.6rem;margin-bottom:1rem;border-radius:8px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);font-size:.9rem;">
+                <div id="products-list" style="max-height:350px;overflow-y:auto;"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="closeProductsModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="purchases.js"></script>
+</body>
+
+</html>

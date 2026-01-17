@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Калькуляция</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Калькуляция <span class="accent">расчёта</span></h1>
+                <div class="toolbar"><button id="btn-delete-selected" class="btn btn-danger"
+                        disabled>🗑️</button><button id="btn-add" class="btn btn-success">➕</button></div>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-checkbox"><input type="checkbox" id="select-all"></th>
+                                <th>Дата</th>
+                                <th>Товар</th>
+                                <th>Категория</th>
+                                <th>Баз. вес</th>
+                                <th>Потери%</th>
+                                <th>Потери</th>
+                                <th>Чистый</th>
+                                <th>Коэфф.</th>
+                                <th>Итог. вес</th>
+                                <th>Комментарий</th>
+                                <th>⚙️</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">🧮</div>
+                    <p>Нет данных</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="item-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modal-title">Добавить</h3><button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="item-form"><input type="hidden" id="edit-id">
+                    <div class="form-group"><label>Дата</label><input type="date" id="inp-date"></div>
+                    <div class="form-group"><label>Товар</label><select id="inp-product"></select></div>
+                    <div class="form-group"><label>Базовый вес</label><input type="number" id="inp-base" step="0.01"
+                            min="0"></div>
+                    <div class="form-group"><label>Комментарий</label><input type="text" id="inp-comment"></div>
+                </form>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-secondary"
+                    id="btn-cancel">Отмена</button><button type="submit" form="item-form"
+                    class="btn btn-primary">Сохранить</button></div>
+        </div>
+    </div>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;text-align:center;">
+            <div class="modal-header" style="justify-content:center;">
+                <h3>Подтверждение</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Удалить?</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:1rem;"><button id="confirm-cancel-btn"
+                    class="btn btn-secondary">Нет</button><button id="confirm-ok-btn" class="btn btn-danger">Да</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="calculation.js"></script>
+</body>
+
+</html>

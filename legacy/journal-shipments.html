@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Журнал отгрузок</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container" id="main-view">
+            <div class="page-header">
+                <h1 class="page-title">Журнал <span class="accent">отгрузок</span> (архив)</h1>
+            </div>
+            <div class="card"
+                style="padding:1rem;margin-bottom:1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+                <label>С: <input type="date" id="filter-from"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <label>По: <input type="date" id="filter-to"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <button id="btn-filter" class="btn btn-primary">Сформировать</button>
+                <button id="btn-delete-selected" class="btn btn-danger" disabled>🗑️ Удалить выбранные</button>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-checkbox"><input type="checkbox" id="select-all"></th>
+                                <th>Дата</th>
+                                <th>Кол-во точек</th>
+                                <th>Сумма</th>
+                                <th>Кол-во отгр.</th>
+                                <th>Просмотр</th>
+                                <th>Редактировать</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">📋</div>
+                    <p>Нет данных</p>
+                </div>
+            </div>
+        </div>
+        <div class="container" id="view-mode" style="display:none;">
+            <div class="page-header">
+                <h1 class="page-title" id="view-title">Просмотр</h1>
+                <div class="toolbar"><button id="btn-print-view" class="btn btn-primary">🖨️ Печать</button><button
+                        id="btn-back-view" class="btn btn-secondary">← Назад</button></div>
+            </div>
+            <div class="ship-layout">
+                <div class="ship-clients" id="view-clients"></div>
+                <div class="ship-table">
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Оплата</th>
+                                    <th>Товар</th>
+                                    <th>Цена</th>
+                                    <th>Сумма</th>
+                                    <th>Вес</th>
+                                </tr>
+                            </thead>
+                            <tbody id="view-body"></tbody>
+                            <tfoot id="view-footer"></tfoot>
+                        </table>
+                    </div>
+                </div>
+                <div class="ship-print no-print"></div>
+            </div>
+            <div id="print-area" style="display:none;"></div>
+        </div>
+        <div class="container" id="edit-mode" style="display:none;">
+            <div class="page-header">
+                <h1 class="page-title" id="edit-title">Редактирование</h1>
+                <div class="toolbar"><button id="btn-save-changes" class="btn btn-success">💾 Сохранить
+                        изменения</button><button id="btn-back-edit" class="btn btn-secondary">← Назад</button></div>
+            </div>
+            <div class="ship-layout">
+                <div class="ship-clients" id="edit-clients"></div>
+                <div class="ship-table">
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th class="col-checkbox"><input type="checkbox" id="edit-select-all"></th>
+                                    <th>Оплата</th>
+                                    <th>Товар</th>
+                                    <th>Сумма</th>
+                                    <th>Вес</th>
+                                    <th>✕</th>
+                                </tr>
+                            </thead>
+                            <tbody id="edit-body"></tbody>
+                        </table>
+                    </div>
+                    <div style="padding:.5rem;"><button id="btn-add-row" class="btn btn-success">➕
+                            Добавить</button><button id="btn-delete-rows" class="btn btn-danger"
+                            style="margin-left:.5rem" disabled>🗑️ Удалить</button></div>
+                </div>
+                <div class="ship-print no-print"></div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="journal-shipments.js"></script>
+</body>
+
+</html>

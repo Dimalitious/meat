@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дашборд Свода</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">📊 Дашборд <span class="accent">Свода</span></h1>
+            </div>
+            <div class="dash-grid">
+                <div class="dash-card">
+                    <div class="icon">🥩</div>
+                    <div class="value" id="val-beef">0</div>
+                    <div class="label">Говядина (кг)</div>
+                </div>
+                <div class="dash-card">
+                    <div class="icon">🐑</div>
+                    <div class="value" id="val-lamb">0</div>
+                    <div class="label">Баранина (кг)</div>
+                </div>
+                <div class="dash-card">
+                    <div class="icon">🐔</div>
+                    <div class="value" id="val-chicken">0</div>
+                    <div class="label">Курица (кг)</div>
+                </div>
+                <div class="dash-card">
+                    <div class="icon">📦</div>
+                    <div class="value" id="val-other">0</div>
+                    <div class="label">Остальные (кг)</div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            function update() {
+                const d = StorageService.getSvodByCategory();
+                document.getElementById('val-beef').textContent = d.beef.toFixed(1);
+                document.getElementById('val-lamb').textContent = d.lamb.toFixed(1);
+                document.getElementById('val-chicken').textContent = d.chicken.toFixed(1);
+                document.getElementById('val-other').textContent = d.other.toFixed(1);
+            }
+            update(); window.addEventListener('productsUpdated', update);
+        })();
+    </script>
+</body>
+
+</html>

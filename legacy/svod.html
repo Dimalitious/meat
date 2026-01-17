@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Свод</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .svod-table {
+            font-size: .7rem;
+        }
+
+        .svod-table th {
+            white-space: normal;
+            min-width: 40px;
+            font-size: .6rem;
+            padding: .3rem;
+            vertical-align: top;
+        }
+
+        .svod-table td {
+            vertical-align: middle;
+            padding: .3rem;
+        }
+
+        .svod-table input[type="number"] {
+            min-width: 50px;
+            font-size: .7rem;
+            padding: .2rem;
+        }
+
+        .header-select {
+            font-size: .6rem;
+            padding: .15rem;
+            width: 80px;
+            margin-bottom: .2rem;
+        }
+
+        .header-select.supplier-selected {
+            background: rgba(16, 185, 129, .3);
+            border-color: var(--success);
+        }
+
+        .order-positive {
+            background: rgba(16, 185, 129, .15) !important;
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Свод</h1>
+                <div class="toolbar">
+                    <label style="color:var(--text-secondary);margin-right:0.5rem;">Дата:</label>
+                    <input type="date" id="svod-date-input" class="form-control"
+                        style="width:150px;margin-right:1rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);">
+                    <button class="btn btn-primary" id="btn-auto-fill">⬇ Заполнить вес</button>
+                    <button class="btn btn-secondary" id="btn-clear-weight">✕ Убрать вес</button>
+                    <button class="btn btn-success" id="btn-save-svod">💾 Сохранить свод</button>
+                </div>
+            </div>
+            <div class="tabs" id="tabs"></div>
+            <div class="svod-layout" style="display:flex;gap:1.5rem;align-items:flex-start;">
+                <div class="card" style="flex:1;">
+                    <div class="table-wrapper">
+                        <table class="svod-table" id="svod-table">
+                            <thead id="table-head"></thead>
+                            <tbody id="table-body"></tbody>
+                        </table>
+                    </div>
+                    <div id="empty-state" class="empty-state" style="display:none;">
+                        <div class="empty-state-icon">📊</div>
+                        <p>Нет данных</p>
+                    </div>
+                </div>
+
+                <!-- Dashboard Sidebar -->
+                <div class="card dashboard-card"
+                    style="width:250px;position:sticky;top:1rem;padding:1.5rem;text-align:center;">
+                    <h3 style="margin-top:0;font-size:1.1rem;color:var(--text-secondary);margin-bottom:0.5rem;">Заказы
+                        (кг)</h3>
+                    <div id="dashboard-total-orders" style="font-size:2.5rem;font-weight:700;color:var(--primary);">0.00
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.5rem;">Сумма по таблице</div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="svod.js"></script>
+</body>
+
+</html>

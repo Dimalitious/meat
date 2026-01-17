@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Журнал отгрузочных прайс-листов</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Журнал отгрузочных прайс-листов</h1>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table class="table" id="journal-table">
+                        <thead>
+                            <tr>
+                                <th>Дата прайс-листа</th>
+                                <th>Дата создания записи</th>
+                                <th>Поставщики</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">📋</div>
+                    <p>Журнал пуст</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;text-align:center;">
+            <div class="modal-header" style="justify-content:center;">
+                <h3>Подтверждение</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Удалить?</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:1rem;"><button id="confirm-cancel-btn"
+                    class="btn btn-secondary">Нет</button><button id="confirm-ok-btn" class="btn btn-danger">Да</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            const tableBody = document.getElementById('table-body');
+            const emptyState = document.getElementById('empty-state');
+            const confirmModal = document.getElementById('confirm-modal');
+            const confirmMessage = document.getElementById('confirm-message');
+            const confirmOk = document.getElementById('confirm-ok-btn');
+            const confirmCancel = document.getElementById('confirm-cancel-btn');
+            const toast = document.getElementById('toast');
+            let pendingAction = null;
+
+            function showToast(msg, type = 'success') {
+                toast.textContent = msg;
+                toast.className = 'toast ' + type;
+                toast.style.display = 'block';
+                setTimeout(() => toast.style.display = 'none', 3000);
+            }
+
+            function showConfirm(msg, onOk) {
+                confirmMessage.textContent = msg;
+                pendingAction = onOk;
+                confirmModal.classList.add('open');
+            }
+
+            function closeConfirm() {
+                confirmModal.classList.remove('open');
+                pendingAction = null;
+            }
+
+            confirmOk.addEventListener('click', () => { if (pendingAction) pendingAction(); closeConfirm(); });
+            confirmCancel.addEventListener('click', closeConfirm);
+
+            function renderTable() {
+                const journal = StorageService.getJournalShipmentPricelists().sort((a, b) => b.created_at.localeCompare(a.created_at));
+                tableBody.innerHTML = '';
+
+                if (journal.length === 0) {
+                    emptyState.style.display = 'block';
+                    return;
+                }
+                emptyState.style.display = 'none';
+
+                journal.forEach(item => {
+                    const tr = document.createElement('tr');
+
+                    // Count active suppliers
+                    const activeSuppliers = item.columns ? item.columns.filter(c => c).length : 0;
+
+                    tr.innerHTML = `
+                        <td>${new Date(item.date).toLocaleDateString('ru-RU')}</td>
+                        <td>${new Date(item.created_at).toLocaleString('ru-RU')}</td>
+                        <td>${activeSuppliers} поставщиков</td>
+                        <td class="col-actions">
+                            <button class="btn-icon danger" onclick="deleteItem(${item.id})">🗑️</button>
+                        </td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+            }
+
+            window.deleteItem = function (id) {
+                showConfirm('Удалить запись?', () => {
+                    StorageService.deleteJournalShipmentPricelistsByIds([id]);
+                    renderTable();
+                    showToast('Удалено', 'success');
+                });
+            };
+
+            renderTable();
+        })();
+    </script>
+</body>
+
+</html>

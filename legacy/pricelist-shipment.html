@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отгрузочный прайс-лист</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .svod-table {
+            font-size: .8rem;
+        }
+
+        .svod-table th {
+            white-space: normal;
+            min-width: 80px;
+            font-size: .75rem;
+            padding: .5rem;
+            vertical-align: top;
+        }
+
+        .svod-table td {
+            vertical-align: middle;
+            padding: .4rem;
+        }
+
+        .header-select {
+            font-size: .75rem;
+            padding: .2rem;
+            width: 100%;
+            margin-bottom: .2rem;
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Отгрузочный прайс-лист</h1>
+                <div class="toolbar">
+                    <label for="pricelist-date" style="color:var(--text-secondary);margin-right:0.5rem;">Дата:</label>
+                    <input type="date" id="pricelist-date" class="form-control" style="width:150px;margin-right:1rem;">
+                    <button class="btn btn-success" id="btn-save-pricelist">💾 Сохранить в журнал</button>
+                </div>
+            </div>
+            <div class="tabs" id="tabs"></div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table class="svod-table" id="svod-table">
+                        <thead id="table-head"></thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">📊</div>
+                    <p>Нет продуктов в этой категории</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="pricelist-shipment.js"></script>
+</body>
+
+</html>

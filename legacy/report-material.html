@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Материальный отчёт</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">📦 Материальный <span class="accent">отчёт</span></h1>
+            </div>
+            <div class="card"
+                style="padding:1rem;margin-bottom:1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+                <label>С: <input type="date" id="filter-from"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <label>По: <input type="date" id="filter-to"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <select id="filter-product"
+                    style="padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);min-width:200px;">
+                    <option value="">Все товары</option>
+                </select>
+                <button id="btn-generate" class="btn btn-primary">Сформировать</button>
+                <button id="btn-export" class="btn btn-success">📤 Excel</button>
+            </div>
+            <div class="card" style="margin-bottom:1rem;">
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;padding:1rem;">
+                    <div class="stat-card">
+                        <div class="stat-label">Начальный остаток</div>
+                        <div class="stat-value" id="stat-opening">0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Приход</div>
+                        <div class="stat-value" id="stat-incoming" style="color:var(--success);">+0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Расход</div>
+                        <div class="stat-value" id="stat-outgoing" style="color:var(--danger);">-0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Конечный остаток</div>
+                        <div class="stat-value" id="stat-closing">0.0 кг</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Операция</th>
+                                <th>Товар</th>
+                                <th>Контрагент</th>
+                                <th>Приход</th>
+                                <th>Расход</th>
+                                <th>Остаток</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">📦</div>
+                    <p>Нет данных за указанный период</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            const tableBody = document.getElementById('table-body'), emptyState = document.getElementById('empty-state'), btnGenerate = document.getElementById('btn-generate'), btnExport = document.getElementById('btn-export'), filterFrom = document.getElementById('filter-from'), filterTo = document.getElementById('filter-to'), filterProduct = document.getElementById('filter-product'), statOpening = document.getElementById('stat-opening'), statIncoming = document.getElementById('stat-incoming'), statOutgoing = document.getElementById('stat-outgoing'), statClosing = document.getElementById('stat-closing'), toast = document.getElementById('toast');
+
+            let reportData = [];
+
+            function esc(s) { return s ? String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) : '' }
+            function showToast(msg, type) { toast.textContent = msg; toast.className = 'toast ' + type; toast.style.display = 'block'; setTimeout(() => toast.style.display = 'none', 3000) }
+
+            // Populate products filter
+            function loadProducts() {
+                const products = StorageService.getProducts();
+                filterProduct.innerHTML = '<option value="">Все товары</option>';
+                products.forEach(p => {
+                    filterProduct.innerHTML += `<option value="${esc(p.product_code)}">${esc(p.product_name)}</option>`;
+                });
+            }
+
+            function generateReport() {
+                const from = filterFrom.value, to = filterTo.value, productCode = filterProduct.value;
+                reportData = [];
+                let runningBalance = 0;
+                let totalIncoming = 0, totalOutgoing = 0;
+
+                // Get purchases (incoming)
+                const purchases = StorageService.getJournalPurchases();
+                purchases.forEach(p => {
+                    if (from && p.date < from) return;
+                    if (to && p.date > to) return;
+                    (p.rows || []).forEach(r => {
+                        if (productCode && r.product_code !== productCode) return;
+                        const qty = parseFloat(r.quantity) || 0;
+                        reportData.push({
+                            date: p.date,
+                            operation: 'Закупка',
+                            product: r.product_name || r.product_code,
+                            counterparty: p.supplier_name,
+                            incoming: qty,
+                            outgoing: 0
+                        });
+                    });
+                });
+
+                // Get shipments (outgoing)
+                const shipments = StorageService.getJournalShipments();
+                shipments.forEach(s => {
+                    if (from && s.date < from) return;
+                    if (to && s.date > to) return;
+                    (s.shipments || []).forEach(r => {
+                        if (productCode) {
+                            const product = StorageService.getProductByCode(r.product_code);
+                            if (!product || product.product_code !== productCode) return;
+                        }
+                        const qty = parseFloat(r.shipped_fact) || 0;
+                        const product = StorageService.getProductByCode(r.product_code);
+                        const customer = StorageService.getCustomers().find(c => String(c.customer_id) === String(r.customer_id));
+                        reportData.push({
+                            date: s.date,
+                            operation: 'Отгрузка',
+                            product: product?.product_name || r.product_code,
+                            counterparty: customer?.customer_name || r.customer_id,
+                            incoming: 0,
+                            outgoing: qty
+                        });
+                    });
+                });
+
+                // Sort by date
+                reportData.sort((a, b) => a.date.localeCompare(b.date));
+
+                // Calculate running balance
+                reportData.forEach(r => {
+                    runningBalance += r.incoming - r.outgoing;
+                    r.balance = runningBalance;
+                    totalIncoming += r.incoming;
+                    totalOutgoing += r.outgoing;
+                });
+
+                // Update stats
+                statOpening.textContent = '0.0 кг';
+                statIncoming.textContent = `+${totalIncoming.toFixed(1)} кг`;
+                statOutgoing.textContent = `-${totalOutgoing.toFixed(1)} кг`;
+                statClosing.textContent = `${runningBalance.toFixed(1)} кг`;
+
+                // Render table
+                tableBody.innerHTML = '';
+                emptyState.style.display = reportData.length === 0 ? 'block' : 'none';
+                reportData.forEach(r => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${esc(r.date)}</td><td>${esc(r.operation)}</td><td>${esc(r.product)}</td><td>${esc(r.counterparty)}</td><td style="color:var(--success);">${r.incoming > 0 ? '+' + r.incoming.toFixed(1) : ''}</td><td style="color:var(--danger);">${r.outgoing > 0 ? '-' + r.outgoing.toFixed(1) : ''}</td><td>${r.balance.toFixed(1)}</td>`;
+                    tableBody.appendChild(tr);
+                });
+            }
+
+            btnGenerate.addEventListener('click', generateReport);
+
+            btnExport.addEventListener('click', function () {
+                if (reportData.length === 0) { showToast('Сначала сформируйте отчёт', 'error'); return; }
+                const data = reportData.map(r => ({
+                    'Дата': r.date,
+                    'Операция': r.operation,
+                    'Товар': r.product,
+                    'Контрагент': r.counterparty,
+                    'Приход': r.incoming || '',
+                    'Расход': r.outgoing || '',
+                    'Остаток': r.balance
+                }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Материальный отчёт');
+                XLSX.writeFile(wb, 'material_report.xlsx');
+                showToast('Экспорт готов', 'success');
+            });
+
+            loadProducts();
+        })();
+    </script>
+</body>
+
+</html>

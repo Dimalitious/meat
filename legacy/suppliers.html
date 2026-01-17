@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Поставщики</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .suppliers-layout {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 1rem;
+            height: calc(100vh - 180px)
+        }
+
+        .suppliers-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .suppliers-panel-header {
+            padding: .8rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: .5rem;
+        }
+
+        .suppliers-panel-header input {
+            flex: 1;
+            padding: .5rem;
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            font-size: .85rem;
+        }
+
+        .suppliers-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .supplier-item {
+            padding: .6rem .8rem;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: .85rem
+        }
+
+        .supplier-item:hover {
+            background: rgba(99, 102, 241, .1)
+        }
+
+        .supplier-item.active {
+            background: rgba(99, 102, 241, .2);
+            border-left: 3px solid var(--accent)
+        }
+
+        .supplier-item .del-btn {
+            opacity: .5;
+            cursor: pointer
+        }
+
+        .supplier-item .del-btn:hover {
+            opacity: 1;
+            color: var(--danger)
+        }
+
+        .mml-note {
+            padding: 2rem;
+            text-align: center;
+            opacity: .7
+        }
+
+        #mml-area {
+            max-height: calc(100vh - 280px);
+            overflow-y: auto;
+        }
+
+        #mml-area table th,
+        #mml-area table td {
+            border: 1px solid var(--border);
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Справочник <span class="accent">поставщиков</span></h1>
+                <div class="toolbar">
+                    <label class="btn btn-primary">📥 Excel<input type="file" id="file-import" class="file-input-hidden"
+                            accept=".xlsx,.xls"></label>
+                </div>
+            </div>
+            <div class="tabs" id="category-tabs" style="margin-bottom:1rem;flex-wrap:wrap;"></div>
+            <div class="suppliers-layout">
+                <div class="suppliers-panel">
+                    <div class="suppliers-panel-header">
+                        <input type="text" id="new-supplier-name" placeholder="Новый поставщик...">
+                        <button id="btn-add-supplier" class="btn btn-success">➕</button>
+                    </div>
+                    <div style="padding:.5rem .8rem;border-bottom:1px solid var(--border);">
+                        <input type="text" id="supplier-search" placeholder="🔍 Поиск поставщика..."
+                            style="width:100%;padding:.4rem .6rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);font-size:.8rem;">
+                    </div>
+                    <div class="suppliers-list" id="suppliers-list">
+                        <div class="mml-note">Добавьте поставщиков</div>
+                    </div>
+                </div>
+                <div class="card" id="content-area">
+                    <div id="mml-toolbar"
+                        style="display:none;gap:.5rem;margin-bottom:1rem;align-items:center;flex-wrap:wrap;">
+                        <button id="btn-add-product" class="btn btn-primary">➕ Добавить из справочника</button>
+                        <button id="btn-delete-selected" class="btn btn-danger">🗑️ Удалить</button>
+                    </div>
+                    <div id="mml-area">
+                        <div class="mml-note">Выберите поставщика для настройки MML</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="edit-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;">
+            <div class="modal-header">
+                <h3>Редактировать поставщика</h3>
+                <button class="modal-close" onclick="closeEditModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-supplier-id">
+                <div class="form-group"><label>Наименование *</label><input type="text" id="edit-supplier-name"></div>
+                <div class="form-group"><label>Юр. название</label><input type="text" id="edit-supplier-legal"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="saveSupplierEdit()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;text-align:center;">
+            <div class="modal-header" style="justify-content:center;">
+                <h3>Подтверждение</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Удалить?</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:1rem;">
+                <button id="confirm-cancel-btn" class="btn btn-secondary">Нет</button>
+                <button id="confirm-ok-btn" class="btn btn-danger">Да</button>
+            </div>
+        </div>
+    </div>
+    <div id="products-modal" class="modal-overlay">
+        <div class="modal" style="max-width:700px;width:90%;">
+            <div class="modal-header">
+                <h3>Добавить товар в MML</h3>
+                <button class="modal-close" onclick="closeProductsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="products-search" placeholder="🔍 Поиск товара..."
+                    style="width:100%;padding:.6rem;margin-bottom:1rem;border-radius:8px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);font-size:.9rem;">
+                <div id="products-list" style="max-height:350px;overflow-y:auto;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeProductsModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="suppliers.js"></script>
+</body>
+
+</html>

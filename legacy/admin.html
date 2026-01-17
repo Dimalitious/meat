@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Администрирование</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Администрирование</h1>
+                <div class="toolbar"><button id="btn-add" class="btn btn-success">➕ Пользователь</button></div>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Логин</th>
+                                <th>Роль</th>
+                                <th>Активен</th>
+                                <th>⚙️</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">👤</div>
+                    <p>Нет пользователей</p>
+                </div>
+            </div>
+            <div class="card" style="margin-top:2rem;padding:1.5rem;">
+                <h3 style="margin-bottom:1rem;">Права доступа</h3>
+                <p><strong>Admin</strong> — полный доступ</p>
+                <p><strong>User</strong> — без справочников и админки</p>
+                <p><strong>Production</strong> — только страница «Производство»</p>
+                <p><strong>Picker</strong> — Сборщик товара</p>
+                <p><strong>Delivery</strong> — Доставщик товара</p>
+            </div>
+        </div>
+    </main>
+    <div id="item-modal" class="modal-overlay">
+        <div class="modal" style="max-width:450px;">
+            <div class="modal-header">
+                <h3 id="modal-title">Добавить</h3><button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="item-form"><input type="hidden" id="edit-id">
+                    <div class="form-group"><label>Логин *</label><input type="text" id="inp-username" required></div>
+                    <div class="form-group"><label>Пароль *</label><input type="password" id="inp-password"></div>
+                    <div class="form-group"><label>Роль</label><select id="inp-role">
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                            <option value="production">Production</option>
+                            <option value="picker">Сборщик товара</option>
+                            <option value="delivery">Доставщик товара</option>
+                        </select></div>
+                    <div class="form-group"><label><input type="checkbox" id="inp-active" checked> Активен</label></div>
+                </form>
+            </div>
+            <div class="modal-footer"><button type="button" class="btn btn-secondary"
+                    id="btn-cancel">Отмена</button><button type="submit" form="item-form"
+                    class="btn btn-primary">Сохранить</button></div>
+        </div>
+    </div>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;text-align:center;">
+            <div class="modal-header" style="justify-content:center;">
+                <h3>Подтверждение</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Удалить?</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:1rem;"><button id="confirm-cancel-btn"
+                    class="btn btn-secondary">Нет</button><button id="confirm-ok-btn" class="btn btn-danger">Да</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="admin.js"></script>
+</body>
+
+</html>

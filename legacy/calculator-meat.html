@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Калькулятор мяса</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .calc-layout {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 1rem;
+            height: calc(100vh - 180px)
+        }
+
+        .products-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow-y: auto
+        }
+
+        .product-item {
+            padding: .6rem .8rem;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            font-size: .85rem
+        }
+
+        .product-item:hover {
+            background: rgba(99, 102, 241, .1)
+        }
+
+        .product-item.active {
+            background: rgba(99, 102, 241, .2);
+            border-left: 3px solid var(--accent)
+        }
+
+        .mml-rows .row-text input {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: .5rem;
+            color: var(--text-primary);
+            width: 100%;
+        }
+
+        .mml-rows .row-num input {
+            background: var(--bg-primary);
+            border: 2px solid var(--accent);
+            border-radius: 6px;
+            padding: .5rem;
+            color: var(--text-primary);
+            width: 100%;
+            box-shadow: 0 0 5px rgba(99, 102, 241, .3);
+        }
+
+        .mml-rows .row-product {
+            cursor: pointer;
+            background: rgba(99, 102, 241, .1);
+            border-radius: 6px;
+            padding: .5rem;
+        }
+
+        .mml-rows .row-product:hover {
+            background: rgba(99, 102, 241, .2);
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">🥩 Калькулятор <span class="accent">мяса</span></h1>
+            </div>
+            <div class="calc-layout">
+                <div class="products-panel" id="products-panel">
+                    <div style="padding:1rem;text-align:center;opacity:.7;">Выберите товар</div>
+                </div>
+                <div class="card" id="content-area">
+                    <div class="table-wrapper" id="table-area">
+                        <div style="padding:2rem;text-align:center;opacity:.7;">Выберите товар слева</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="product-modal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Выбор товара</h3><button class="modal-close" onclick="closeProductModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div id="product-list" style="max-height:400px;overflow-y:auto;"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="closeProductModal()">Закрыть</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            const productsPanel = document.getElementById('products-panel'), tableArea = document.getElementById('table-area'), productModal = document.getElementById('product-modal'), productList = document.getElementById('product-list'), toast = document.getElementById('toast');
+            let selectedProduct = null, calcData = {}, editingRowIdx = null;
+
+            function esc(s) { return s ? String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) : '' }
+            function showToast(msg, type) { toast.textContent = msg; toast.className = 'toast ' + type; toast.style.display = 'block'; setTimeout(() => toast.style.display = 'none', 3000) }
+
+            function loadData() {
+                calcData = JSON.parse(localStorage.getItem('erp_meat_calc_data') || '{}');
+            }
+
+            function saveData() {
+                localStorage.setItem('erp_meat_calc_data', JSON.stringify(calcData));
+            }
+
+            function renderProducts() {
+                const products = StorageService.getProducts().filter(p => {
+                    const cat = (p.category || '').toLowerCase();
+                    return cat.includes('говядин') || cat.includes('баранин') || cat.includes('курица') || cat.includes('куриц') || cat.includes('мяс');
+                });
+
+                if (products.length === 0) {
+                    productsPanel.innerHTML = '<div style="padding:1rem;text-align:center;opacity:.7;">Нет товаров категории мяса</div>';
+                    return;
+                }
+
+                productsPanel.innerHTML = '';
+                products.forEach(p => {
+                    const div = document.createElement('div');
+                    div.className = 'product-item' + (selectedProduct === p.product_code ? ' active' : '');
+                    div.innerHTML = `<span>${esc(p.product_name)}</span>`;
+                    div.addEventListener('click', () => {
+                        selectedProduct = p.product_code;
+                        renderProducts();
+                        renderMML();
+                    });
+                    productsPanel.appendChild(div);
+                });
+            }
+
+            function renderMML() {
+                if (!selectedProduct) {
+                    tableArea.innerHTML = '<div style="padding:2rem;text-align:center;opacity:.7;">Выберите товар слева</div>';
+                    return;
+                }
+
+                const product = StorageService.getProductByCode(selectedProduct);
+                const data = calcData[selectedProduct] || getDefaultCalcData();
+
+                let html = `<div style="padding:1rem;background:var(--bg-secondary);border-radius:8px;margin-bottom:1rem;">
+                    <strong>📊 ${esc(product?.product_name || selectedProduct)}</strong>
+                </div>`;
+                html += `<table class="mml-rows"><thead><tr><th>#</th><th>Наименование</th><th>Показатель</th><th>К распределению</th></tr></thead><tbody>`;
+
+                // Rows 1-5: text inputs
+                for (let i = 0; i < 5; i++) {
+                    const row = data.rows[i] || { name: '', indicator: '', distribution: '' };
+                    html += `<tr class="row-text" data-idx="${i}">
+                        <td>${i + 1}</td>
+                        <td><input type="text" data-field="name" value="${esc(row.name)}" placeholder="Наименование"></td>
+                        <td><input type="text" data-field="indicator" value="${esc(row.indicator)}" placeholder="Показатель"></td>
+                        <td><input type="text" data-field="distribution" value="${esc(row.distribution)}" placeholder="К распределению"></td>
+                    </tr>`;
+                }
+
+                // Row 6: numeric input (formula)
+                const row6 = data.rows[5] || { name: 'Итого', indicator: 0, distribution: 0 };
+                html += `<tr class="row-num" data-idx="5">
+                    <td>6</td>
+                    <td><input type="text" data-field="name" value="${esc(row6.name)}" placeholder="Формула"></td>
+                    <td><input type="number" data-field="indicator" value="${row6.indicator || 0}" step="0.01"></td>
+                    <td><input type="number" data-field="distribution" value="${row6.distribution || 0}" step="0.01"></td>
+                </tr>`;
+
+                // Rows 7-10: clickable product references
+                for (let i = 6; i < 10; i++) {
+                    const row = data.rows[i] || { product_code: '', name: '', indicator: 0, distribution: 0 };
+                    const refProduct = row.product_code ? StorageService.getProductByCode(row.product_code) : null;
+                    html += `<tr data-idx="${i}">
+                        <td>${i + 1}</td>
+                        <td class="row-product" onclick="openProductPicker(${i})">${refProduct ? esc(refProduct.product_name) : '+ Выбрать товар'}</td>
+                        <td><div class="cell-input readonly">${parseFloat(row.indicator || 0).toFixed(2)}</div></td>
+                        <td><div class="cell-input readonly">${parseFloat(row.distribution || 0).toFixed(2)}</div></td>
+                    </tr>`;
+                }
+
+                html += '</tbody></table>';
+                html += '<div style="margin-top:1rem;"><button class="btn btn-success" onclick="saveCalcData()">💾 Сохранить</button></div>';
+                tableArea.innerHTML = html;
+
+                // Attach listeners
+                tableArea.querySelectorAll('tr[data-idx]').forEach(tr => {
+                    tr.querySelectorAll('input').forEach(inp => {
+                        inp.addEventListener('change', () => {
+                            const idx = parseInt(tr.dataset.idx);
+                            if (!calcData[selectedProduct]) calcData[selectedProduct] = getDefaultCalcData();
+                            if (!calcData[selectedProduct].rows[idx]) calcData[selectedProduct].rows[idx] = {};
+                            calcData[selectedProduct].rows[idx][inp.dataset.field] = inp.type === 'number' ? parseFloat(inp.value) || 0 : inp.value;
+                            saveData();
+                        });
+                    });
+                });
+            }
+
+            function getDefaultCalcData() {
+                return {
+                    rows: Array(10).fill(null).map(() => ({ name: '', indicator: '', distribution: '' }))
+                };
+            }
+
+            window.openProductPicker = function (rowIdx) {
+                editingRowIdx = rowIdx;
+                const products = StorageService.getProducts();
+                productList.innerHTML = '';
+                products.forEach(p => {
+                    const div = document.createElement('div');
+                    div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:.5rem;border-bottom:1px solid var(--border);cursor:pointer;';
+                    div.innerHTML = `<span>${esc(p.product_name)}</span>`;
+                    div.addEventListener('click', () => {
+                        if (!calcData[selectedProduct]) calcData[selectedProduct] = getDefaultCalcData();
+                        calcData[selectedProduct].rows[rowIdx] = {
+                            product_code: p.product_code,
+                            name: p.product_name,
+                            indicator: 0,
+                            distribution: 0
+                        };
+                        saveData();
+                        closeProductModal();
+                        renderMML();
+                    });
+                    productList.appendChild(div);
+                });
+                productModal.classList.add('open');
+            };
+
+            window.closeProductModal = function () {
+                productModal.classList.remove('open');
+                editingRowIdx = null;
+            };
+
+            window.saveCalcData = function () {
+                saveData();
+                showToast('Данные сохранены', 'success');
+            };
+
+            loadData();
+            renderProducts();
+        })();
+    </script>
+</body>
+
+</html>

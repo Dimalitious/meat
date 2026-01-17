@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Производственный отчёт</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">🏭 Производственный <span class="accent">отчёт</span></h1>
+            </div>
+            <div class="card"
+                style="padding:1rem;margin-bottom:1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+                <label>С: <input type="date" id="filter-from"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <label>По: <input type="date" id="filter-to"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <select id="filter-category"
+                    style="padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);min-width:200px;">
+                    <option value="">Все категории</option>
+                </select>
+                <button id="btn-generate" class="btn btn-primary">Сформировать</button>
+                <button id="btn-export" class="btn btn-success">📤 Excel</button>
+            </div>
+            <div class="card" style="margin-bottom:1rem;">
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;padding:1rem;">
+                    <div class="stat-card">
+                        <div class="stat-label">Всего заказано</div>
+                        <div class="stat-value" id="stat-orders" style="color:var(--primary);">0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Произведено</div>
+                        <div class="stat-value" id="stat-produced" style="color:var(--success);">0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Разница</div>
+                        <div class="stat-value" id="stat-diff">0.0 кг</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Выполнение</div>
+                        <div class="stat-value" id="stat-percent">0%</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Категория</th>
+                                <th>Товар</th>
+                                <th>Заказ (кг)</th>
+                                <th>Произведено (кг)</th>
+                                <th>Разница</th>
+                                <th>%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">🏭</div>
+                    <p>Нет данных о производстве за указанный период</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            const tableBody = document.getElementById('table-body'),
+                emptyState = document.getElementById('empty-state'),
+                btnGenerate = document.getElementById('btn-generate'),
+                btnExport = document.getElementById('btn-export'),
+                filterFrom = document.getElementById('filter-from'),
+                filterTo = document.getElementById('filter-to'),
+                filterCategory = document.getElementById('filter-category'),
+                statOrders = document.getElementById('stat-orders'),
+                statProduced = document.getElementById('stat-produced'),
+                statDiff = document.getElementById('stat-diff'),
+                statPercent = document.getElementById('stat-percent'),
+                toast = document.getElementById('toast');
+
+            let reportData = [];
+
+            function esc(s) { return s ? String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) : '' }
+            function showToast(msg, type) { toast.textContent = msg; toast.className = 'toast ' + type; toast.style.display = 'block'; setTimeout(() => toast.style.display = 'none', 3000) }
+
+            // Populate categories filter
+            function loadCategories() {
+                const products = StorageService.getProducts();
+                const categories = [...new Set(products.map(p => p.category).filter(c => c))];
+                filterCategory.innerHTML = '<option value="">Все категории</option>';
+                categories.forEach(c => {
+                    filterCategory.innerHTML += `<option value="${esc(c)}">${esc(c)}</option>`;
+                });
+            }
+
+            // Get all production data from localStorage
+            function getAllProductionData() {
+                const allData = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith('erp_production_')) {
+                        try {
+                            const data = JSON.parse(localStorage.getItem(key));
+                            if (data && data.date && data.items) {
+                                allData.push(data);
+                            }
+                        } catch (e) { }
+                    }
+                }
+                return allData;
+            }
+
+            function generateReport() {
+                const from = filterFrom.value, to = filterTo.value, categoryFilter = filterCategory.value;
+                reportData = [];
+                let totalOrders = 0, totalProduced = 0;
+
+                const allProduction = getAllProductionData();
+
+                allProduction.forEach(prod => {
+                    if (from && prod.date < from) return;
+                    if (to && prod.date > to) return;
+
+                    (prod.items || []).forEach(item => {
+                        if (categoryFilter && (item.category || '').toLowerCase() !== categoryFilter.toLowerCase()) return;
+
+                        const orders = parseFloat(item.orders) || 0;
+                        const produced = parseFloat(item.production) || 0;
+                        const diff = produced - orders;
+                        const percent = orders > 0 ? Math.round((produced / orders) * 100) : 0;
+
+                        reportData.push({
+                            date: prod.date,
+                            category: item.category || '-',
+                            product: item.product_name || item.product_code,
+                            orders: orders,
+                            produced: produced,
+                            diff: diff,
+                            percent: percent
+                        });
+
+                        totalOrders += orders;
+                        totalProduced += produced;
+                    });
+                });
+
+                // Sort by date, then category
+                reportData.sort((a, b) => {
+                    if (a.date !== b.date) return a.date.localeCompare(b.date);
+                    return a.category.localeCompare(b.category);
+                });
+
+                // Update stats
+                const totalDiff = totalProduced - totalOrders;
+                const totalPercent = totalOrders > 0 ? Math.round((totalProduced / totalOrders) * 100) : 0;
+
+                statOrders.textContent = `${totalOrders.toFixed(1)} кг`;
+                statProduced.textContent = `${totalProduced.toFixed(1)} кг`;
+                statDiff.textContent = `${totalDiff >= 0 ? '+' : ''}${totalDiff.toFixed(1)} кг`;
+                statDiff.style.color = totalDiff >= 0 ? 'var(--success)' : 'var(--danger)';
+                statPercent.textContent = `${totalPercent}%`;
+                statPercent.style.color = totalPercent >= 100 ? 'var(--success)' : totalPercent >= 80 ? 'var(--warning)' : 'var(--danger)';
+
+                // Render table
+                tableBody.innerHTML = '';
+                emptyState.style.display = reportData.length === 0 ? 'block' : 'none';
+
+                reportData.forEach(r => {
+                    const tr = document.createElement('tr');
+                    const diffColor = r.diff >= 0 ? 'var(--success)' : 'var(--danger)';
+                    const percentColor = r.percent >= 100 ? 'var(--success)' : r.percent >= 80 ? 'var(--warning)' : 'var(--danger)';
+
+                    tr.innerHTML = `
+                        <td>${esc(r.date)}</td>
+                        <td>${esc(r.category)}</td>
+                        <td>${esc(r.product)}</td>
+                        <td>${r.orders.toFixed(2)}</td>
+                        <td>${r.produced.toFixed(2)}</td>
+                        <td style="color:${diffColor};">${r.diff >= 0 ? '+' : ''}${r.diff.toFixed(2)}</td>
+                        <td style="color:${percentColor};">${r.percent}%</td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+
+                showToast(`Найдено ${reportData.length} записей`, 'success');
+            }
+
+            btnGenerate.addEventListener('click', generateReport);
+
+            btnExport.addEventListener('click', function () {
+                if (reportData.length === 0) { showToast('Сначала сформируйте отчёт', 'error'); return; }
+                const data = reportData.map(r => ({
+                    'Дата': r.date,
+                    'Категория': r.category,
+                    'Товар': r.product,
+                    'Заказ (кг)': r.orders,
+                    'Произведено (кг)': r.produced,
+                    'Разница': r.diff,
+                    '%': r.percent
+                }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Производственный отчёт');
+                XLSX.writeFile(wb, 'production_report.xlsx');
+                showToast('Экспорт готов', 'success');
+            });
+
+            loadCategories();
+        })();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отгрузки</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Screen styles */
+        .print-container {
+            display: none;
+        }
+
+        /* Print styles - A4 portrait with 2 invoices */
+        @media print {
+
+            /* Hide everything except print area */
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                background: white !important;
+                font-family: Arial, sans-serif !important;
+                font-size: 8pt !important;
+                color: black !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            /* Hide non-print elements */
+            .sidebar,
+            .main-content,
+            .no-print,
+            nav,
+            header,
+            footer,
+            .page-header,
+            .ship-layout,
+            #toast {
+                display: none !important;
+            }
+
+            /* Show print container */
+            .print-container {
+                display: block !important;
+                width: 210mm;
+                height: 297mm;
+                padding: 5mm;
+                margin: 0;
+                page-break-after: avoid;
+            }
+
+            /* Invoice container - exactly half page */
+            .invoice {
+                width: 100%;
+                height: 140mm;
+                border: 1px solid #000;
+                padding: 4mm;
+                margin-bottom: 3mm;
+                page-break-inside: avoid;
+                overflow: hidden;
+            }
+
+            .invoice-header {
+                text-align: center;
+                border-bottom: 1px solid #000;
+                padding-bottom: 2mm;
+                margin-bottom: 2mm;
+            }
+
+            .invoice-header h2 {
+                font-size: 12pt;
+                margin: 0;
+                font-weight: bold;
+            }
+
+            .invoice-info {
+                display: flex;
+                justify-content: space-between;
+                margin-bottom: 2mm;
+                font-size: 8pt;
+            }
+
+            .invoice-info p {
+                margin: 1mm 0;
+            }
+
+            .invoice-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 7pt;
+            }
+
+            .invoice-table th,
+            .invoice-table td {
+                border: 1px solid #000;
+                padding: 1mm 2mm;
+                text-align: left;
+            }
+
+            .invoice-table th {
+                background: #f0f0f0 !important;
+                font-weight: bold;
+            }
+
+            .invoice-table td.num {
+                text-align: right;
+            }
+
+            .invoice-footer {
+                margin-top: 2mm;
+                padding-top: 2mm;
+                border-top: 1px solid #000;
+                display: flex;
+                justify-content: space-between;
+                font-weight: bold;
+                font-size: 9pt;
+            }
+
+            .invoice-signatures {
+                display: flex;
+                justify-content: space-between;
+                margin-top: 3mm;
+                font-size: 7pt;
+            }
+
+            .signature-line {
+                width: 40%;
+                border-top: 1px solid #000;
+                padding-top: 1mm;
+                text-align: center;
+            }
+
+            @page {
+                size: A4 portrait;
+                margin: 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header no-print">
+                <h1 class="page-title">Отгрузки</h1>
+                <div class="header-controls">
+                    <label for="shipment-date" style="color:var(--text-secondary);margin-right:0.5rem;">Дата:</label>
+                    <input type="date" id="shipment-date" class="form-control" style="width:150px;">
+                </div>
+            </div>
+            <div class="ship-layout">
+                <div class="ship-clients" id="client-list"></div>
+                <div class="ship-table">
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Дата</th>
+                                    <th>Оплата</th>
+                                    <th>Товар</th>
+                                    <th>Цена</th>
+                                    <th>Сумма</th>
+                                    <th>Факт вес</th>
+                                </tr>
+                            </thead>
+                            <tbody id="detail-body"></tbody>
+                            <tfoot id="detail-footer"></tfoot>
+                        </table>
+                    </div>
+                    <div id="empty-detail" class="empty-state" style="display:none;">
+                        <div class="empty-state-icon">📦</div>
+                        <p>Выберите клиента</p>
+                    </div>
+                </div>
+                <div class="ship-print no-print">
+                    <button id="btn-save" class="btn btn-success btn-lg" style="width:100%;margin-bottom:.5rem">💾
+                        Сохранить</button>
+                    <button id="btn-print" class="btn btn-primary btn-lg" style="width:100%">🖨️ Печать</button>
+                </div>
+            </div>
+        </div>
+    </main>
+    <!-- Print container - only visible during printing -->
+    <div class="print-container" id="print-container"></div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="shipments.js"></script>
+</body>
+
+</html>

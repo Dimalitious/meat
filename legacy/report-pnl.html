@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отчёт по P&L</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">💰 Отчёт по <span class="accent">P&L</span></h1>
+            </div>
+            <div class="card"
+                style="padding:1rem;margin-bottom:1rem;display:flex;gap:1rem;align-items:center;flex-wrap:wrap;">
+                <label>С: <input type="date" id="filter-from"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <label>По: <input type="date" id="filter-to"
+                        style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                <button id="btn-generate" class="btn btn-primary">Сформировать</button>
+                <button id="btn-export" class="btn btn-success">📤 Excel</button>
+            </div>
+            <div class="card" style="margin-bottom:1rem;">
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;padding:1rem;">
+                    <div class="stat-card">
+                        <div class="stat-label">Выручка</div>
+                        <div class="stat-value" id="stat-revenue" style="color:var(--success);">0 ₽</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Себестоимость</div>
+                        <div class="stat-value" id="stat-cost" style="color:var(--warning);">0 ₽</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Прибыль</div>
+                        <div class="stat-value" id="stat-profit">0 ₽</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card" style="margin-bottom:1rem;">
+                <h3 style="padding:1rem 1rem 0;">📊 Выручка по категориям</h3>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;padding:1rem;">
+                    <div class="stat-card">
+                        <div class="stat-label">🥩 Говядина</div>
+                        <div class="stat-value" id="cat-beef">0 ₽</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">🐑 Баранина</div>
+                        <div class="stat-value" id="cat-lamb">0 ₽</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">🐔 Курица</div>
+                        <div class="stat-value" id="cat-chicken">0 ₽</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">📦 Остальные</div>
+                        <div class="stat-value" id="cat-other">0 ₽</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <h3 style="padding:1rem 1rem 0;">📅 Детализация по дням</h3>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Дата</th>
+                                <th>Выручка</th>
+                                <th>Себестоимость</th>
+                                <th>Прибыль</th>
+                                <th>Маржа %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">💰</div>
+                    <p>Нет данных за указанный период</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script>
+        (function () {
+            const tableBody = document.getElementById('table-body'), emptyState = document.getElementById('empty-state'), btnGenerate = document.getElementById('btn-generate'), btnExport = document.getElementById('btn-export'), filterFrom = document.getElementById('filter-from'), filterTo = document.getElementById('filter-to'), statRevenue = document.getElementById('stat-revenue'), statCost = document.getElementById('stat-cost'), statProfit = document.getElementById('stat-profit'), catBeef = document.getElementById('cat-beef'), catLamb = document.getElementById('cat-lamb'), catChicken = document.getElementById('cat-chicken'), catOther = document.getElementById('cat-other'), toast = document.getElementById('toast');
+
+            let reportData = [];
+
+            function esc(s) { return s ? String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) : '' }
+            function showToast(msg, type) { toast.textContent = msg; toast.className = 'toast ' + type; toast.style.display = 'block'; setTimeout(() => toast.style.display = 'none', 3000) }
+            function formatMoney(v) { return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(v) }
+
+            function generateReport() {
+                const from = filterFrom.value, to = filterTo.value;
+                const dailyData = {};
+                let totalRevenue = 0, totalCost = 0;
+                const categoryRevenue = { beef: 0, lamb: 0, chicken: 0, other: 0 };
+
+                // Get revenue from shipments (orders journal)
+                const orders = StorageService.getJournalOrders();
+                orders.forEach(o => {
+                    if (from && o.date < from) return;
+                    if (to && o.date > to) return;
+                    if (!dailyData[o.date]) dailyData[o.date] = { revenue: 0, cost: 0 };
+                    const dayRevenue = o.total_sum || 0;
+                    dailyData[o.date].revenue += dayRevenue;
+                    totalRevenue += dayRevenue;
+
+                    // Calculate by category
+                    (o.orders || []).forEach(ord => {
+                        const product = StorageService.getProductByCode(ord.product_code);
+                        const cat = (product?.category || '').toLowerCase();
+                        const sum = parseFloat(ord.order_sum) || 0;
+                        if (cat.includes('говядин')) categoryRevenue.beef += sum;
+                        else if (cat.includes('баранин')) categoryRevenue.lamb += sum;
+                        else if (cat.includes('курица') || cat.includes('куриц')) categoryRevenue.chicken += sum;
+                        else categoryRevenue.other += sum;
+                    });
+                });
+
+                // Get cost from purchases
+                const purchases = StorageService.getJournalPurchases();
+                purchases.forEach(p => {
+                    if (from && p.date < from) return;
+                    if (to && p.date > to) return;
+                    if (!dailyData[p.date]) dailyData[p.date] = { revenue: 0, cost: 0 };
+                    const dayCost = p.total_sum || 0;
+                    dailyData[p.date].cost += dayCost;
+                    totalCost += dayCost;
+                });
+
+                // Convert to array and sort
+                reportData = Object.entries(dailyData).map(([date, data]) => ({
+                    date,
+                    revenue: data.revenue,
+                    cost: data.cost,
+                    profit: data.revenue - data.cost,
+                    margin: data.revenue > 0 ? ((data.revenue - data.cost) / data.revenue * 100) : 0
+                })).sort((a, b) => a.date.localeCompare(b.date));
+
+                // Update totals
+                const profit = totalRevenue - totalCost;
+                statRevenue.textContent = formatMoney(totalRevenue);
+                statCost.textContent = formatMoney(totalCost);
+                statProfit.textContent = formatMoney(profit);
+                statProfit.style.color = profit >= 0 ? 'var(--success)' : 'var(--danger)';
+
+                // Update categories
+                catBeef.textContent = formatMoney(categoryRevenue.beef);
+                catLamb.textContent = formatMoney(categoryRevenue.lamb);
+                catChicken.textContent = formatMoney(categoryRevenue.chicken);
+                catOther.textContent = formatMoney(categoryRevenue.other);
+
+                // Render table
+                tableBody.innerHTML = '';
+                emptyState.style.display = reportData.length === 0 ? 'block' : 'none';
+                reportData.forEach(r => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `<td>${esc(r.date)}</td><td style="color:var(--success);">${formatMoney(r.revenue)}</td><td style="color:var(--warning);">${formatMoney(r.cost)}</td><td style="color:${r.profit >= 0 ? 'var(--success)' : 'var(--danger)'};">${formatMoney(r.profit)}</td><td>${r.margin.toFixed(1)}%</td>`;
+                    tableBody.appendChild(tr);
+                });
+            }
+
+            btnGenerate.addEventListener('click', generateReport);
+
+            btnExport.addEventListener('click', function () {
+                if (reportData.length === 0) { showToast('Сначала сформируйте отчёт', 'error'); return; }
+                const data = reportData.map(r => ({
+                    'Дата': r.date,
+                    'Выручка': r.revenue,
+                    'Себестоимость': r.cost,
+                    'Прибыль': r.profit,
+                    'Маржа %': r.margin.toFixed(1)
+                }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'P&L');
+                XLSX.writeFile(wb, 'pnl_report.xlsx');
+                showToast('Экспорт готов', 'success');
+            });
+        })();
+    </script>
+</body>
+
+</html>

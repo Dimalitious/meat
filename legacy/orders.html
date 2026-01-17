@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Форма заказов</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .orders-table th {
+            white-space: normal;
+            min-width: 60px;
+        }
+
+        .orders-table td {
+            vertical-align: middle;
+        }
+
+        .orders-table input[type="number"] {
+            min-width: 75px;
+        }
+
+        .orders-table input[type="date"] {
+            min-width: 120px;
+        }
+
+        .orders-table select {
+            min-width: 100px;
+        }
+
+        .btn-proc {
+            min-width: 44px;
+            min-height: 44px;
+            font-size: 1.2rem;
+        }
+
+        .filter-row input {
+            font-size: .7rem;
+            padding: .25rem .4rem;
+            width: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">ERP System</div>
+        <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    </aside>
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h1 class="page-title">Форма <span class="accent">заказов</span></h1>
+                <div class="toolbar">
+                    <label>Дата заказа: <input type="date" id="order-date"
+                            style="margin-left:.3rem;padding:.4rem;border-radius:6px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);"></label>
+                    <input type="text" id="global-search" placeholder="🔍 Поиск..."
+                        style="padding:.4rem .6rem;border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);width:150px">
+                    <button id="btn-reset-filters" class="btn btn-secondary">🔄</button>
+                    <button id="btn-delete-selected" class="btn btn-danger" disabled>🗑️</button>
+                    <label class="btn btn-primary">📥 Import<input type="file" id="file-import"
+                            class="file-input-hidden" accept=".xlsx,.xls"></label>
+                    <button id="btn-export" class="btn btn-primary">📤 Export</button>
+                    <button id="btn-add-row" class="btn btn-success">➕</button>
+                    <button id="btn-save-journal" class="btn btn-success btn-lg">💾 Сохранить</button>
+                </div>
+            </div>
+            <div class="card" style="display:flex;gap:1rem;align-items:flex-start;">
+                <div class="table-wrapper" style="flex:1;overflow-x:auto;">
+                    <table class="orders-table" id="orders-table">
+                        <thead>
+                            <tr>
+                                <th class="col-checkbox"><input type="checkbox" id="select-all"></th>
+                                <th>Дата отгрузки</th>
+                                <th>Тип оплаты</th>
+                                <th>Заказчик</th>
+                                <th>Товар</th>
+                                <th>Категория</th>
+                                <th>Утреннее имя</th>
+                                <th>Цена</th>
+                                <th>Сумма заказа</th>
+                                <th>Факт отгр.</th>
+                                <th>Кол-во заказа</th>
+                                <th>Коэфф.распр.</th>
+                                <th>Вес к распр.</th>
+                                <th>Обраб.</th>
+                                <th>✕</th>
+                            </tr>
+                            <tr class="filter-row">
+                                <th></th>
+                                <th><input type="text" class="filter-input" data-col="shipment_date" placeholder="дата">
+                                </th>
+                                <th><input type="text" class="filter-input" data-col="payment_type" placeholder="...">
+                                </th>
+                                <th><input type="text" class="filter-input" data-col="customer_id"
+                                        placeholder="заказчик"></th>
+                                <th><input type="text" class="filter-input" data-col="product_code" placeholder="товар">
+                                </th>
+                                <th><input type="text" class="filter-input" data-col="product_category"
+                                        placeholder="категория"></th>
+                                <th><input type="text" class="filter-input" data-col="short_name_morning"
+                                        placeholder="утро"></th>
+                                <th></th>
+                                <th><input type="text" class="filter-input" data-col="order_sum" placeholder="><="></th>
+                                <th></th>
+                                <th><input type="text" class="filter-input" data-col="order_value" placeholder="><=">
+                                </th>
+                                <th></th>
+                                <th></th>
+                                <th><input type="text" class="filter-input" data-col="processed" placeholder="да/нет">
+                                </th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body"></tbody>
+                    </table>
+                </div>
+                <!-- Summary Panel -->
+                <div class="summary-panel"
+                    style="width:200px;background:var(--bg-secondary);padding:1rem;border-radius:8px;border:1px solid var(--border);position:sticky;top:1rem;flex-shrink:0;">
+                    <h3 style="margin-top:0;font-size:1rem;color:var(--text-secondary);">Итого</h3>
+                    <div style="margin-bottom:1rem;">
+                        <small>Общий вес к отгрузке</small>
+                        <div id="total-order-qty" style="font-size:1.5rem;font-weight:bold;color:var(--accent);">0.00
+                        </div>
+                    </div>
+                </div>
+                <div id="empty-state" class="empty-state" style="display:none;">
+                    <div class="empty-state-icon">📋</div>
+                    <p>Нет заказов</p>
+                </div>
+            </div>
+        </div>
+    </main>
+    <div id="confirm-modal" class="modal-overlay">
+        <div class="modal" style="max-width:400px;text-align:center;">
+            <div class="modal-header" style="justify-content:center;">
+                <h3>Подтверждение</h3>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-message">Удалить?</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center;gap:1rem;"><button id="confirm-cancel-btn"
+                    class="btn btn-secondary">Нет</button><button id="confirm-ok-btn" class="btn btn-danger">Да</button>
+            </div>
+        </div>
+    </div>
+    <div id="toast" class="toast" style="display:none;"></div>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <script src="storage.js"></script>
+    <script src="sidebar.js"></script>
+    <script src="orders.js"></script>
+</body>
+
+</html>
