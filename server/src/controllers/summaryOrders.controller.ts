@@ -151,7 +151,7 @@ export const syncToOrders = async (req: Request, res: Response) => {
     try {
         const { entryIds } = req.body;
 
-        // Get entries to sync (status is already 'synced' at this point)
+        // Get entries to sync
         const entries = await prisma.summaryOrderJournal.findMany({
             where: {
                 id: { in: entryIds.map((id: number) => Number(id)) }
@@ -163,45 +163,49 @@ export const syncToOrders = async (req: Request, res: Response) => {
             return res.json({ message: 'No entries to sync', synced: 0 });
         }
 
-        // Group by customerId + shipDate
-        const grouped: { [key: string]: SummaryOrderJournal[] } = {};
-        for (const entry of entries) {
-            const dateStr = entry.shipDate.toISOString().split('T')[0];
-            const key = `${entry.customerId}_${dateStr}`;
-            if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(entry);
-        }
-
         const results = [];
 
-        for (const [key, groupEntries] of Object.entries(grouped)) {
-            const [customerIdStr, dateStr] = key.split('_');
-            const customerId = Number(customerIdStr);
-            const shipDate = new Date(dateStr);
+        // Process each entry individually to handle IDN + customer correctly
+        for (const entry of entries) {
+            if (!entry.customerId || !entry.productId) continue;
 
-            if (!customerId || isNaN(customerId)) continue;
+            const idn = entry.idn || null;
 
-            // Check if order exists for this customer + date
+            // Find existing order by IDN + customer
             let order = await prisma.order.findFirst({
                 where: {
-                    customerId,
-                    date: {
-                        gte: shipDate,
-                        lt: new Date(shipDate.getTime() + 24 * 60 * 60 * 1000)
-                    }
+                    customerId: entry.customerId,
+                    ...(idn ? { idn } : { date: entry.shipDate })
                 }
             });
 
-            const validEntries = groupEntries.filter(e => e.productId);
-            if (validEntries.length === 0) continue;
-
             if (order) {
-                // Add items to existing order
-                for (const entry of validEntries) {
+                // Check if this product is already in the order
+                const existingItem = await prisma.orderItem.findFirst({
+                    where: {
+                        orderId: order.id,
+                        productId: entry.productId
+                    }
+                });
+
+                if (existingItem) {
+                    // Update existing item
+                    await prisma.orderItem.update({
+                        where: { id: existingItem.id },
+                        data: {
+                            quantity: entry.orderQty,
+                            shippedQty: entry.shippedQty,
+                            price: entry.price,
+                            amount: Number(entry.price) * entry.orderQty
+                        }
+                    });
+                    results.push({ action: 'item_updated', orderId: order.id, productId: entry.productId });
+                } else {
+                    // Add new item to existing order
                     await prisma.orderItem.create({
                         data: {
                             orderId: order.id,
-                            productId: entry.productId!,
+                            productId: entry.productId,
                             quantity: entry.orderQty,
                             price: entry.price,
                             amount: Number(entry.price) * entry.orderQty,
@@ -211,38 +215,32 @@ export const syncToOrders = async (req: Request, res: Response) => {
                             weightToDistribute: entry.weightToDistribute
                         }
                     });
+
+                    // Update order totals
+                    await prisma.order.update({
+                        where: { id: order.id },
+                        data: {
+                            totalAmount: { increment: Number(entry.price) * entry.orderQty },
+                            totalWeight: { increment: entry.orderQty }
+                        }
+                    });
+
+                    results.push({ action: 'item_added', orderId: order.id, productId: entry.productId });
                 }
-
-                // Update order totals
-                const totalAmount = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + Number(e.price) * e.orderQty, 0);
-                const totalWeight = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + e.orderQty, 0);
-
-                await prisma.order.update({
-                    where: { id: order.id },
-                    data: {
-                        totalAmount: { increment: totalAmount },
-                        totalWeight: { increment: totalWeight }
-                    }
-                });
-
-                results.push({ action: 'updated', orderId: order.id, items: validEntries.length });
             } else {
-                // Create new order with IDN from summary
-                const newTotalAmount = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + Number(e.price) * e.orderQty, 0);
-                const newTotalWeight = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + e.orderQty, 0);
-
+                // Create new order with IDN
                 order = await prisma.order.create({
                     data: {
-                        customerId,
-                        date: shipDate,
-                        idn: validEntries[0].idn || null, // Cross-form IDN
-                        paymentType: validEntries[0].paymentType,
+                        customerId: entry.customerId,
+                        date: entry.shipDate,
+                        idn: idn,
+                        paymentType: entry.paymentType,
                         status: 'new',
-                        totalAmount: newTotalAmount,
-                        totalWeight: newTotalWeight,
+                        totalAmount: Number(entry.price) * entry.orderQty,
+                        totalWeight: entry.orderQty,
                         items: {
-                            create: validEntries.map((entry: SummaryOrderJournal) => ({
-                                productId: entry.productId!,
+                            create: {
+                                productId: entry.productId,
                                 quantity: entry.orderQty,
                                 price: entry.price,
                                 amount: Number(entry.price) * entry.orderQty,
@@ -250,19 +248,13 @@ export const syncToOrders = async (req: Request, res: Response) => {
                                 sumWithRevaluation: entry.sumWithRevaluation,
                                 distributionCoef: entry.distributionCoef,
                                 weightToDistribute: entry.weightToDistribute
-                            }))
+                            }
                         }
                     }
                 });
 
-                results.push({ action: 'created', orderId: order.id, items: validEntries.length });
+                results.push({ action: 'order_created', orderId: order.id, customerId: entry.customerId, idn });
             }
-
-            // Mark entries as synced
-            await prisma.summaryOrderJournal.updateMany({
-                where: { id: { in: validEntries.map((e: SummaryOrderJournal) => e.id) } },
-                data: { status: 'synced' }
-            });
         }
 
         res.json({ message: 'Sync completed', results });
