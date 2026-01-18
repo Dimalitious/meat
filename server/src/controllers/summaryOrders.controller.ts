@@ -146,16 +146,15 @@ export const deleteSummaryOrder = async (req: Request, res: Response) => {
     }
 };
 
-// Sync entries with status "forming" to Orders table
+// Sync entries to Orders table (called after status changed to synced)
 export const syncToOrders = async (req: Request, res: Response) => {
     try {
         const { entryIds } = req.body;
 
-        // Get entries to sync
+        // Get entries to sync (status is already 'synced' at this point)
         const entries = await prisma.summaryOrderJournal.findMany({
             where: {
-                id: { in: entryIds.map((id: number) => Number(id)) },
-                status: 'forming'
+                id: { in: entryIds.map((id: number) => Number(id)) }
             },
             include: { customer: true, product: true }
         });
@@ -228,18 +227,19 @@ export const syncToOrders = async (req: Request, res: Response) => {
 
                 results.push({ action: 'updated', orderId: order.id, items: validEntries.length });
             } else {
-                // Create new order
-                const totalAmount = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + Number(e.price) * e.orderQty, 0);
-                const totalWeight = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + e.orderQty, 0);
+                // Create new order with IDN from summary
+                const newTotalAmount = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + Number(e.price) * e.orderQty, 0);
+                const newTotalWeight = validEntries.reduce((sum: number, e: SummaryOrderJournal) => sum + e.orderQty, 0);
 
                 order = await prisma.order.create({
                     data: {
                         customerId,
                         date: shipDate,
+                        idn: validEntries[0].idn || null, // Cross-form IDN
                         paymentType: validEntries[0].paymentType,
                         status: 'new',
-                        totalAmount,
-                        totalWeight,
+                        totalAmount: newTotalAmount,
+                        totalWeight: newTotalWeight,
                         items: {
                             create: validEntries.map((entry: SummaryOrderJournal) => ({
                                 productId: entry.productId!,

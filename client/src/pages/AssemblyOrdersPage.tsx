@@ -312,10 +312,10 @@ export default function AssemblyOrdersPage() {
                                             {item.confirmed && (
                                                 <button
                                                     onClick={() => enableEdit(item.id)}
-                                                    className="text-blue-500 hover:text-blue-700 p-1"
+                                                    className="bg-blue-100 text-blue-600 hover:bg-blue-200 p-2 rounded-lg"
                                                     title="Редактировать"
                                                 >
-                                                    <Edit2 size={16} />
+                                                    <Edit2 size={20} />
                                                 </button>
                                             )}
                                         </div>

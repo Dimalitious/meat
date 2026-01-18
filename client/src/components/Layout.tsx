@@ -16,35 +16,132 @@ import {
     Menu,
     X,
     Warehouse,
+    ChevronDown,
+    ChevronRight,
+    FolderOpen,
 } from 'lucide-react';
+
+interface NavItem {
+    label: string;
+    path?: string;
+    icon: React.ReactNode;
+    children?: NavItem[];
+}
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
     const { user, logout } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [expandedFolders, setExpandedFolders] = useState<string[]>(['Журналы', 'Справочник']);
 
     const handleLogout = () => {
         logout();
         navigate('/login');
     };
 
-    const navItems = [
+    const toggleFolder = (label: string) => {
+        setExpandedFolders(prev =>
+            prev.includes(label)
+                ? prev.filter(f => f !== label)
+                : [...prev, label]
+        );
+    };
+
+    const navItems: NavItem[] = [
         { label: 'Главная', path: '/', icon: <LayoutDashboard size={20} /> },
         { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
         { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} /> },
         { label: 'Заказы', path: '/orders', icon: <ShoppingCart size={20} /> },
-        { label: 'Товары', path: '/products', icon: <Package size={20} /> },
         { label: 'Экспедиция', path: '/shipments', icon: <Truck size={20} /> },
-        { label: 'Водители', path: '/expeditors', icon: <UserCheck size={20} /> },
-        { label: 'Клиенты', path: '/customers', icon: <Users size={20} /> },
-        { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={20} /> },
-        { label: 'Справочники', path: '/dicts', icon: <BookOpen size={20} /> },
-        { label: 'Журнал сводок', path: '/journals/summary', icon: <BookOpen size={20} /> },
-        { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
+        {
+            label: 'Журналы',
+            icon: <FolderOpen size={20} />,
+            children: [
+                { label: 'Журнал сводок', path: '/journals/summary', icon: <BookOpen size={18} /> },
+                { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
+            ]
+        },
+        {
+            label: 'Справочник',
+            icon: <FolderOpen size={20} />,
+            children: [
+                { label: 'Товары', path: '/products', icon: <Package size={18} /> },
+                { label: 'Клиенты', path: '/customers', icon: <Users size={18} /> },
+                { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} /> },
+                { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
+            ]
+        },
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
     ];
+
+    const getAllPaths = (items: NavItem[]): string[] => {
+        return items.flatMap(item =>
+            item.children ? getAllPaths(item.children) : (item.path ? [item.path] : [])
+        );
+    };
+
+    const allPaths = getAllPaths(navItems);
+
+    const renderNavItem = (item: NavItem, depth = 0) => {
+        if (item.children) {
+            const isExpanded = expandedFolders.includes(item.label);
+            const hasActiveChild = item.children.some(child => location.pathname === child.path);
+
+            return (
+                <div key={item.label}>
+                    <button
+                        onClick={() => toggleFolder(item.label)}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                            ${hasActiveChild
+                                ? 'bg-slate-800 text-white'
+                                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                            }`}
+                    >
+                        <span className="text-slate-500">{item.icon}</span>
+                        <span className="flex-1 text-left">{item.label}</span>
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                    </button>
+                    {isExpanded && (
+                        <div className="ml-4 mt-1 space-y-1 border-l border-slate-700 pl-2">
+                            {item.children.map(child => renderNavItem(child, depth + 1))}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const isActive = location.pathname === item.path;
+        return (
+            <Link
+                key={item.path}
+                to={item.path!}
+                onClick={() => setIsMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
+                    ${isActive
+                        ? 'bg-primary-600 text-white shadow-lg shadow-primary-900/20'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                    }`}
+            >
+                <span className={`transition-colors ${isActive ? 'text-white' : 'text-slate-500 group-hover:text-slate-300'}`}>
+                    {item.icon}
+                </span>
+                {item.label}
+            </Link>
+        );
+    };
+
+    const getCurrentPageLabel = (): string => {
+        for (const item of navItems) {
+            if (item.path === location.pathname) return item.label;
+            if (item.children) {
+                const child = item.children.find(c => c.path === location.pathname);
+                if (child) return child.label;
+            }
+        }
+        return 'Dashboard';
+    };
 
     return (
         <div className="flex h-screen bg-gray-50 font-sans">
@@ -75,26 +172,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 </div>
 
                 <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-                    {navItems.map((item) => {
-                        const isActive = location.pathname === item.path;
-                        return (
-                            <Link
-                                key={item.path}
-                                to={item.path}
-                                onClick={() => setIsMobileMenuOpen(false)}
-                                className={`flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-all duration-200
-                                    ${isActive
-                                        ? 'bg-primary-600 text-white shadow-lg shadow-primary-900/20'
-                                        : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                                    }`}
-                            >
-                                <span className={`transition-colors ${isActive ? 'text-white' : 'text-slate-500 group-hover:text-slate-300'}`}>
-                                    {item.icon}
-                                </span>
-                                {item.label}
-                            </Link>
-                        );
-                    })}
+                    {navItems.map(item => renderNavItem(item))}
                 </nav>
 
                 <div className="p-4 border-t border-slate-800 bg-slate-900">
@@ -127,7 +205,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                             <Menu size={24} />
                         </button>
                         <h1 className="text-xl font-semibold text-slate-800">
-                            {navItems.find(i => i.path === location.pathname)?.label || 'Dashboard'}
+                            {getCurrentPageLabel()}
                         </h1>
                     </div>
                     {/* Header actions (optional) */}
@@ -147,4 +225,3 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 };
 
 export default Layout;
-
