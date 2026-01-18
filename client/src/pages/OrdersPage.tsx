@@ -121,6 +121,16 @@ const OrdersPage = () => {
                                         </span>
                                     </TableCell>
                                     <TableCell className="text-right space-x-2">
+                                        <Link to={`/orders/${o.id}`}>
+                                            <Button variant="outline" size="sm">
+                                                Просмотр
+                                            </Button>
+                                        </Link>
+                                        <Link to={`/orders/${o.id}/edit`}>
+                                            <Button variant="secondary" size="sm">
+                                                Редактировать
+                                            </Button>
+                                        </Link>
                                         {o.status === 'new' && (
                                             <Button
                                                 variant="ghost"

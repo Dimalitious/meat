@@ -99,22 +99,79 @@ export const createOrder = async (req: Request, res: Response) => {
     }
 };
 
-// Update Order (Status or Driver)
+// Update Order (Full update with items)
 export const updateOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const { status, expeditorId } = req.body;
+        const { customerId, date, paymentType, status, expeditorId, items } = req.body;
 
-        let data: any = {};
-        if (status) data.status = status;
-        if (expeditorId !== undefined) data.expeditorId = expeditorId;
+        // If items are provided, do a full update with transaction
+        if (items && Array.isArray(items)) {
+            const result = await prisma.$transaction(async (tx) => {
+                // Delete existing items
+                await tx.orderItem.deleteMany({
+                    where: { orderId: Number(id) }
+                });
 
-        const order = await prisma.order.update({
-            where: { id: Number(id) },
-            data
-        });
-        res.json(order);
+                // Calculate totals
+                let totalAmount = 0;
+                let totalWeight = 0;
+                const validItems = [];
+
+                for (const item of items) {
+                    const amount = item.price * item.quantity;
+                    totalAmount += amount;
+                    totalWeight += item.quantity;
+                    validItems.push({
+                        productId: item.productId,
+                        quantity: item.quantity,
+                        price: item.price,
+                        amount: amount,
+                        shippedQty: item.shippedQty || 0,
+                        sumWithRevaluation: item.sumWithRevaluation || amount,
+                        distributionCoef: item.distributionCoef || 0,
+                        weightToDistribute: item.weightToDistribute || 0,
+                    });
+                }
+
+                // Update order with new items
+                const order = await tx.order.update({
+                    where: { id: Number(id) },
+                    data: {
+                        customerId: customerId ? Number(customerId) : undefined,
+                        date: date ? new Date(date) : undefined,
+                        paymentType,
+                        status,
+                        expeditorId: expeditorId !== undefined ? expeditorId : undefined,
+                        totalAmount,
+                        totalWeight,
+                        items: {
+                            create: validItems
+                        }
+                    },
+                    include: {
+                        items: { include: { product: true } },
+                        customer: true
+                    }
+                });
+                return order;
+            });
+            res.json(result);
+        } else {
+            // Simple update (just status or expeditor)
+            let data: any = {};
+            if (status) data.status = status;
+            if (expeditorId !== undefined) data.expeditorId = expeditorId;
+            if (paymentType) data.paymentType = paymentType;
+
+            const order = await prisma.order.update({
+                where: { id: Number(id) },
+                data
+            });
+            res.json(order);
+        }
     } catch (error) {
+        console.error('Update order error:', error);
         res.status(400).json({ error: 'Failed to update order' });
     }
 };

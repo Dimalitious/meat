@@ -10,6 +10,8 @@ import CustomersPage from './pages/CustomersPage';
 import SuppliersPage from './pages/SuppliersPage';
 import OrdersPage from './pages/OrdersPage';
 import OrderFormPage from './pages/OrderFormPage';
+import OrderViewPage from './pages/OrderViewPage';
+import OrderEditPage from './pages/OrderEditPage';
 import DictsPage from './pages/DictsPage';
 import { ImportPage } from './pages/ImportPage';
 import DashboardPage from './pages/DashboardPage';
@@ -64,6 +66,8 @@ function App() {
           />
           <Route path="/orders" element={<ProtectedRoute><OrdersPage /></ProtectedRoute>} />
           <Route path="/orders/new" element={<ProtectedRoute><OrderFormPage /></ProtectedRoute>} />
+          <Route path="/orders/:id" element={<ProtectedRoute><OrderViewPage /></ProtectedRoute>} />
+          <Route path="/orders/:id/edit" element={<ProtectedRoute><OrderEditPage /></ProtectedRoute>} />
           <Route path="/svod" element={<ProtectedRoute><SvodPage /></ProtectedRoute>} />
           <Route path="/shipments" element={<ProtectedRoute><ShipmentsPage /></ProtectedRoute>} />
           <Route path="/expeditors" element={<ProtectedRoute><ExpeditorsPage /></ProtectedRoute>} />
