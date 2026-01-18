@@ -178,3 +178,24 @@ model SummaryOrderJournal {
   customer            Customer? @relation(fields: [customerId], references: [id])
   product             Product?  @relation(fields: [productId], references: [id])
 }
+
+// Журнал сводок заказов - хранит снимки формы "Сводка заказов"
+model SummaryOrdersJournal {
+  id          Int       @id @default(autoincrement())
+  summaryDate DateTime  // дата сводки
+  createdAt   DateTime  @default(now())
+  createdBy   String    // имя пользователя
+  isHidden    Boolean   @default(false)
+  data        Json      // все данные формы сводки
+}
+
+// Журнал сборок заказов - хранит снимки формы "Сборка заказов"
+model AssemblyOrdersJournal {
+  id              Int       @id @default(autoincrement())
+  assemblyDate    DateTime  // дата сборки
+  createdAt       DateTime  @default(now())
+  createdBy       String
+  isHidden        Boolean   @default(false)
+  sourceSummaryId Int?      // ссылка на журнал сводки
+  data            Json      // все данные сборки
+}

@@ -17,6 +17,7 @@ import importRoutes from './routes/import.routes';
 import assemblyRoutes from './routes/assembly.routes';
 import warehouseRoutes from './routes/warehouse.routes';
 import summaryOrdersRoutes from './routes/summaryOrders.routes';
+import journalsRoutes from './routes/journals.routes';
 
 app.use(cors());
 app.use(express.json());
@@ -30,6 +31,7 @@ app.use('/api/import', importRoutes);
 app.use('/api/assembly', assemblyRoutes);
 app.use('/api/warehouse', warehouseRoutes);
 app.use('/api/summary-orders', summaryOrdersRoutes);
+app.use('/api/journals', journalsRoutes);
 app.use('/api', masterRoutes); // /api/customers etc.
 
 app.get('/health', (req: Request, res: Response) => {

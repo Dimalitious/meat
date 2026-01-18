@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { useAuth } from '../context/AuthContext';
+import * as XLSX from 'xlsx';
 
 interface Customer {
     id: number;
@@ -46,19 +48,16 @@ const PAYMENT_TYPES = [
     { value: 'bank', label: 'Безнал' }
 ];
 
-const STATUS_OPTIONS = [
-    { value: 'draft', label: 'Не обработан', color: 'bg-gray-100 text-gray-700' },
-    { value: 'forming', label: 'Обработан', color: 'bg-green-100 text-green-800' },
-    { value: 'synced', label: 'В заказах', color: 'bg-blue-100 text-blue-800' }
-];
-
 export default function SummaryOrdersPage() {
     const { user } = useAuth();
+    const navigate = useNavigate();
     const [entries, setEntries] = useState<SummaryEntry[]>([]);
     const [customers, setCustomers] = useState<Customer[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
     const [loading, setLoading] = useState(true);
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Modal states
     const [showCustomerModal, setShowCustomerModal] = useState(false);
@@ -82,6 +81,7 @@ export default function SummaryOrdersPage() {
             setEntries(entriesRes.data);
             setCustomers(custRes.data);
             setProducts(prodRes.data);
+            setSelectedIds(new Set());
         } catch (err) {
             console.error('Failed to fetch data:', err);
         } finally {
@@ -100,7 +100,7 @@ export default function SummaryOrdersPage() {
                 price: 0,
                 shippedQty: 0,
                 orderQty: 0,
-                managerId: user?.id || null,
+                managerId: user?.id ? String(user.id) : null,
                 managerName: user?.username || 'Менеджер',
                 status: 'draft'
             }, { headers: { Authorization: `Bearer ${token}` } });
@@ -114,7 +114,6 @@ export default function SummaryOrdersPage() {
         try {
             const token = localStorage.getItem('token');
 
-            // Calculate sumWithRevaluation if price or shippedQty changed
             const entry = entries.find(e => e.id === id);
             if (entry && (updates.price !== undefined || updates.shippedQty !== undefined)) {
                 const price = updates.price !== undefined ? updates.price : entry.price;
@@ -130,6 +129,102 @@ export default function SummaryOrdersPage() {
         } catch (err) {
             console.error('Update error:', err);
         }
+    };
+
+    // Checkbox handlers
+    const toggleSelect = (id: number) => {
+        const newSelected = new Set(selectedIds);
+        if (newSelected.has(id)) {
+            newSelected.delete(id);
+        } else {
+            newSelected.add(id);
+        }
+        setSelectedIds(newSelected);
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedIds.size === entries.filter(e => e.status !== 'synced').length) {
+            setSelectedIds(new Set());
+        } else {
+            setSelectedIds(new Set(entries.filter(e => e.status !== 'synced').map(e => e.id)));
+        }
+    };
+
+    const deleteSelected = async () => {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`Удалить ${selectedIds.size} выбранных записей?`)) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            await Promise.all(
+                Array.from(selectedIds).map(id =>
+                    axios.delete(`${API_URL}/api/summary-orders/${id}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    })
+                )
+            );
+            setEntries(entries.filter(e => !selectedIds.has(e.id)));
+            setSelectedIds(new Set());
+        } catch (err) {
+            alert('Ошибка при удалении');
+        }
+    };
+
+    // Excel import
+    const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+            try {
+                const data = evt.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+                const token = localStorage.getItem('token');
+
+                for (const row of jsonData as any[]) {
+                    // Find customer by name
+                    const customer = customers.find(c =>
+                        c.name.toLowerCase() === (row['Клиент'] || row['customerName'] || '').toLowerCase()
+                    );
+                    // Find product by name
+                    const product = products.find(p =>
+                        p.name.toLowerCase() === (row['Товар'] || row['productFullName'] || '').toLowerCase()
+                    );
+
+                    await axios.post(`${API_URL}/api/summary-orders`, {
+                        shipDate: filterDate,
+                        paymentType: row['Тип оплаты'] || row['paymentType'] || 'cash',
+                        customerId: customer?.id || null,
+                        customerName: row['Клиент'] || row['customerName'] || '',
+                        productId: product?.id || null,
+                        productFullName: row['Товар'] || row['productFullName'] || '',
+                        category: product?.category || row['Категория'] || null,
+                        shortNameMorning: product?.shortNameMorning || row['Короткое'] || null,
+                        price: Number(row['Цена'] || row['price'] || 0),
+                        shippedQty: Number(row['Факт'] || row['shippedQty'] || 0),
+                        orderQty: Number(row['Заказ'] || row['orderQty'] || 0),
+                        distributionCoef: Number(row['Коэф%'] || row['distributionCoef'] || 0),
+                        weightToDistribute: Number(row['Вес распр.'] || row['weightToDistribute'] || 0),
+                        managerId: user?.id ? String(user.id) : null,
+                        managerName: user?.username || 'Менеджер',
+                        status: 'draft'
+                    }, { headers: { Authorization: `Bearer ${token}` } });
+                }
+
+                alert(`Импортировано ${jsonData.length} записей`);
+                fetchData();
+            } catch (err) {
+                console.error('Excel import error:', err);
+                alert('Ошибка импорта Excel');
+            }
+        };
+        reader.readAsBinaryString(file);
+        e.target.value = '';
     };
 
     const selectCustomer = (customer: Customer) => {
@@ -165,36 +260,52 @@ export default function SummaryOrdersPage() {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setEntries(entries.filter(e => e.id !== id));
+            selectedIds.delete(id);
+            setSelectedIds(new Set(selectedIds));
         } catch (err) {
             alert('Ошибка при удалении');
         }
     };
 
+    // Process entry = mark as forming and navigate to assembly
     const processEntry = async (id: number) => {
         const entry = entries.find(e => e.id === id);
         if (!entry) return;
 
-        const newStatus = entry.status === 'draft' ? 'forming' : 'draft';
-        await updateEntry(id, { status: newStatus });
+        if (entry.status === 'forming') {
+            // Already forming, unmark
+            await updateEntry(id, { status: 'draft' });
+        } else {
+            // Mark as forming and navigate to assembly
+            try {
+                const token = localStorage.getItem('token');
+
+                await axios.put(`${API_URL}/api/summary-orders/${id}`, { status: 'forming' }, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+
+                // Navigate to assembly orders page
+                navigate('/assembly-orders');
+            } catch (err) {
+                console.error('Process error:', err);
+                alert('Ошибка обработки');
+            }
+        }
     };
 
-    const syncFormingEntries = async () => {
-        const formingIds = entries.filter(e => e.status === 'forming').map(e => e.id);
-        if (formingIds.length === 0) {
-            alert('Нет записей со статусом "Обработан"');
-            return;
-        }
-
+    // Save to journal
+    const saveToJournal = async () => {
         try {
             const token = localStorage.getItem('token');
-            await axios.post(`${API_URL}/api/summary-orders/sync`, {
-                entryIds: formingIds
+            await axios.post(`${API_URL}/api/journals/summary`, {
+                summaryDate: filterDate,
+                createdBy: user?.username || 'Unknown',
+                data: entries
             }, { headers: { Authorization: `Bearer ${token}` } });
-
-            alert(`Создано заказов: ${formingIds.length} записей синхронизированы!`);
-            fetchData();
+            alert('Сводка сохранена в журнал!');
         } catch (err) {
-            alert('Ошибка синхронизации');
+            console.error('Save to journal error:', err);
+            alert('Ошибка сохранения в журнал');
         }
     };
 
@@ -210,7 +321,8 @@ export default function SummaryOrdersPage() {
 
     if (loading) return <div className="p-8 text-center">Загрузка...</div>;
 
-    const formingCount = entries.filter(e => e.status === 'forming').length;
+    const selectableEntries = entries.filter(e => e.status !== 'synced');
+    const allSelected = selectableEntries.length > 0 && selectedIds.size === selectableEntries.length;
 
     return (
         <div className="max-w-full mx-auto">
@@ -228,14 +340,33 @@ export default function SummaryOrdersPage() {
                         onClick={addEntry}
                         className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
                     >
-                        + Добавить строку
+                        + Добавить
                     </button>
-                    {formingCount > 0 && (
+                    <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        ref={fileInputRef}
+                        onChange={handleExcelImport}
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                    >
+                        📥 Загрузить Excel
+                    </button>
+                    <button
+                        onClick={saveToJournal}
+                        className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700"
+                    >
+                        💾 Сохранить
+                    </button>
+                    {selectedIds.size > 0 && (
                         <button
-                            onClick={syncFormingEntries}
-                            className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                            onClick={deleteSelected}
+                            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
                         >
-                            Создать заказы ({formingCount})
+                            🗑 Удалить ({selectedIds.size})
                         </button>
                     )}
                 </div>
@@ -246,33 +377,50 @@ export default function SummaryOrdersPage() {
                 <table className="w-full text-sm">
                     <thead className="bg-gray-100">
                         <tr>
-                            <th className="border px-2 py-2 text-left w-28">Дата</th>
-                            <th className="border px-2 py-2 text-left w-24">Тип оплаты</th>
-                            <th className="border px-2 py-2 text-left w-40">Клиент</th>
+                            <th className="border px-2 py-2 w-10">
+                                <input
+                                    type="checkbox"
+                                    checked={allSelected}
+                                    onChange={toggleSelectAll}
+                                    className="w-4 h-4"
+                                />
+                            </th>
+                            <th className="border px-2 py-2 text-left w-24">Дата</th>
+                            <th className="border px-2 py-2 text-left w-20">Оплата</th>
+                            <th className="border px-2 py-2 text-left w-36">Клиент</th>
                             <th className="border px-2 py-2 text-left">Товар</th>
-                            <th className="border px-2 py-2 text-left w-24">Категория</th>
-                            <th className="border px-2 py-2 text-left w-24">Короткое</th>
-                            <th className="border px-2 py-2 text-right w-20">Цена</th>
-                            <th className="border px-2 py-2 text-right w-16">Факт</th>
-                            <th className="border px-2 py-2 text-right w-20">Сумма переоц.</th>
-                            <th className="border px-2 py-2 text-right w-16">Заказ</th>
-                            <th className="border px-2 py-2 text-right w-16">Коэф%</th>
-                            <th className="border px-2 py-2 text-right w-20">Вес распр.</th>
-                            <th className="border px-2 py-2 text-left w-28">Менеджер</th>
-                            <th className="border px-2 py-2 text-center w-28">Статус</th>
-                            <th className="border px-2 py-2 w-10"></th>
+                            <th className="border px-2 py-2 text-left w-20">Категория</th>
+                            <th className="border px-2 py-2 text-left w-20">Короткое</th>
+                            <th className="border px-2 py-2 text-right w-16">Цена</th>
+                            <th className="border px-2 py-2 text-right w-14">Факт</th>
+                            <th className="border px-2 py-2 text-right w-16">Сумма</th>
+                            <th className="border px-2 py-2 text-right w-14">Заказ</th>
+                            <th className="border px-2 py-2 text-right w-14">Коэф%</th>
+                            <th className="border px-2 py-2 text-right w-16">Вес</th>
+                            <th className="border px-2 py-2 text-left w-24">Менеджер</th>
+                            <th className="border px-2 py-2 text-center w-24">Статус</th>
+                            <th className="border px-2 py-2 w-8"></th>
                         </tr>
                     </thead>
                     <tbody>
                         {entries.length === 0 ? (
                             <tr>
-                                <td colSpan={15} className="text-center py-8 text-gray-500">
-                                    Нет записей на {filterDate}. Нажмите "Добавить строку".
+                                <td colSpan={16} className="text-center py-8 text-gray-500">
+                                    Нет записей на {filterDate}. Нажмите "Добавить" или "Загрузить Excel".
                                 </td>
                             </tr>
                         ) : (
                             entries.map(entry => (
                                 <tr key={entry.id} className={`hover:bg-gray-50 ${entry.status === 'synced' ? 'bg-blue-50' : ''}`}>
+                                    <td className="border px-2 py-1 text-center">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedIds.has(entry.id)}
+                                            onChange={() => toggleSelect(entry.id)}
+                                            disabled={entry.status === 'synced'}
+                                            className="w-4 h-4"
+                                        />
+                                    </td>
                                     <td className="border px-2 py-1 text-gray-600 text-xs">
                                         {new Date(entry.shipDate).toLocaleDateString('ru-RU')}
                                     </td>
@@ -297,7 +445,7 @@ export default function SummaryOrdersPage() {
                                             }}
                                             disabled={entry.status === 'synced'}
                                         >
-                                            {entry.customerName || 'Выбрать клиента...'}
+                                            {entry.customerName || 'Выбрать...'}
                                         </button>
                                     </td>
                                     <td className="border px-1 py-1">
@@ -309,11 +457,11 @@ export default function SummaryOrdersPage() {
                                             }}
                                             disabled={entry.status === 'synced'}
                                         >
-                                            {entry.productFullName || 'Выбрать товар...'}
+                                            {entry.productFullName || 'Выбрать...'}
                                         </button>
                                     </td>
-                                    <td className="border px-2 py-1 text-gray-600 text-xs">{entry.category || '-'}</td>
-                                    <td className="border px-2 py-1 text-gray-600 text-xs">{entry.shortNameMorning || '-'}</td>
+                                    <td className="border px-1 py-1 text-gray-600 text-xs">{entry.category || '-'}</td>
+                                    <td className="border px-1 py-1 text-gray-600 text-xs">{entry.shortNameMorning || '-'}</td>
                                     <td className="border px-1 py-1">
                                         <input
                                             type="number"
@@ -334,8 +482,8 @@ export default function SummaryOrdersPage() {
                                             disabled={entry.status === 'synced'}
                                         />
                                     </td>
-                                    <td className="border px-2 py-1 text-right font-medium text-xs bg-yellow-50">
-                                        {(entry.price * entry.shippedQty).toFixed(2)}
+                                    <td className="border px-1 py-1 text-right font-medium text-xs bg-yellow-50">
+                                        {(entry.price * entry.shippedQty).toFixed(0)}
                                     </td>
                                     <td className="border px-1 py-1">
                                         <input
@@ -367,23 +515,20 @@ export default function SummaryOrdersPage() {
                                             disabled={entry.status === 'synced'}
                                         />
                                     </td>
-                                    <td className="border px-2 py-1 text-gray-600 text-xs">
+                                    <td className="border px-1 py-1 text-gray-600 text-xs">
                                         {entry.managerName || '-'}
                                     </td>
                                     <td className="border px-1 py-1 text-center">
                                         {entry.status === 'synced' ? (
                                             <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">
-                                                В заказах
+                                                ✓ В заказах
                                             </span>
                                         ) : (
                                             <button
                                                 onClick={() => processEntry(entry.id)}
-                                                className={`px-2 py-1 rounded text-xs font-medium ${entry.status === 'forming'
-                                                        ? 'bg-green-500 text-white'
-                                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                                    }`}
+                                                className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600"
                                             >
-                                                {entry.status === 'forming' ? '✓ Обработан' : 'Обработать'}
+                                                Обработать
                                             </button>
                                         )}
                                     </td>
@@ -415,7 +560,7 @@ export default function SummaryOrdersPage() {
                         <div className="p-4 border-b">
                             <input
                                 type="text"
-                                placeholder="Поиск по названию или коду..."
+                                placeholder="Поиск..."
                                 className="w-full border rounded px-3 py-2"
                                 value={searchCustomer}
                                 onChange={e => setSearchCustomer(e.target.value)}
@@ -424,7 +569,7 @@ export default function SummaryOrdersPage() {
                         </div>
                         <div className="flex-1 overflow-auto p-2">
                             {filteredCustomers.length === 0 ? (
-                                <p className="text-center text-gray-500 py-4">Клиенты не найдены</p>
+                                <p className="text-center text-gray-500 py-4">Не найдены</p>
                             ) : (
                                 filteredCustomers.map(c => (
                                     <button
@@ -453,7 +598,7 @@ export default function SummaryOrdersPage() {
                         <div className="p-4 border-b">
                             <input
                                 type="text"
-                                placeholder="Поиск по названию или коду..."
+                                placeholder="Поиск..."
                                 className="w-full border rounded px-3 py-2"
                                 value={searchProduct}
                                 onChange={e => setSearchProduct(e.target.value)}
@@ -462,7 +607,7 @@ export default function SummaryOrdersPage() {
                         </div>
                         <div className="flex-1 overflow-auto p-2">
                             {filteredProducts.length === 0 ? (
-                                <p className="text-center text-gray-500 py-4">Товары не найдены</p>
+                                <p className="text-center text-gray-500 py-4">Не найдены</p>
                             ) : (
                                 filteredProducts.map(p => (
                                     <button

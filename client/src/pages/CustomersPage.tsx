@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import {
@@ -58,6 +59,7 @@ const CustomersPage = () => {
     const [filterName, setFilterName] = useState('');
     const [filterDistrict, setFilterDistrict] = useState('');
     const [filterManager, setFilterManager] = useState('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         Promise.all([
@@ -163,6 +165,61 @@ const CustomersPage = () => {
         }
     };
 
+    // Excel import
+    const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+            try {
+                const data = evt.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+                const token = localStorage.getItem('token');
+                let imported = 0;
+
+                for (const row of jsonData as any[]) {
+                    const code = row['Код'] || row['code'] || '';
+                    const name = row['Название'] || row['name'] || '';
+                    if (!code || !name) continue;
+
+                    // Find district and manager by name
+                    const district = districts.find(d =>
+                        d.name.toLowerCase() === (row['Район'] || row['district'] || '').toLowerCase()
+                    );
+                    const manager = managers.find(m =>
+                        m.name.toLowerCase() === (row['Менеджер'] || row['manager'] || '').toLowerCase()
+                    );
+
+                    try {
+                        await axios.post(`${API_URL}/api/customers`, {
+                            code,
+                            name,
+                            legalName: row['Юр. Название'] || row['legalName'] || '',
+                            districtId: district?.id || null,
+                            managerId: manager?.id || null
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        imported++;
+                    } catch (err) {
+                        console.warn('Skip duplicate:', code);
+                    }
+                }
+
+                alert(`Импортировано ${imported} клиентов`);
+                fetchCustomers();
+            } catch (err) {
+                console.error('Excel import error:', err);
+                alert('Ошибка импорта Excel');
+            }
+        };
+        reader.readAsBinaryString(file);
+        e.target.value = '';
+    };
+
     const filteredCustomers = useMemo(() => {
         return customers.filter(c => {
             const matchCode = c.code.toLowerCase().includes(filterCode.toLowerCase());
@@ -179,9 +236,21 @@ const CustomersPage = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-900">Клиенты</h1>
-                <Button onClick={handleCreate} className="flex items-center gap-2">
-                    <Plus size={16} /> Новый клиент
-                </Button>
+                <div className="flex gap-2">
+                    <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        ref={fileInputRef}
+                        onChange={handleExcelImport}
+                        className="hidden"
+                    />
+                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
+                        📥 Загрузить Excel
+                    </Button>
+                    <Button onClick={handleCreate} className="flex items-center gap-2">
+                        <Plus size={16} /> Новый клиент
+                    </Button>
+                </div>
             </div>
 
             <div className="bg-white rounded-md border border-slate-200 overflow-hidden shadow-sm">

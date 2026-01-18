@@ -18,7 +18,10 @@ import DashboardPage from './pages/DashboardPage';
 import WarehousePage from './pages/WarehousePage';
 import AssemblyPage from './pages/AssemblyPage';
 import AssemblyOrderPage from './pages/AssemblyOrderPage';
+import AssemblyOrdersPage from './pages/AssemblyOrdersPage';
 import SummaryOrdersPage from './pages/SummaryOrdersPage';
+import SummaryJournalPage from './pages/SummaryJournalPage';
+import AssemblyJournalPage from './pages/AssemblyJournalPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -78,6 +81,9 @@ function App() {
           <Route path="/assembly" element={<ProtectedRoute><AssemblyPage /></ProtectedRoute>} />
           <Route path="/assembly/:id" element={<ProtectedRoute><AssemblyOrderPage /></ProtectedRoute>} />
           <Route path="/summary-orders" element={<ProtectedRoute><SummaryOrdersPage /></ProtectedRoute>} />
+          <Route path="/assembly-orders" element={<ProtectedRoute><AssemblyOrdersPage /></ProtectedRoute>} />
+          <Route path="/journals/summary" element={<ProtectedRoute><SummaryJournalPage /></ProtectedRoute>} />
+          <Route path="/journals/assembly" element={<ProtectedRoute><AssemblyJournalPage /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

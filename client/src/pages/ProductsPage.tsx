@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import {
@@ -34,10 +35,10 @@ const ProductsPage = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
-    // Filters
     const [filterCode, setFilterCode] = useState('');
     const [filterName, setFilterName] = useState('');
     const [filterCategory, setFilterCategory] = useState('');
+    const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
 
     const [formData, setFormData] = useState<Partial<Product>>({
         code: '',
@@ -52,6 +53,7 @@ const ProductsPage = () => {
         coefficient: 1.0,
         lossNorm: 0.0,
     });
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         fetchProducts();
@@ -108,6 +110,45 @@ const ProductsPage = () => {
         }
     };
 
+    // Checkbox handlers
+    const toggleSelect = (code: string) => {
+        const newSelected = new Set(selectedCodes);
+        if (newSelected.has(code)) {
+            newSelected.delete(code);
+        } else {
+            newSelected.add(code);
+        }
+        setSelectedCodes(newSelected);
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedCodes.size === filteredProducts.length) {
+            setSelectedCodes(new Set());
+        } else {
+            setSelectedCodes(new Set(filteredProducts.map(p => p.code)));
+        }
+    };
+
+    const deleteSelected = async () => {
+        if (selectedCodes.size === 0) return;
+        if (!confirm(`Удалить ${selectedCodes.size} выбранных товаров?`)) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            await Promise.all(
+                Array.from(selectedCodes).map(code =>
+                    axios.delete(`${API_URL}/api/products/${code}`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    })
+                )
+            );
+            setSelectedCodes(new Set());
+            fetchProducts();
+        } catch (err) {
+            alert('Ошибка при удалении');
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
@@ -137,6 +178,59 @@ const ProductsPage = () => {
         }
     };
 
+    // Excel import
+    const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (evt) => {
+            try {
+                const data = evt.target?.result;
+                const workbook = XLSX.read(data, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(sheet);
+
+                const token = localStorage.getItem('token');
+                let imported = 0;
+
+                for (const row of jsonData as any[]) {
+                    const code = row['Код'] || row['code'] || '';
+                    const name = row['Название'] || row['name'] || '';
+                    if (!code || !name) continue;
+
+                    try {
+                        await axios.post(`${API_URL}/api/products`, {
+                            code,
+                            name,
+                            altName: row['Альт. название'] || row['altName'] || '',
+                            shortNameFsa: row['ФСА'] || row['shortNameFsa'] || '',
+                            shortNamePl: row['ПЛ'] || row['shortNamePl'] || '',
+                            shortNameMorning: row['Утро'] || row['shortNameMorning'] || '',
+                            priceMorning: Number(row['Прайс Утро'] || row['priceMorning'] || 0),
+                            category: row['Категория'] || row['category'] || '',
+                            status: row['Статус'] || row['status'] || 'active',
+                            coefficient: Number(row['Коэфф.'] || row['coefficient'] || 1),
+                            lossNorm: Number(row['Потери%'] || row['lossNorm'] || 0)
+                        }, { headers: { Authorization: `Bearer ${token}` } });
+                        imported++;
+                    } catch (err) {
+                        console.warn('Skip duplicate:', code);
+                    }
+                }
+
+                alert(`Импортировано ${imported} товаров`);
+                fetchProducts();
+            } catch (err) {
+                console.error('Excel import error:', err);
+                alert('Ошибка импорта Excel');
+            }
+        };
+        reader.readAsBinaryString(file);
+        e.target.value = '';
+    };
+
     const filteredProducts = useMemo(() => {
         return products.filter(p => {
             const matchCode = p.code.toLowerCase().includes(filterCode.toLowerCase());
@@ -152,9 +246,26 @@ const ProductsPage = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-900">Товары</h1>
-                <Button onClick={handleCreate} className="flex items-center gap-2">
-                    <Plus size={16} /> Новый товар
-                </Button>
+                <div className="flex gap-2">
+                    <input
+                        type="file"
+                        accept=".xlsx,.xls"
+                        ref={fileInputRef}
+                        onChange={handleExcelImport}
+                        className="hidden"
+                    />
+                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
+                        📥 Загрузить Excel
+                    </Button>
+                    {selectedCodes.size > 0 && (
+                        <Button onClick={deleteSelected} variant="outline" className="flex items-center gap-2 text-red-600 border-red-300 hover:bg-red-50">
+                            <Trash2 size={16} /> Удалить ({selectedCodes.size})
+                        </Button>
+                    )}
+                    <Button onClick={handleCreate} className="flex items-center gap-2">
+                        <Plus size={16} /> Новый товар
+                    </Button>
+                </div>
             </div>
 
             <div className="bg-white rounded-md border border-slate-200 overflow-hidden shadow-sm">
@@ -162,6 +273,14 @@ const ProductsPage = () => {
                     <Table>
                         <TableHeader className="bg-slate-900 text-slate-200">
                             <TableRow className="border-b border-slate-700 hover:bg-slate-900">
+                                <TableHead className="w-10">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedCodes.size === filteredProducts.length && filteredProducts.length > 0}
+                                        onChange={toggleSelectAll}
+                                        className="w-4 h-4"
+                                    />
+                                </TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Код</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Название</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Альт.</TableHead>
@@ -177,6 +296,7 @@ const ProductsPage = () => {
                             </TableRow>
                             {/* Filter Row */}
                             <TableRow className="bg-slate-800 border-none hover:bg-slate-800">
+                                <TableHead></TableHead>
                                 <TableHead className="p-2">
                                     <input
                                         className="w-full bg-slate-700 border-none text-white text-xs rounded px-2 py-1 placeholder-slate-400 focus:ring-1 focus:ring-blue-500 outline-none"
@@ -215,6 +335,14 @@ const ProductsPage = () => {
                             ) : (
                                 filteredProducts.map((p) => (
                                     <TableRow key={p.code} className="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
+                                        <TableCell>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedCodes.has(p.code)}
+                                                onChange={() => toggleSelect(p.code)}
+                                                className="w-4 h-4"
+                                            />
+                                        </TableCell>
                                         <TableCell className="font-medium text-slate-700">{p.code}</TableCell>
                                         <TableCell className="font-medium text-slate-900">{p.name}</TableCell>
                                         <TableCell className="text-slate-500 text-xs">{p.altName || '-'}</TableCell>
