@@ -81,9 +81,10 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
             include: { customer: true, product: true }
         });
         res.json(entry);
-    } catch (error) {
+    } catch (error: any) {
         console.error('Create summary order error:', error);
-        res.status(400).json({ error: 'Failed to create summary order' });
+        console.error('Error details:', error.message);
+        res.status(400).json({ error: 'Failed to create summary order', details: error.message });
     }
 };
 
