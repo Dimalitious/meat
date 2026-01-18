@@ -8,21 +8,20 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  username  String   @unique
-  password  String
-  name      String
-  role      String   @default("USER") // ADMIN, MANAGER, DRIVER, ASM, SKLAD, BUH
-  telegramId String? @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         Int      @id @default(autoincrement())
+  username   String   @unique
+  password   String
+  name       String
+  role       String   @default("USER")
+  telegramId String?  @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model District {
   id        Int        @id @default(autoincrement())
   code      String     @unique
   name      String
-  
   customers Customer[]
 }
 
@@ -30,110 +29,96 @@ model Manager {
   id        Int        @id @default(autoincrement())
   code      String     @unique
   name      String
-  
+  phone     String?
   customers Customer[]
 }
 
 model Product {
-  id                 Int      @id @default(autoincrement())
-  code               String   @unique
-  name               String
-  altName            String?
-  shortNameFsa       String?
-  shortNamePl        String?
-  shortNameMorning   String?
-  priceMorning       Decimal? @default(0.0)
-  category           String?
-  status             String   @default("active")
-  coefficient        Float    @default(1.0)
-  lossNorm           Float    @default(0.0)
-  
-  suppliers          SupplierProduct[]
-  orderItems         OrderItem[]
-  stock              Stock?
-  stockTransactions  StockTransaction[]
-  
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                Int                @id @default(autoincrement())
+  code              String             @unique
+  name              String
+  altName           String?
+  shortNameFsa      String?
+  shortNamePl       String?
+  shortNameMorning  String?
+  priceMorning      Decimal?           @default(0.0)
+  category          String?
+  status            String             @default("active")
+  coefficient       Float              @default(1.0)
+  lossNorm          Float              @default(0.0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  orderItems        OrderItem[]
+  stock             Stock?
+  stockTransactions StockTransaction[]
+  suppliers         SupplierProduct[]
 }
 
 model Customer {
-  id           Int      @id @default(autoincrement())
-  code         String   @unique
-  name         String
-  legalName    String?
-  
-  districtId   String?
-  district     District? @relation(fields: [districtId], references: [code])
-  
-  managerId    String?
-  manager      Manager?  @relation(fields: [managerId], references: [code])
-  
-  orders       Order[]
-
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id         Int       @id @default(autoincrement())
+  code       String    @unique
+  name       String
+  legalName  String?
+  districtId String?
+  managerId  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  district   District? @relation(fields: [districtId], references: [code])
+  manager    Manager?  @relation(fields: [managerId], references: [code])
+  orders     Order[]
 }
 
 model Supplier {
-  id           Int      @id @default(autoincrement())
-  code         String   @unique
-  name         String
-  legalName    String?
-  
-  products     SupplierProduct[]
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        Int               @id @default(autoincrement())
+  code      String            @unique
+  name      String
+  legalName String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  products  SupplierProduct[]
 }
 
 model SupplierProduct {
   supplierId Int
   productId  Int
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
   product    Product  @relation(fields: [productId], references: [id])
-  
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+
   @@id([supplierId, productId])
 }
 
 model Order {
-  id           Int          @id @default(autoincrement())
-  date         DateTime     @default(now()) // Shipment Date
-  status       String       @default("draft") // draft, confirmed, shipped, completed
-  paymentType  String?
-  
-  customerId   Int
-  customer     Customer     @relation(fields: [customerId], references: [id])
-  
-  expeditorId  Int?
-  expeditor    Expeditor?   @relation(fields: [expeditorId], references: [id])
-  
-  items        OrderItem[]
+  id                Int                @id @default(autoincrement())
+  date              DateTime           @default(now())
+  status            String             @default("new")
+  paymentType       String?
+  customerId        Int
+  expeditorId       Int?
+  totalAmount       Decimal            @default(0.0)
+  totalWeight       Float              @default(0.0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  customer          Customer           @relation(fields: [customerId], references: [id])
+  expeditor         Expeditor?         @relation(fields: [expeditorId], references: [id])
+  items             OrderItem[]
   stockTransactions StockTransaction[]
-  
-  totalAmount  Decimal      @default(0.0)
-  totalWeight  Float        @default(0.0)
-  
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
 }
 
 model OrderItem {
-  id           Int      @id @default(autoincrement())
-  orderId      Int
-  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  
-  productId    Int
-  product      Product  @relation(fields: [productId], references: [id])
-  
-  quantity     Float    // order_value (qty)
-  price        Decimal  // calculated or manual price
-  amount       Decimal  // order_sum (total for line)
-  
-  shippedQty   Float    @default(0.0) // shipped_fact
-  
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 Int      @id @default(autoincrement())
+  orderId            Int
+  productId          Int
+  quantity           Float
+  price              Decimal
+  amount             Decimal
+  shippedQty         Float    @default(0.0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  distributionCoef   Float?   @default(0.0)
+  sumWithRevaluation Decimal? @default(0.0)
+  weightToDistribute Float?   @default(0.0)
+  order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product            Product  @relation(fields: [productId], references: [id])
 }
 
 model Expeditor {
@@ -141,32 +126,26 @@ model Expeditor {
   name      String
   phone     String?
   isActive  Boolean  @default(true)
-  
-  orders    Order[]
-  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  orders    Order[]
 }
 
 model Stock {
-  productId Int     @id
-  product   Product @relation(fields: [productId], references: [id])
-  quantity  Float   @default(0.0)
-  
+  productId Int      @id
+  quantity  Float    @default(0.0)
   updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id])
 }
 
 model StockTransaction {
   id        Int      @id @default(autoincrement())
   productId Int
-  product   Product  @relation(fields: [productId], references: [id])
-  
-  type      String   // ARRIVAL, ASSEMBLY, ADJUSTMENT
-  quantity  Float    // Positive for arrival, negative for usage
-  
-  orderId   Int?     // Link to Order if ASSEMBLY
-  order     Order?   @relation(fields: [orderId], references: [id])
-  
+  type      String
+  quantity  Float
+  orderId   Int?
   note      String?
   createdAt DateTime @default(now())
+  order     Order?   @relation(fields: [orderId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
 }

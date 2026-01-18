@@ -67,6 +67,10 @@ export const createOrder = async (req: Request, res: Response) => {
                     quantity: item.quantity,
                     price: item.price,
                     amount: amount,
+                    shippedQty: item.shippedQty || 0,
+                    sumWithRevaluation: item.sumWithRevaluation || amount,
+                    distributionCoef: item.distributionCoef || 0,
+                    weightToDistribute: item.weightToDistribute || 0,
                 });
             }
 
@@ -78,7 +82,7 @@ export const createOrder = async (req: Request, res: Response) => {
                     paymentType,
                     totalAmount,
                     totalWeight,
-                    status: 'draft',
+                    status: 'new',
                     items: {
                         create: validItems
                     }

@@ -3,15 +3,13 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// Get list of orders ready for assembly (status = confirmed)
-// Or maybe 'partially_assembled' too if we support pausing? 
-// For now, simple flow: confirmed -> assembled.
+// Get list of orders ready for assembly (status = new or processing)
 export const getOrdersForAssembly = async (req: Request, res: Response) => {
     try {
         const orders = await prisma.order.findMany({
             where: {
                 status: {
-                    in: ['confirmed', 'assembling'] // Allow 'assembling' if we add intermediate state later
+                    in: ['new', 'processing'] // Updated status values
                 }
             },
             include: {
@@ -82,7 +80,7 @@ export const completeAssembly = async (req: Request, res: Response) => {
             const order = await tx.order.update({
                 where: { id: Number(id) },
                 data: {
-                    status: 'assembled',
+                    status: 'delivered',  // Updated status value
                 },
                 include: { items: true } // Need items to deduct stock
             });

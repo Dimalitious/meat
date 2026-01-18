@@ -96,7 +96,7 @@ export default function AssemblyOrderPage() {
             const token = localStorage.getItem('token');
             await axios.put(`${API_URL}/api/assembly/${order.id}`, {
                 items: itemsToUpdate,
-                status: 'assembled'
+                status: 'delivered'
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });

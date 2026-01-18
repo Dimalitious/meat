@@ -61,7 +61,7 @@ const OrdersPage = () => {
         try {
             const token = localStorage.getItem('token');
             await axios.patch(`${API_URL}/api/orders/${id}`,
-                { status: 'confirmed' },
+                { status: 'processing' },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             fetchOrders();
@@ -111,17 +111,17 @@ const OrdersPage = () => {
                                     <TableCell className="font-medium text-slate-700">{o.customer?.name}</TableCell>
                                     <TableCell>{Number(o.totalAmount).toLocaleString('ru-RU')} ₽</TableCell>
                                     <TableCell>
-                                        <span className={`px-2.5 py-0.5 inline-flex text-xs font-medium rounded-full ${o.status === 'draft' ? 'bg-yellow-100 text-yellow-800' :
-                                                o.status === 'confirmed' ? 'bg-primary-100 text-primary-800' :
-                                                    'bg-emerald-100 text-emerald-800'
+                                        <span className={`px-2.5 py-0.5 inline-flex text-xs font-medium rounded-full ${o.status === 'new' ? 'bg-yellow-100 text-yellow-800' :
+                                            o.status === 'processing' ? 'bg-primary-100 text-primary-800' :
+                                                'bg-emerald-100 text-emerald-800'
                                             }`}>
-                                            {o.status === 'draft' ? 'Черновик' :
-                                                o.status === 'confirmed' ? 'Подтвержден' :
-                                                    o.status === 'assembled' ? 'Собран' : o.status}
+                                            {o.status === 'new' ? 'Новый' :
+                                                o.status === 'processing' ? 'В обработке' :
+                                                    o.status === 'delivered' ? 'Доставлен' : o.status}
                                         </span>
                                     </TableCell>
                                     <TableCell className="text-right space-x-2">
-                                        {o.status === 'draft' && (
+                                        {o.status === 'new' && (
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
