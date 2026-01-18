@@ -195,24 +195,33 @@ const ProductsPage = () => {
                 const token = localStorage.getItem('token');
                 let imported = 0;
 
+                // Helper function to get value case-insensitively
+                const getVal = (row: any, ...keys: string[]) => {
+                    for (const key of keys) {
+                        const found = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
+                        if (found && row[found]) return row[found];
+                    }
+                    return '';
+                };
+
                 for (const row of jsonData as any[]) {
-                    const code = row['Код'] || row['code'] || '';
-                    const name = row['Название'] || row['name'] || '';
+                    const code = getVal(row, 'код', 'code');
+                    const name = getVal(row, 'название', 'name');
                     if (!code || !name) continue;
 
                     try {
                         await axios.post(`${API_URL}/api/products`, {
                             code,
                             name,
-                            altName: row['Альт. название'] || row['altName'] || '',
-                            shortNameFsa: row['ФСА'] || row['shortNameFsa'] || '',
-                            shortNamePl: row['ПЛ'] || row['shortNamePl'] || '',
-                            shortNameMorning: row['Утро'] || row['shortNameMorning'] || '',
-                            priceMorning: Number(row['Прайс Утро'] || row['priceMorning'] || 0),
-                            category: row['Категория'] || row['category'] || '',
-                            status: row['Статус'] || row['status'] || 'active',
-                            coefficient: Number(row['Коэфф.'] || row['coefficient'] || 1),
-                            lossNorm: Number(row['Потери%'] || row['lossNorm'] || 0)
+                            altName: getVal(row, 'альт. название', 'altname', 'альт название'),
+                            shortNameFsa: getVal(row, 'фса', 'shortnamefsa'),
+                            shortNamePl: getVal(row, 'пл', 'shortnamepl'),
+                            shortNameMorning: getVal(row, 'утро', 'shortnamemorning'),
+                            priceMorning: Number(getVal(row, 'прайс утро', 'pricemorning', 'цена') || 0),
+                            category: getVal(row, 'категория', 'category'),
+                            status: getVal(row, 'статус', 'status') || 'active',
+                            coefficient: Number(getVal(row, 'коэфф.', 'коэфф', 'coefficient') || 1),
+                            lossNorm: Number(getVal(row, 'потери%', 'потери', 'lossnorm') || 0)
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         imported++;
                     } catch (err) {

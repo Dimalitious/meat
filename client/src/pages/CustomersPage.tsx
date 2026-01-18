@@ -182,26 +182,38 @@ const CustomersPage = () => {
                 const token = localStorage.getItem('token');
                 let imported = 0;
 
+                // Helper function to get value case-insensitively
+                const getVal = (row: any, ...keys: string[]) => {
+                    for (const key of keys) {
+                        const found = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
+                        if (found && row[found]) return row[found];
+                    }
+                    return '';
+                };
+
                 for (const row of jsonData as any[]) {
-                    const code = row['Код'] || row['code'] || '';
-                    const name = row['Название'] || row['name'] || '';
+                    const code = getVal(row, 'код', 'code');
+                    const name = getVal(row, 'название', 'name');
                     if (!code || !name) continue;
 
                     // Find district and manager by name
+                    const districtName = getVal(row, 'район', 'district');
+                    const managerName = getVal(row, 'менеджер', 'manager');
+
                     const district = districts.find(d =>
-                        d.name.toLowerCase() === (row['Район'] || row['district'] || '').toLowerCase()
+                        d.name.toLowerCase() === districtName.toLowerCase()
                     );
                     const manager = managers.find(m =>
-                        m.name.toLowerCase() === (row['Менеджер'] || row['manager'] || '').toLowerCase()
+                        m.name.toLowerCase() === managerName.toLowerCase()
                     );
 
                     try {
                         await axios.post(`${API_URL}/api/customers`, {
                             code,
                             name,
-                            legalName: row['Юр. Название'] || row['legalName'] || '',
-                            districtId: district?.id || null,
-                            managerId: manager?.id || null
+                            legalName: getVal(row, 'юр. название', 'legalname', 'юр название'),
+                            districtId: district?.code || null,
+                            managerId: manager?.code || null
                         }, { headers: { Authorization: `Bearer ${token}` } });
                         imported++;
                     } catch (err) {
