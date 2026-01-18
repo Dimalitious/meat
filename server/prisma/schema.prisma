@@ -91,6 +91,7 @@ model SupplierProduct {
 
 model Order {
   id                Int                @id @default(autoincrement())
+  idn               String?            // Сквозной идентификатор из Сводки
   date              DateTime           @default(now())
   status            String             @default("new")
   paymentType       String?
@@ -155,6 +156,7 @@ model StockTransaction {
 // Журнал сводных заказов (Summary Orders Journal)
 model SummaryOrderJournal {
   id                  Int       @id @default(autoincrement())
+  idn                 String    @unique @default(uuid()) // Сквозной идентификатор
   shipDate            DateTime  // Дата отгрузки
   paymentType         String?   // Тип оплаты (cash/terminal/bank)
   customerId          Int?      // Ссылка на клиента
@@ -172,7 +174,7 @@ model SummaryOrderJournal {
   weightToDistribute  Float?    @default(0.0)  // Вес к распределению
   managerId           String?   // Ссылка на менеджера
   managerName         String?   // Менеджер ответственный (автозаполнение)
-  status              String    @default("draft") // draft, forming, synced
+  status              String    @default("draft") // draft, forming, synced, rework
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   customer            Customer? @relation(fields: [customerId], references: [id])

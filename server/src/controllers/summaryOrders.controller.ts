@@ -262,3 +262,25 @@ export const syncToOrders = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to sync to orders' });
     }
 };
+
+// Send to rework - mark summary orders with given IDN as needing rework
+export const sendToRework = async (req: Request, res: Response) => {
+    try {
+        const { idn } = req.body;
+
+        if (!idn) {
+            return res.status(400).json({ error: 'IDN is required' });
+        }
+
+        // Find all summary orders with this IDN and mark as rework
+        const updated = await prisma.summaryOrderJournal.updateMany({
+            where: { idn },
+            data: { status: 'rework' }
+        });
+
+        res.json({ message: 'Sent to rework', count: updated.count });
+    } catch (error) {
+        console.error('Send to rework error:', error);
+        res.status(500).json({ error: 'Failed to send to rework' });
+    }
+};

@@ -14,6 +14,7 @@ import {
 
 interface Order {
     id: number;
+    idn: string | null;
     date: string;
     customer: { name: string };
     totalAmount: number;
@@ -71,6 +72,34 @@ const OrdersPage = () => {
         }
     };
 
+    // Отправить на доработку - вернуть в Сводку по IDN
+    const sendToRework = async (order: Order) => {
+        if (!order.idn) {
+            alert('У заказа нет связи со сводкой');
+            return;
+        }
+        if (!confirm('Отправить заказ на доработку? Он вернётся в сводку заказов.')) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            // Обновить статус заказа
+            await axios.patch(`${API_URL}/api/orders/${order.id}`,
+                { status: 'rework' },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            // Обновить статус сводки по IDN
+            await axios.post(`${API_URL}/api/summary-orders/rework`,
+                { idn: order.idn },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            alert('Заказ отправлен на доработку');
+            fetchOrders();
+        } catch (err) {
+            console.error(err);
+            alert('Ошибка при отправке на доработку');
+        }
+    };
+
     if (loading) return <div className="p-8 text-center text-slate-500">Загрузка...</div>;
 
     return (
@@ -90,6 +119,7 @@ const OrdersPage = () => {
                         <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
                             <TableHead className="w-[80px]">№</TableHead>
                             <TableHead>Дата</TableHead>
+                            <TableHead>№ Сводки</TableHead>
                             <TableHead>Клиент</TableHead>
                             <TableHead>Сумма</TableHead>
                             <TableHead>Статус</TableHead>
@@ -99,7 +129,7 @@ const OrdersPage = () => {
                     <TableBody>
                         {orders.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={6} className="h-24 text-center text-slate-500">
+                                <TableCell colSpan={7} className="h-24 text-center text-slate-500">
                                     Нет заказов
                                 </TableCell>
                             </TableRow>
@@ -108,16 +138,21 @@ const OrdersPage = () => {
                                 <TableRow key={o.id}>
                                     <TableCell className="font-medium">#{o.id}</TableCell>
                                     <TableCell>{new Date(o.date).toLocaleDateString('ru-RU')}</TableCell>
+                                    <TableCell className="text-gray-500 font-mono text-xs">
+                                        {o.idn ? o.idn.slice(0, 8) : '-'}
+                                    </TableCell>
                                     <TableCell className="font-medium text-slate-700">{o.customer?.name}</TableCell>
                                     <TableCell>{Number(o.totalAmount).toLocaleString('ru-RU')} ₽</TableCell>
                                     <TableCell>
                                         <span className={`px-2.5 py-0.5 inline-flex text-xs font-medium rounded-full ${o.status === 'new' ? 'bg-yellow-100 text-yellow-800' :
                                             o.status === 'processing' ? 'bg-primary-100 text-primary-800' :
-                                                'bg-emerald-100 text-emerald-800'
+                                                o.status === 'rework' ? 'bg-orange-100 text-orange-800' :
+                                                    'bg-emerald-100 text-emerald-800'
                                             }`}>
                                             {o.status === 'new' ? 'Новый' :
                                                 o.status === 'processing' ? 'В обработке' :
-                                                    o.status === 'delivered' ? 'Доставлен' : o.status}
+                                                    o.status === 'rework' ? 'На доработке' :
+                                                        o.status === 'delivered' ? 'Доставлен' : o.status}
                                         </span>
                                     </TableCell>
                                     <TableCell className="text-right space-x-2">
@@ -148,6 +183,16 @@ const OrdersPage = () => {
                                         >
                                             Удалить
                                         </Button>
+                                        {o.idn && o.status !== 'rework' && (
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => sendToRework(o)}
+                                                className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                                            >
+                                                На доработку
+                                            </Button>
+                                        )}
                                     </TableCell>
                                 </TableRow>
                             ))

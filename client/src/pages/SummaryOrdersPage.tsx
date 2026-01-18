@@ -386,6 +386,7 @@ export default function SummaryOrdersPage() {
                                 />
                             </th>
                             <th className="border px-2 py-2 text-left w-24">Дата</th>
+                            <th className="border px-2 py-2 text-left w-28">№ Сводки</th>
                             <th className="border px-2 py-2 text-left w-20">Оплата</th>
                             <th className="border px-2 py-2 text-left w-36">Клиент</th>
                             <th className="border px-2 py-2 text-left">Товар</th>
@@ -423,6 +424,9 @@ export default function SummaryOrdersPage() {
                                     </td>
                                     <td className="border px-2 py-1 text-gray-600 text-xs">
                                         {new Date(entry.shipDate).toLocaleDateString('ru-RU')}
+                                    </td>
+                                    <td className="border px-2 py-1 text-gray-500 text-xs font-mono">
+                                        {(entry as any).idn ? (entry as any).idn.slice(0, 8) : '-'}
                                     </td>
                                     <td className="border px-1 py-1">
                                         <select
@@ -528,7 +532,7 @@ export default function SummaryOrdersPage() {
                                                 onClick={() => processEntry(entry.id)}
                                                 className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600"
                                             >
-                                                Обработать
+                                                Начать сборку
                                             </button>
                                         )}
                                     </td>

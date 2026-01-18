@@ -5,6 +5,7 @@ import { Check, Edit2, Search } from 'lucide-react';
 
 interface AssemblyItem {
     id: number;
+    idn: string;
     productId: number;
     productName: string;
     category: string;
@@ -13,6 +14,7 @@ interface AssemblyItem {
     confirmed: boolean;
     customerId: number;
     customerName: string;
+    price: number;
 }
 
 interface Customer {
@@ -36,6 +38,7 @@ export default function AssemblyOrdersPage() {
     const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
     const [searchCustomer, setSearchCustomer] = useState('');
     const [loading, setLoading] = useState(true);
+    const [currentIdn, setCurrentIdn] = useState<string>('');
 
     useEffect(() => {
         loadAssemblyData();
@@ -67,6 +70,7 @@ export default function AssemblyOrdersPage() {
 
                 customerMap[entry.customerId].items.push({
                     id: entry.id,
+                    idn: entry.idn || '',
                     productId: entry.productId,
                     productName: entry.productFullName,
                     category: entry.category || '',
@@ -74,12 +78,18 @@ export default function AssemblyOrdersPage() {
                     loadedQty: entry.shippedQty || 0,
                     confirmed: entry.status === 'synced',
                     customerId: entry.customerId,
-                    customerName: entry.customerName
+                    customerName: entry.customerName,
+                    price: Number(entry.price) || 0
                 });
             }
 
             const customerList = Object.values(customerMap);
             setCustomers(customerList);
+
+            // Set current IDN from first entry
+            if (formingEntries.length > 0 && formingEntries[0].idn) {
+                setCurrentIdn(formingEntries[0].idn);
+            }
 
             if (customerList.length > 0 && !selectedCustomerId) {
                 setSelectedCustomerId(customerList[0].id);
@@ -214,9 +224,16 @@ export default function AssemblyOrdersPage() {
                     </div>
                 ) : (
                     <>
-                        <h2 className="text-xl font-bold mb-4">
-                            {selectedCustomer.name}
-                        </h2>
+                        <div className="mb-4">
+                            {currentIdn && (
+                                <p className="text-sm text-gray-500 mb-1">
+                                    № Сводки: <span className="font-mono font-medium">{currentIdn.slice(0, 8)}</span>
+                                </p>
+                            )}
+                            <h2 className="text-xl font-bold">
+                                {selectedCustomer.name}
+                            </h2>
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {selectedCustomer.items.map(item => (
                                 <div

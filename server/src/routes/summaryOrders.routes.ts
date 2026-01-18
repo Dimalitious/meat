@@ -10,5 +10,6 @@ router.post('/', summaryOrders.createSummaryOrder);
 router.put('/:id', summaryOrders.updateSummaryOrder);
 router.delete('/:id', summaryOrders.deleteSummaryOrder);
 router.post('/sync', summaryOrders.syncToOrders);
+router.post('/rework', summaryOrders.sendToRework);
 
 export default router;
