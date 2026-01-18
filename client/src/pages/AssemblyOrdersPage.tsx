@@ -118,6 +118,7 @@ export default function AssemblyOrdersPage() {
     const confirmItem = async (itemId: number) => {
         try {
             const token = localStorage.getItem('token');
+            console.log('[CLIENT] confirmItem called for itemId:', itemId);
 
             // Find the item
             let targetItem: AssemblyItem | null = null;
@@ -125,18 +126,26 @@ export default function AssemblyOrdersPage() {
                 const item = c.items.find(i => i.id === itemId);
                 if (item) { targetItem = item; break; }
             }
-            if (!targetItem) return;
+            if (!targetItem) {
+                console.log('[CLIENT] Target item not found!');
+                return;
+            }
+            console.log('[CLIENT] Found item:', targetItem);
 
             // Update summary order to synced and update shippedQty
+            console.log('[CLIENT] Calling PUT to update status...');
             await axios.put(`${API_URL}/api/summary-orders/${itemId}`, {
                 shippedQty: targetItem.loadedQty,
                 status: 'synced'
             }, { headers: { Authorization: `Bearer ${token}` } });
+            console.log('[CLIENT] PUT completed');
 
             // Sync to orders with IDN
-            await axios.post(`${API_URL}/api/summary-orders/sync`, {
+            console.log('[CLIENT] Calling sync API...');
+            const syncRes = await axios.post(`${API_URL}/api/summary-orders/sync`, {
                 entryIds: [itemId]
             }, { headers: { Authorization: `Bearer ${token}` } });
+            console.log('[CLIENT] Sync response:', syncRes.data);
 
             // Update local state - mark as confirmed but keep visible
             setCustomers(customers.map(c => ({

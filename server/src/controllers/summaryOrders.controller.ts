@@ -150,6 +150,7 @@ export const deleteSummaryOrder = async (req: Request, res: Response) => {
 export const syncToOrders = async (req: Request, res: Response) => {
     try {
         const { entryIds } = req.body;
+        console.log('[SYNC] Called with entryIds:', entryIds);
 
         // Get entries to sync
         const entries = await prisma.summaryOrderJournal.findMany({
@@ -159,8 +160,20 @@ export const syncToOrders = async (req: Request, res: Response) => {
             include: { customer: true, product: true }
         });
 
+        console.log('[SYNC] Found entries:', entries.length);
+        if (entries.length > 0) {
+            console.log('[SYNC] First entry:', JSON.stringify(entries[0], null, 2));
+        }
+
         if (entries.length === 0) {
-            return res.json({ message: 'No entries to sync', synced: 0 });
+            return res.json({
+                message: 'DEBUG: No entries found for sync',
+                synced: 0,
+                debug: {
+                    receivedIds: entryIds,
+                    parsedIds: entryIds.map((id: number) => Number(id))
+                }
+            });
         }
 
         const results = [];

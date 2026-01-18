@@ -206,8 +206,8 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                     </div>
                 </header>
 
-                <div className="p-4 lg:p-8 flex-1 overflow-auto">
-                    <div className="max-w-7xl mx-auto">
+                <div className="p-4 lg:p-6 flex-1 overflow-auto">
+                    <div className="w-full">
                         {children}
                     </div>
                 </div>
