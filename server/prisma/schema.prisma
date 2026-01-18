@@ -156,7 +156,7 @@ model StockTransaction {
 // Журнал сводных заказов (Summary Orders Journal)
 model SummaryOrderJournal {
   id                  Int       @id @default(autoincrement())
-  idn                 String    @unique @default(uuid()) // Сквозной идентификатор
+  idn                 String             // Сквозной идентификатор (одинаковый для одной даты)
   shipDate            DateTime  // Дата отгрузки
   paymentType         String?   // Тип оплаты (cash/terminal/bank)
   customerId          Int?      // Ссылка на клиента

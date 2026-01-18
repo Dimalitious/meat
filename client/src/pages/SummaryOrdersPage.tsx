@@ -426,7 +426,7 @@ export default function SummaryOrdersPage() {
                                         {new Date(entry.shipDate).toLocaleDateString('ru-RU')}
                                     </td>
                                     <td className="border px-2 py-1 text-gray-500 text-xs font-mono">
-                                        {(entry as any).idn ? (entry as any).idn.slice(0, 8) : '-'}
+                                        {(entry as any).idn || '-'}
                                     </td>
                                     <td className="border px-1 py-1">
                                         <select

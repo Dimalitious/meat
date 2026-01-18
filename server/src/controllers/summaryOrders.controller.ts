@@ -56,9 +56,17 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
 
         const priceNum = Number(price) || 0;
         const shippedNum = Number(shippedQty) || 0;
+        const dateObj = new Date(shipDate);
+
+        // Generate IDN based on date: format DDMMYYYY (same for all records on same day)
+        const day = String(dateObj.getDate()).padStart(2, '0');
+        const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const year = dateObj.getFullYear();
+        const idn = `${day}${month}${year}`;
 
         const entry = await prisma.summaryOrderJournal.create({
             data: {
+                idn,
                 shipDate: new Date(shipDate),
                 paymentType,
                 customerId: customerId ? Number(customerId) : null,
@@ -87,6 +95,7 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
         res.status(400).json({ error: 'Failed to create summary order', details: error.message });
     }
 };
+
 
 // Update summary order entry
 export const updateSummaryOrder = async (req: Request, res: Response) => {

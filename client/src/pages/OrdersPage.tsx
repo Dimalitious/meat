@@ -139,7 +139,7 @@ const OrdersPage = () => {
                                     <TableCell className="font-medium">#{o.id}</TableCell>
                                     <TableCell>{new Date(o.date).toLocaleDateString('ru-RU')}</TableCell>
                                     <TableCell className="text-gray-500 font-mono text-xs">
-                                        {o.idn ? o.idn.slice(0, 8) : '-'}
+                                        {o.idn || '-'}
                                     </TableCell>
                                     <TableCell className="font-medium text-slate-700">{o.customer?.name}</TableCell>
                                     <TableCell>{Number(o.totalAmount).toLocaleString('ru-RU')} ₽</TableCell>

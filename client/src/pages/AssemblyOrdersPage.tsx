@@ -227,7 +227,7 @@ export default function AssemblyOrdersPage() {
                         <div className="mb-4">
                             {currentIdn && (
                                 <p className="text-sm text-gray-500 mb-1">
-                                    № Сводки: <span className="font-mono font-medium">{currentIdn.slice(0, 8)}</span>
+                                    № Сводки: <span className="font-mono font-medium">{currentIdn}</span>
                                 </p>
                             )}
                             <h2 className="text-xl font-bold">
