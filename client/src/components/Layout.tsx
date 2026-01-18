@@ -40,6 +40,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={20} /> },
         { label: 'Справочники', path: '/dicts', icon: <BookOpen size={20} /> },
         { label: 'Сборка', path: '/assembly', icon: <Package size={20} /> },
+        { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
     ];

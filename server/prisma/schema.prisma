@@ -48,10 +48,11 @@ model Product {
   lossNorm          Float              @default(0.0)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
-  orderItems        OrderItem[]
-  stock             Stock?
-  stockTransactions StockTransaction[]
-  suppliers         SupplierProduct[]
+  orderItems            OrderItem[]
+  stock                 Stock?
+  stockTransactions     StockTransaction[]
+  suppliers             SupplierProduct[]
+  summaryJournalEntries SummaryOrderJournal[]
 }
 
 model Customer {
@@ -63,9 +64,10 @@ model Customer {
   managerId  String?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
-  district   District? @relation(fields: [districtId], references: [code])
-  manager    Manager?  @relation(fields: [managerId], references: [code])
-  orders     Order[]
+  district              District? @relation(fields: [districtId], references: [code])
+  manager               Manager?  @relation(fields: [managerId], references: [code])
+  orders                Order[]
+  summaryJournalEntries SummaryOrderJournal[]
 }
 
 model Supplier {
@@ -148,4 +150,31 @@ model StockTransaction {
   createdAt DateTime @default(now())
   order     Order?   @relation(fields: [orderId], references: [id])
   product   Product  @relation(fields: [productId], references: [id])
+}
+
+// Журнал сводных заказов (Summary Orders Journal)
+model SummaryOrderJournal {
+  id                  Int       @id @default(autoincrement())
+  shipDate            DateTime  // Дата отгрузки
+  paymentType         String?   // Тип оплаты (cash/terminal/bank)
+  customerId          Int?      // Ссылка на клиента
+  customerName        String    // Название клиента
+  productId           Int?      // Ссылка на товар
+  productFullName     String    // Полное название товара
+  category            String?   // КП Категория
+  shortNameMorning    String?   // КП короткое название для утреннего отгрузки
+  priceType           String?   // Тип цены
+  price               Decimal   @default(0.0)  // Цена продажи
+  shippedQty          Float     @default(0.0)  // Отгружено по факту
+  orderQty            Float     @default(0.0)  // Заказ (кол-во)
+  sumWithRevaluation  Decimal?  @default(0.0)  // Сумма с переоценкой = цена * shippedQty
+  distributionCoef    Float?    @default(0.0)  // Коэффициент распределения %
+  weightToDistribute  Float?    @default(0.0)  // Вес к распределению
+  managerId           String?   // Ссылка на менеджера
+  managerName         String?   // Менеджер ответственный (автозаполнение)
+  status              String    @default("draft") // draft, forming, synced
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  customer            Customer? @relation(fields: [customerId], references: [id])
+  product             Product?  @relation(fields: [productId], references: [id])
 }
