@@ -267,29 +267,24 @@ export default function SummaryOrdersPage() {
         }
     };
 
-    // Process entry = mark as forming and navigate to assembly
+    // Process entry = mark as forming (собирается)
     const processEntry = async (id: number) => {
         const entry = entries.find(e => e.id === id);
         if (!entry) return;
 
-        if (entry.status === 'forming') {
-            // Already forming, unmark
-            await updateEntry(id, { status: 'draft' });
-        } else {
-            // Mark as forming and navigate to assembly
-            try {
-                const token = localStorage.getItem('token');
+        try {
+            const token = localStorage.getItem('token');
+            await axios.put(`${API_URL}/api/summary-orders/${id}`, { status: 'forming' }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
 
-                await axios.put(`${API_URL}/api/summary-orders/${id}`, { status: 'forming' }, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-
-                // Navigate to assembly orders page
-                navigate('/assembly-orders');
-            } catch (err) {
-                console.error('Process error:', err);
-                alert('Ошибка обработки');
-            }
+            // Update local state
+            setEntries(entries.map(e =>
+                e.id === id ? { ...e, status: 'forming' } : e
+            ));
+        } catch (err) {
+            console.error('Process error:', err);
+            alert('Ошибка обработки');
         }
     };
 
@@ -526,6 +521,10 @@ export default function SummaryOrdersPage() {
                                         {entry.status === 'synced' ? (
                                             <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">
                                                 ✓ В заказах
+                                            </span>
+                                        ) : entry.status === 'forming' ? (
+                                            <span className="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">
+                                                🔄 Собирается
                                             </span>
                                         ) : (
                                             <button

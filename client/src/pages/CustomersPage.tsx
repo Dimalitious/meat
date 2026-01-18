@@ -185,15 +185,21 @@ const CustomersPage = () => {
                 // Helper function to get value case-insensitively
                 const getVal = (row: any, ...keys: string[]) => {
                     for (const key of keys) {
-                        const found = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
-                        if (found && row[found]) return row[found];
+                        const found = Object.keys(row).find(k => k.toLowerCase().trim() === key.toLowerCase().trim());
+                        if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') {
+                            return String(row[found]);
+                        }
                     }
                     return '';
                 };
 
+                console.log('Excel data:', jsonData);
+                console.log('First row keys:', jsonData.length > 0 ? Object.keys(jsonData[0]) : 'no data');
+
                 for (const row of jsonData as any[]) {
                     const code = getVal(row, 'код', 'code');
                     const name = getVal(row, 'название', 'name');
+                    console.log('Row:', { code, name, row });
                     if (!code || !name) continue;
 
                     // Find district and manager by name
