@@ -76,14 +76,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
     ];
 
-    const getAllPaths = (items: NavItem[]): string[] => {
-        return items.flatMap(item =>
-            item.children ? getAllPaths(item.children) : (item.path ? [item.path] : [])
-        );
-    };
-
-    const allPaths = getAllPaths(navItems);
-
     const renderNavItem = (item: NavItem, depth = 0) => {
         if (item.children) {
             const isExpanded = expandedFolders.includes(item.label);
