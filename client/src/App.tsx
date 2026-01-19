@@ -12,6 +12,7 @@ import OrdersPage from './pages/OrdersPage';
 import OrderFormPage from './pages/OrderFormPage';
 import OrderViewPage from './pages/OrderViewPage';
 import OrderEditPage from './pages/OrderEditPage';
+import OrderPrintPage from './pages/OrderPrintPage';
 import DictsPage from './pages/DictsPage';
 import { ImportPage } from './pages/ImportPage';
 import DashboardPage from './pages/DashboardPage';
@@ -22,6 +23,15 @@ import AssemblyOrdersPage from './pages/AssemblyOrdersPage';
 import SummaryOrdersPage from './pages/SummaryOrdersPage';
 import SummaryJournalPage from './pages/SummaryJournalPage';
 import AssemblyJournalPage from './pages/AssemblyJournalPage';
+import ExpeditionPage from './pages/ExpeditionPage';
+import ExpeditionInvoicePage from './pages/ExpeditionInvoicePage';
+import ProductionPage from './pages/ProductionPage';
+import ProductionJournalPage from './pages/ProductionJournalPage';
+import ProductionStaffPage from './pages/ProductionStaffPage';
+import PurchasePricePage from './pages/PurchasePricePage';
+import PurchasePriceJournalPage from './pages/PurchasePriceJournalPage';
+import SalesPricePage from './pages/SalesPricePage';
+import SalesPriceJournalPage from './pages/SalesPriceJournalPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -72,6 +82,7 @@ function App() {
           <Route path="/orders/new" element={<ProtectedRoute><OrderFormPage /></ProtectedRoute>} />
           <Route path="/orders/:id" element={<ProtectedRoute><OrderViewPage /></ProtectedRoute>} />
           <Route path="/orders/:id/edit" element={<ProtectedRoute><OrderEditPage /></ProtectedRoute>} />
+          <Route path="/orders/:id/print" element={<ProtectedRoute><OrderPrintPage /></ProtectedRoute>} />
           <Route path="/svod" element={<ProtectedRoute><SvodPage /></ProtectedRoute>} />
           <Route path="/shipments" element={<ProtectedRoute><ShipmentsPage /></ProtectedRoute>} />
           <Route path="/expeditors" element={<ProtectedRoute><ExpeditorsPage /></ProtectedRoute>} />
@@ -84,6 +95,18 @@ function App() {
           <Route path="/assembly-orders" element={<ProtectedRoute><AssemblyOrdersPage /></ProtectedRoute>} />
           <Route path="/journals/summary" element={<ProtectedRoute><SummaryJournalPage /></ProtectedRoute>} />
           <Route path="/journals/assembly" element={<ProtectedRoute><AssemblyJournalPage /></ProtectedRoute>} />
+          {/* Expedition routes */}
+          <Route path="/expedition" element={<ProtectedRoute><ExpeditionPage /></ProtectedRoute>} />
+          <Route path="/expedition/:id/invoice" element={<ProtectedRoute><ExpeditionInvoicePage /></ProtectedRoute>} />
+          {/* Production routes */}
+          <Route path="/production" element={<ProtectedRoute><ProductionPage /></ProtectedRoute>} />
+          <Route path="/production/staff" element={<ProtectedRoute><ProductionStaffPage /></ProtectedRoute>} />
+          <Route path="/journals/production" element={<ProtectedRoute><ProductionJournalPage /></ProtectedRoute>} />
+          {/* Price routes */}
+          <Route path="/prices/purchase" element={<ProtectedRoute><PurchasePricePage /></ProtectedRoute>} />
+          <Route path="/prices/sales" element={<ProtectedRoute><SalesPricePage /></ProtectedRoute>} />
+          <Route path="/journals/purchase-prices" element={<ProtectedRoute><PurchasePriceJournalPage /></ProtectedRoute>} />
+          <Route path="/journals/sales-prices" element={<ProtectedRoute><SalesPriceJournalPage /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>
@@ -91,3 +114,4 @@ function App() {
 }
 
 export default App;
+

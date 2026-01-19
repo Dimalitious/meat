@@ -17,12 +17,9 @@ import { Trash2, Plus, X, Save, Settings } from 'lucide-react';
 interface Product {
     id: number;
     code: string;
-    name: string;
-    altName?: string;
-    shortNameFsa?: string;
-    shortNamePl?: string;
-    shortNameMorning?: string;
-    priceMorning?: number;
+    name: string;           // Полное название
+    altName?: string;       // Альтернативное название
+    priceListName?: string; // Название прайс-листа (было shortNameMorning)
     category?: string;
     status: string;
     coefficient?: number;
@@ -44,10 +41,7 @@ const ProductsPage = () => {
         code: '',
         name: '',
         altName: '',
-        shortNameFsa: '',
-        shortNamePl: '',
-        shortNameMorning: '',
-        priceMorning: 0,
+        priceListName: '',
         category: '',
         status: 'active',
         coefficient: 1.0,
@@ -85,10 +79,7 @@ const ProductsPage = () => {
             code: '',
             name: '',
             altName: '',
-            shortNameFsa: '',
-            shortNamePl: '',
-            shortNameMorning: '',
-            priceMorning: 0,
+            priceListName: '',
             category: '',
             status: 'active',
             coefficient: 1.0,
@@ -153,10 +144,8 @@ const ProductsPage = () => {
         e.preventDefault();
         try {
             const token = localStorage.getItem('token');
-            // Ensure numeric values are numbers
             const payload = {
                 ...formData,
-                priceMorning: Number(formData.priceMorning),
                 coefficient: Number(formData.coefficient),
                 lossNorm: Number(formData.lossNorm)
             };
@@ -206,18 +195,15 @@ const ProductsPage = () => {
 
                 for (const row of jsonData as any[]) {
                     const code = getVal(row, 'код', 'code');
-                    const name = getVal(row, 'название', 'name');
+                    const name = getVal(row, 'название', 'полное название', 'name');
                     if (!code || !name) continue;
 
                     try {
                         await axios.post(`${API_URL}/api/products`, {
                             code,
                             name,
-                            altName: getVal(row, 'альт. название', 'altname', 'альт название'),
-                            shortNameFsa: getVal(row, 'фса', 'shortnamefsa'),
-                            shortNamePl: getVal(row, 'пл', 'shortnamepl'),
-                            shortNameMorning: getVal(row, 'утро', 'shortnamemorning'),
-                            priceMorning: Number(getVal(row, 'прайс утро', 'pricemorning', 'цена') || 0),
+                            altName: getVal(row, 'альт. название', 'альтернативное название', 'altname'),
+                            priceListName: getVal(row, 'название прайс-листа', 'прайс-лист', 'прайс', 'pricelistname'),
                             category: getVal(row, 'категория', 'category'),
                             status: getVal(row, 'статус', 'status') || 'active',
                             coefficient: Number(getVal(row, 'коэфф.', 'коэфф', 'coefficient') || 1),
@@ -291,12 +277,9 @@ const ProductsPage = () => {
                                     />
                                 </TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Код</TableHead>
-                                <TableHead className="text-slate-200 font-semibold">Название</TableHead>
-                                <TableHead className="text-slate-400 font-normal">Альт.</TableHead>
-                                <TableHead className="text-slate-400 font-normal">ФСА</TableHead>
-                                <TableHead className="text-slate-400 font-normal">ПЛ</TableHead>
-                                <TableHead className="text-slate-400 font-normal">Утро</TableHead>
-                                <TableHead className="text-slate-200 font-semibold">Прайс Утро</TableHead>
+                                <TableHead className="text-slate-200 font-semibold">Полное название</TableHead>
+                                <TableHead className="text-slate-400 font-normal">Альт. название</TableHead>
+                                <TableHead className="text-slate-400 font-normal">Название прайс-листа</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Категория</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Статус</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Коэфф.</TableHead>
@@ -322,7 +305,7 @@ const ProductsPage = () => {
                                         onChange={e => setFilterName(e.target.value)}
                                     />
                                 </TableHead>
-                                <TableHead colSpan={5}></TableHead>
+                                <TableHead colSpan={2}></TableHead>
                                 <TableHead className="p-2">
                                     <input
                                         className="w-full bg-slate-700 border-none text-white text-xs rounded px-2 py-1 placeholder-slate-400 focus:ring-1 focus:ring-blue-500 outline-none"
@@ -337,7 +320,7 @@ const ProductsPage = () => {
                         <TableBody>
                             {filteredProducts.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={12} className="h-24 text-center text-slate-500">
+                                    <TableCell colSpan={10} className="h-24 text-center text-slate-500">
                                         Нет данных
                                     </TableCell>
                                 </TableRow>
@@ -355,13 +338,10 @@ const ProductsPage = () => {
                                         <TableCell className="font-medium text-slate-700">{p.code}</TableCell>
                                         <TableCell className="font-medium text-slate-900">{p.name}</TableCell>
                                         <TableCell className="text-slate-500 text-xs">{p.altName || '-'}</TableCell>
-                                        <TableCell className="text-slate-500 text-xs">{p.shortNameFsa || '-'}</TableCell>
-                                        <TableCell className="text-slate-500 text-xs">{p.shortNamePl || '-'}</TableCell>
-                                        <TableCell className="text-slate-500 text-xs">{p.shortNameMorning || '-'}</TableCell>
-                                        <TableCell className="font-medium">{p.priceMorning?.toLocaleString()}</TableCell>
+                                        <TableCell className="text-slate-500 text-xs">{p.priceListName || '-'}</TableCell>
                                         <TableCell>
                                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800">
-                                                {p.category}
+                                                {p.category || '-'}
                                             </span>
                                         </TableCell>
                                         <TableCell>
@@ -409,16 +389,31 @@ const ProductsPage = () => {
                                         required
                                         value={formData.code}
                                         onChange={e => setFormData({ ...formData, code: e.target.value })}
-                                        disabled={!!editingProduct} // Cannot change code on edit
+                                        disabled={!!editingProduct}
                                         className={editingProduct ? 'bg-slate-100' : ''}
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Название</label>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Полное название</label>
                                     <Input
                                         required
                                         value={formData.name}
                                         onChange={e => setFormData({ ...formData, name: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Альтернативное название</label>
+                                    <Input
+                                        value={formData.altName || ''}
+                                        onChange={e => setFormData({ ...formData, altName: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Название прайс-листа</label>
+                                    <Input
+                                        value={formData.priceListName || ''}
+                                        onChange={e => setFormData({ ...formData, priceListName: e.target.value })}
+                                        placeholder="Основной, Опт, Розница..."
                                     />
                                 </div>
                                 <div>
@@ -429,29 +424,21 @@ const ProductsPage = () => {
                                     />
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">Статус (active/inactive)</label>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Статус</label>
                                     <select
                                         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                                         value={formData.status}
                                         onChange={e => setFormData({ ...formData, status: e.target.value })}
                                     >
-                                        <option value="active">Active</option>
-                                        <option value="inactive">Inactive</option>
+                                        <option value="active">Активен</option>
+                                        <option value="inactive">Неактивен</option>
                                     </select>
                                 </div>
                             </div>
 
                             <div className="border-t border-slate-100 pt-4">
-                                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Детали</h3>
-                                <div className="grid grid-cols-3 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-600 mb-1">Цена (Утро)</label>
-                                        <Input
-                                            type="number"
-                                            value={formData.priceMorning}
-                                            onChange={e => setFormData({ ...formData, priceMorning: Number(e.target.value) })}
-                                        />
-                                    </div>
+                                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Параметры</h3>
+                                <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <label className="block text-xs font-medium text-slate-600 mb-1">Коэффициент</label>
                                         <Input
@@ -468,40 +455,6 @@ const ProductsPage = () => {
                                             step="0.1"
                                             value={formData.lossNorm}
                                             onChange={e => setFormData({ ...formData, lossNorm: Number(e.target.value) })}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="border-t border-slate-100 pt-4">
-                                <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Альтернативные названия (для парсинга)</h3>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-600 mb-1">Альт. название</label>
-                                        <Input
-                                            value={formData.altName || ''}
-                                            onChange={e => setFormData({ ...formData, altName: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-600 mb-1">Сокр. ФСА</label>
-                                        <Input
-                                            value={formData.shortNameFsa || ''}
-                                            onChange={e => setFormData({ ...formData, shortNameFsa: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-600 mb-1">Сокр. ПЛ</label>
-                                        <Input
-                                            value={formData.shortNamePl || ''}
-                                            onChange={e => setFormData({ ...formData, shortNamePl: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-medium text-slate-600 mb-1">Сокр. Утро</label>
-                                        <Input
-                                            value={formData.shortNameMorning || ''}
-                                            onChange={e => setFormData({ ...formData, shortNameMorning: e.target.value })}
                                         />
                                     </div>
                                 </div>

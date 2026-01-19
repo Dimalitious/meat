@@ -188,3 +188,204 @@ export const deleteOrder = async (req: Request, res: Response) => {
         res.status(400).json({ error: 'Failed to delete order' });
     }
 };
+
+// Get Summary data by IDN (for auto-populating Quantity in Order form)
+export const getSummaryByIdn = async (req: Request, res: Response) => {
+    try {
+        const { idn } = req.params;
+
+        // Find all summary entries with this IDN
+        const summaryEntries = await prisma.summaryOrderJournal.findMany({
+            where: { idn: String(idn) },
+            include: {
+                product: true,
+                customer: true
+            }
+        });
+
+        if (summaryEntries.length === 0) {
+            return res.status(404).json({
+                error: 'Не найдено значение в Сводке заказов по IDN = ' + idn,
+                idn,
+                found: false
+            });
+        }
+
+        // Aggregate: sum of orderQty per productId
+        const aggregated: Record<number, {
+            productId: number;
+            productName: string;
+            totalOrderQty: number;
+            price: number;
+            category: string | null;
+        }> = {};
+
+        for (const entry of summaryEntries) {
+            if (entry.productId) {
+                if (!aggregated[entry.productId]) {
+                    aggregated[entry.productId] = {
+                        productId: entry.productId,
+                        productName: entry.productFullName,
+                        totalOrderQty: 0,
+                        price: Number(entry.price),
+                        category: entry.category
+                    };
+                }
+                aggregated[entry.productId].totalOrderQty += entry.orderQty;
+            }
+        }
+
+        const items = Object.values(aggregated);
+        const totalQty = items.reduce((sum, item) => sum + item.totalOrderQty, 0);
+
+        res.json({
+            idn,
+            found: true,
+            entriesCount: summaryEntries.length,
+            totalQuantity: totalQty,
+            items,
+            customer: summaryEntries[0].customer,
+            customerName: summaryEntries[0].customerName,
+            paymentType: summaryEntries[0].paymentType,
+            shipDate: summaryEntries[0].shipDate
+        });
+    } catch (error) {
+        console.error('getSummaryByIdn error:', error);
+        res.status(500).json({ error: 'Failed to fetch summary by IDN' });
+    }
+};
+
+// Assign Expeditor to Order
+export const assignExpeditor = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { expeditorId, deliveryAddress } = req.body;
+
+        const order = await prisma.order.update({
+            where: { id: Number(id) },
+            data: {
+                expeditorId: expeditorId ? Number(expeditorId) : null,
+                deliveryAddress: deliveryAddress || undefined,
+                assignedAt: expeditorId ? new Date() : null,
+                status: expeditorId ? 'assigned' : 'new',
+                deliveryStatus: expeditorId ? 'pending' : 'pending'
+            },
+            include: {
+                customer: true,
+                expeditor: true,
+                items: { include: { product: true } }
+            }
+        });
+
+        res.json(order);
+    } catch (error) {
+        console.error('assignExpeditor error:', error);
+        res.status(400).json({ error: 'Failed to assign expeditor' });
+    }
+};
+
+// Get Orders assigned to specific expeditor (for Expedition view)
+export const getExpeditorOrders = async (req: Request, res: Response) => {
+    try {
+        const { expeditorId } = req.params;
+        const { status } = req.query;
+
+        let where: any = {
+            expeditorId: Number(expeditorId)
+        };
+
+        // Filter by delivery status if provided
+        if (status) {
+            where.deliveryStatus = String(status);
+        } else {
+            // By default show only pending and in_delivery
+            where.deliveryStatus = { in: ['pending', 'in_delivery'] };
+        }
+
+        const orders = await prisma.order.findMany({
+            where,
+            include: {
+                customer: true,
+                expeditor: true,
+                items: { include: { product: true } },
+                attachments: true
+            },
+            orderBy: { assignedAt: 'desc' }
+        });
+
+        res.json(orders);
+    } catch (error) {
+        console.error('getExpeditorOrders error:', error);
+        res.status(500).json({ error: 'Failed to fetch expeditor orders' });
+    }
+};
+
+// Complete Order with signature
+export const completeOrder = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { signatureUrl, signedInvoiceUrl } = req.body;
+
+        const order = await prisma.order.update({
+            where: { id: Number(id) },
+            data: {
+                status: 'delivered',
+                deliveryStatus: 'delivered',
+                completedAt: new Date(),
+                signatureUrl: signatureUrl || undefined,
+                signedInvoiceUrl: signedInvoiceUrl || undefined
+            },
+            include: {
+                customer: true,
+                expeditor: true,
+                items: { include: { product: true } }
+            }
+        });
+
+        // Create attachment record if signature provided
+        if (signatureUrl) {
+            await prisma.orderAttachment.create({
+                data: {
+                    orderId: Number(id),
+                    type: 'signature',
+                    filename: `signature_order_${id}.png`,
+                    url: signatureUrl,
+                    mimeType: 'image/png'
+                }
+            });
+        }
+
+        if (signedInvoiceUrl) {
+            await prisma.orderAttachment.create({
+                data: {
+                    orderId: Number(id),
+                    type: 'signed_invoice',
+                    filename: `invoice_signed_order_${id}.png`,
+                    url: signedInvoiceUrl,
+                    mimeType: 'image/png'
+                }
+            });
+        }
+
+        res.json(order);
+    } catch (error) {
+        console.error('completeOrder error:', error);
+        res.status(400).json({ error: 'Failed to complete order' });
+    }
+};
+
+// Get order attachments
+export const getOrderAttachments = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+        const attachments = await prisma.orderAttachment.findMany({
+            where: { orderId: Number(id) },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(attachments);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+};

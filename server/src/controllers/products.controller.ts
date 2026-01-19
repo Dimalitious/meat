@@ -10,7 +10,7 @@ export const getProducts = async (req: Request, res: Response) => {
             where.OR = [
                 { code: { contains: String(search) } },
                 { name: { contains: String(search) } },
-                { shortNameMorning: { contains: String(search) } }
+                { priceListName: { contains: String(search) } }
             ];
         }
         if (category && category !== 'All') {

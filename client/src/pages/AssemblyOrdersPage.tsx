@@ -52,14 +52,17 @@ export default function AssemblyOrdersPage() {
             const token = localStorage.getItem('token');
 
             // Load from summary orders with status 'forming' or 'synced'
-            const res = await axios.get(`${API_URL}/api/summary-orders`, {
+            const res = await axios.get(`${API_URL}/api/summary-orders?status=forming,synced&limit=500`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
-            // Group by customer - include both forming and synced
-            const relevantEntries = res.data.filter((e: any) =>
-                e.status === 'forming' || e.status === 'synced'
-            );
+            console.log('[ASSEMBLY] API Response:', res.data);
+
+            // Handle both old format (array) and new format ({ data, pagination })
+            const allEntries = Array.isArray(res.data) ? res.data : (res.data.data || []);
+
+            // All returned entries should already be filtered by status
+            const relevantEntries = allEntries;
             const customerMap: { [key: number]: Customer } = {};
 
             for (const entry of relevantEntries) {

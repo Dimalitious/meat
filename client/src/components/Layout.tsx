@@ -19,6 +19,7 @@ import {
     ChevronDown,
     ChevronRight,
     FolderOpen,
+    DollarSign,
 } from 'lucide-react';
 
 interface NavItem {
@@ -53,14 +54,26 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
         { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} /> },
         { label: 'Заказы', path: '/orders', icon: <ShoppingCart size={20} /> },
-        { label: 'Экспедиция', path: '/shipments', icon: <Truck size={20} /> },
+        { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} /> },
+        { label: 'Производство', path: '/production', icon: <Warehouse size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
+        {
+            label: 'Прайсы',
+            icon: <DollarSign size={20} />,
+            children: [
+                { label: 'Закупочный прайс', path: '/prices/purchase', icon: <DollarSign size={18} /> },
+                { label: 'Продажный прайс', path: '/prices/sales', icon: <DollarSign size={18} /> },
+            ]
+        },
         {
             label: 'Журналы',
             icon: <FolderOpen size={20} />,
             children: [
                 { label: 'Журнал сводок', path: '/journals/summary', icon: <BookOpen size={18} /> },
                 { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
+                { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
+                { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} /> },
+                { label: 'Журнал продажных прайсов', path: '/journals/sales-prices', icon: <BookOpen size={18} /> },
             ]
         },
         {
@@ -71,6 +84,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Клиенты', path: '/customers', icon: <Users size={18} /> },
                 { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} /> },
                 { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
+                { label: 'Производственный персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
             ]
         },
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
