@@ -14,6 +14,7 @@ import {
     getSalesPriceById,
     createSalesPrice,
     saveSalesPrice,
+    hideSalesPriceLists,
     // Механизм цен
     resolveSalePrice,
     resolveAllPricesForCustomer
@@ -48,7 +49,7 @@ router.put('/purchase/:id', savePurchasePrice);          // PUT /api/prices/purc
 // ============================================
 
 // Журнал продажных прайсов
-router.get('/sales', getSalesPriceLists);                // GET /api/prices/sales?dateFrom=&dateTo=&listType=&customerId=
+router.get('/sales', getSalesPriceLists);                // GET /api/prices/sales?dateFrom=&dateTo=&listType=&customerId=&showHidden=
 
 // Текущий общий прайс
 router.get('/sales/general/current', getCurrentGeneralPrice);
@@ -60,10 +61,13 @@ router.get('/sales/customer/:customerId/current', getCurrentCustomerPrice);
 router.get('/sales/:id', getSalesPriceById);
 
 // Создать новый продажный прайс
-router.post('/sales', createSalesPrice);                 // POST /api/prices/sales { listType, customerId, title }
+router.post('/sales', createSalesPrice);                 // POST /api/prices/sales { listType, customerId, title, effectiveDate }
+
+// Скрыть выбранные прайс-листы
+router.post('/sales/hide', hideSalesPriceLists);         // POST /api/prices/sales/hide { ids: number[] }
 
 // Сохранить продажный прайс
-router.put('/sales/:id', saveSalesPrice);                // PUT /api/prices/sales/:id { title, items, makeCurrent }
+router.put('/sales/:id', saveSalesPrice);                // PUT /api/prices/sales/:id { title, items, makeCurrent, effectiveDate }
 
 // ============================================
 // МЕХАНИЗМ ПОЛУЧЕНИЯ ЦЕНЫ

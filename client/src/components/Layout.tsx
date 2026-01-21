@@ -61,8 +61,8 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             label: 'Прайсы',
             icon: <DollarSign size={20} />,
             children: [
-                { label: 'Закупочный прайс', path: '/prices/purchase', icon: <DollarSign size={18} /> },
-                { label: 'Продажный прайс', path: '/prices/sales', icon: <DollarSign size={18} /> },
+                { label: 'Закупочный прайс', path: '/purchase-price-lists', icon: <DollarSign size={18} /> },
+                { label: 'Продажный прайс', path: '/journals/sales-prices', icon: <DollarSign size={18} /> },
             ]
         },
         {
@@ -73,7 +73,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
                 { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
                 { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} /> },
-                { label: 'Журнал продажных прайсов', path: '/journals/sales-prices', icon: <BookOpen size={18} /> },
             ]
         },
         {

@@ -3,9 +3,15 @@ import { prisma } from '../db';
 
 export const getProducts = async (req: Request, res: Response) => {
     try {
-        const { search, category } = req.query;
+        const { search, category, showInactive } = req.query;
 
         let where: any = {};
+
+        // По умолчанию показываем только активные товары
+        if (showInactive !== 'true') {
+            where.status = 'active';
+        }
+
         if (search) {
             where.OR = [
                 { code: { contains: String(search) } },
@@ -64,14 +70,194 @@ export const updateProduct = async (req: Request, res: Response) => {
     }
 };
 
-export const deleteProduct = async (req: Request, res: Response) => {
+// Отключить/включить товар (переключение статуса)
+export const deactivateProduct = async (req: Request, res: Response) => {
     try {
         const { code } = req.params as { code: string };
-        await prisma.product.delete({
+
+        const product = await prisma.product.findUnique({
             where: { code }
         });
-        res.json({ message: 'Product deleted' });
+
+        if (!product) {
+            return res.status(404).json({ error: 'Товар не найден' });
+        }
+
+        // Переключить статус: active <-> inactive
+        const newStatus = product.status === 'active' ? 'inactive' : 'active';
+
+        await prisma.product.update({
+            where: { code },
+            data: { status: newStatus }
+        });
+
+        const message = newStatus === 'inactive' ? 'Товар отключён' : 'Товар активирован';
+        res.json({ message, status: newStatus });
     } catch (error) {
-        res.status(400).json({ error: 'Failed to delete product' });
+        console.error('Deactivate product error:', error);
+        res.status(400).json({ error: 'Не удалось изменить статус товара' });
+    }
+};
+
+// Upsert: создать или обновить товар по коду
+export const upsertProduct = async (req: Request, res: Response) => {
+    try {
+        const { code, name, altName, priceListName, category, status, coefficient, lossNorm } = req.body;
+
+        if (!code || !name) {
+            return res.status(400).json({ error: 'Code and name are required' });
+        }
+
+        const product = await prisma.product.upsert({
+            where: { code },
+            update: {
+                name,
+                altName: altName || null,
+                priceListName: priceListName || null,
+                category: category || null,
+                status: status || 'active',
+                coefficient: coefficient ?? 1.0,
+                lossNorm: lossNorm ?? 0.0,
+            },
+            create: {
+                code,
+                name,
+                altName: altName || null,
+                priceListName: priceListName || null,
+                category: category || null,
+                status: status || 'active',
+                coefficient: coefficient ?? 1.0,
+                lossNorm: lossNorm ?? 0.0,
+            }
+        });
+        res.json(product);
+    } catch (error) {
+        console.error('Upsert error:', error);
+        res.status(400).json({ error: 'Failed to upsert product' });
+    }
+};
+
+// Пакетный импорт товаров (batch upsert) - БЫСТРАЯ версия
+export const batchUpsertProducts = async (req: Request, res: Response) => {
+    try {
+        const { products } = req.body as {
+            products: Array<{
+                code: string;
+                name: string;
+                altName?: string;
+                priceListName?: string;
+                category?: string;
+                status?: string;
+                coefficient?: number;
+                lossNorm?: number;
+            }>
+        };
+
+        if (!products || !Array.isArray(products) || products.length === 0) {
+            return res.status(400).json({ error: 'Products array is required' });
+        }
+
+        console.log(`Starting FAST batch import for ${products.length} products...`);
+        const startTime = Date.now();
+
+        // Фильтруем валидные продукты
+        const validProducts = products.filter(p => p.code && p.name);
+        const skipped = products.length - validProducts.length;
+
+        // Получаем все существующие коды ОДНИМ запросом
+        const allCodes = validProducts.map(p => p.code);
+        const existingProducts = await prisma.product.findMany({
+            where: { code: { in: allCodes } },
+            select: { code: true }
+        });
+        const existingCodes = new Set(existingProducts.map(p => p.code));
+
+        console.log(`Found ${existingCodes.size} existing products, ${validProducts.length - existingCodes.size} new`);
+
+        // Разделяем на новые и существующие
+        const toCreate: typeof validProducts = [];
+        const toUpdate: typeof validProducts = [];
+
+        for (const p of validProducts) {
+            if (existingCodes.has(p.code)) {
+                toUpdate.push(p);
+            } else {
+                toCreate.push(p);
+            }
+        }
+
+        let imported = 0;
+        let updated = 0;
+        const errors: string[] = [];
+
+        // Создаём новые товары ПАКЕТОМ
+        if (toCreate.length > 0) {
+            console.log(`Creating ${toCreate.length} new products...`);
+            try {
+                await prisma.product.createMany({
+                    data: toCreate.map(p => ({
+                        code: p.code,
+                        name: p.name,
+                        altName: p.altName || null,
+                        priceListName: p.priceListName || null,
+                        category: p.category || null,
+                        status: p.status || 'active',
+                        coefficient: p.coefficient ?? 1.0,
+                        lossNorm: p.lossNorm ?? 0.0,
+                    })),
+                    skipDuplicates: true,
+                });
+                imported = toCreate.length;
+            } catch (err: any) {
+                console.error('CreateMany error:', err.message);
+                errors.push(`Ошибка создания: ${err.message}`);
+            }
+        }
+
+        // Обновляем существующие товары параллельно (по 20 одновременно)
+        if (toUpdate.length > 0) {
+            console.log(`Updating ${toUpdate.length} existing products...`);
+            const PARALLEL_LIMIT = 20;
+
+            for (let i = 0; i < toUpdate.length; i += PARALLEL_LIMIT) {
+                const batch = toUpdate.slice(i, i + PARALLEL_LIMIT);
+
+                await Promise.all(batch.map(async (p) => {
+                    try {
+                        await prisma.product.update({
+                            where: { code: p.code },
+                            data: {
+                                name: p.name,
+                                altName: p.altName || null,
+                                priceListName: p.priceListName || null,
+                                category: p.category || null,
+                                status: p.status || 'active',
+                                coefficient: p.coefficient ?? 1.0,
+                                lossNorm: p.lossNorm ?? 0.0,
+                            }
+                        });
+                        updated++;
+                    } catch (err: any) {
+                        errors.push(`${p.code}: ${err.message}`);
+                    }
+                }));
+            }
+        }
+
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`Batch import completed in ${duration}s: ${imported} imported, ${updated} updated, ${errors.length} errors`);
+
+        res.json({
+            success: true,
+            imported,
+            updated,
+            skipped,
+            errors: errors.slice(0, 10),
+            totalErrors: errors.length,
+            duration: `${duration}s`
+        });
+    } catch (error: any) {
+        console.error('Batch upsert error:', error);
+        res.status(400).json({ error: 'Failed to batch import products: ' + (error.message || 'Unknown error') });
     }
 };

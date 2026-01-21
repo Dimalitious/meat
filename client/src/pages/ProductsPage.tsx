@@ -12,7 +12,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Trash2, Plus, X, Save, Settings } from 'lucide-react';
+import { Plus, X, Save, Settings } from 'lucide-react';
 
 interface Product {
     id: number;
@@ -88,16 +88,22 @@ const ProductsPage = () => {
         setIsModalOpen(true);
     };
 
-    const handleDelete = async (code: string) => {
-        if (!confirm('Вы уверены, что хотите удалить этот товар?')) return;
+    // Переключить статус товара (active <-> inactive)
+    const handleToggleStatus = async (code: string, currentStatus: string) => {
+        const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+        const action = currentStatus === 'active' ? 'отключить' : 'активировать';
+        if (!confirm(`Вы уверены, что хотите ${action} этот товар?`)) return;
         try {
             const token = localStorage.getItem('token');
-            await axios.delete(`${API_URL}/api/products/${code}`, {
+            await axios.put(`${API_URL}/api/products/${code}`, { status: newStatus }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
+            alert(newStatus === 'inactive' ? 'Товар отключён' : 'Товар активирован');
+            setIsModalOpen(false);
             fetchProducts();
-        } catch (err) {
-            alert('Не удалось удалить товар');
+        } catch (err: any) {
+            const errorMessage = err.response?.data?.error || 'Не удалось изменить статус';
+            alert(errorMessage);
         }
     };
 
@@ -120,24 +126,34 @@ const ProductsPage = () => {
         }
     };
 
-    const deleteSelected = async () => {
+    // Отключить выбранные товары
+    const deactivateSelected = async () => {
         if (selectedCodes.size === 0) return;
-        if (!confirm(`Удалить ${selectedCodes.size} выбранных товаров?`)) return;
+        if (!confirm(`Отключить ${selectedCodes.size} выбранных товаров?`)) return;
 
-        try {
-            const token = localStorage.getItem('token');
-            await Promise.all(
-                Array.from(selectedCodes).map(code =>
-                    axios.delete(`${API_URL}/api/products/${code}`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    })
-                )
-            );
-            setSelectedCodes(new Set());
-            fetchProducts();
-        } catch (err) {
-            alert('Ошибка при удалении');
+        const token = localStorage.getItem('token');
+        let deactivatedCount = 0;
+        let errorCount = 0;
+
+        for (const code of Array.from(selectedCodes)) {
+            try {
+                // Находим текущий статус и меняем на inactive
+                await axios.put(`${API_URL}/api/products/${code}`, { status: 'inactive' }, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                deactivatedCount++;
+            } catch (err: any) {
+                console.error('Toggle status error for', code, ':', err.response?.data || err.message);
+                errorCount++;
+            }
         }
+
+        let message = `Отключено: ${deactivatedCount}.`;
+        if (errorCount > 0) message += ` Ошибок: ${errorCount}.`;
+
+        alert(message);
+        setSelectedCodes(new Set());
+        fetchProducts();
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -167,7 +183,7 @@ const ProductsPage = () => {
         }
     };
 
-    // Excel import
+    // Excel import - BATCH VERSION (fast)
     const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -181,45 +197,95 @@ const ProductsPage = () => {
                 const sheet = workbook.Sheets[sheetName];
                 const jsonData = XLSX.utils.sheet_to_json(sheet);
 
-                const token = localStorage.getItem('token');
-                let imported = 0;
+                if (jsonData.length === 0) {
+                    alert('Файл Excel пуст или не содержит данных');
+                    return;
+                }
+
+                // DEBUG: Show parsed headers
+                const headers = Object.keys(jsonData[0] as object);
+                console.log('Excel Headers:', headers);
+                console.log('Total rows:', jsonData.length);
 
                 // Helper function to get value case-insensitively
                 const getVal = (row: any, ...keys: string[]) => {
                     for (const key of keys) {
-                        const found = Object.keys(row).find(k => k.toLowerCase() === key.toLowerCase());
-                        if (found && row[found]) return row[found];
+                        const found = Object.keys(row).find(k => k.toLowerCase().trim() === key.toLowerCase().trim());
+                        if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') {
+                            return String(row[found]);
+                        }
                     }
                     return '';
                 };
 
-                for (const row of jsonData as any[]) {
+                // Collect all products for batch import
+                const products: Array<{
+                    code: string;
+                    name: string;
+                    altName?: string;
+                    priceListName?: string;
+                    category?: string;
+                    status?: string;
+                    coefficient?: number;
+                    lossNorm?: number;
+                }> = [];
+
+                let skipped = 0;
+
+                for (let i = 0; i < jsonData.length; i++) {
+                    const row = jsonData[i] as any;
+                    const rowNum = i + 2;
+
                     const code = getVal(row, 'код', 'code');
                     const name = getVal(row, 'название', 'полное название', 'name');
-                    if (!code || !name) continue;
 
-                    try {
-                        await axios.post(`${API_URL}/api/products`, {
-                            code,
-                            name,
-                            altName: getVal(row, 'альт. название', 'альтернативное название', 'altname'),
-                            priceListName: getVal(row, 'название прайс-листа', 'прайс-лист', 'прайс', 'pricelistname'),
-                            category: getVal(row, 'категория', 'category'),
-                            status: getVal(row, 'статус', 'status') || 'active',
-                            coefficient: Number(getVal(row, 'коэфф.', 'коэфф', 'coefficient') || 1),
-                            lossNorm: Number(getVal(row, 'потери%', 'потери', 'lossnorm') || 0)
-                        }, { headers: { Authorization: `Bearer ${token}` } });
-                        imported++;
-                    } catch (err) {
-                        console.warn('Skip duplicate:', code);
+                    if (!code || !name) {
+                        console.log(`Row ${rowNum}: missing code or name`);
+                        skipped++;
+                        continue;
                     }
+
+                    products.push({
+                        code,
+                        name,
+                        altName: getVal(row, 'альт. название', 'альтернативное название', 'altname') || undefined,
+                        priceListName: getVal(row, 'название прайс-листа', 'прайс-лист', 'прайс', 'pricelistname') || undefined,
+                        category: getVal(row, 'категория', 'category') || undefined,
+                        // Преобразуем русский статус в английский
+                        status: (() => {
+                            const s = getVal(row, 'статус', 'status').toLowerCase();
+                            if (s === 'активный' || s === 'активен' || s === 'active' || s === '') return 'active';
+                            return 'inactive';
+                        })(),
+                        coefficient: Number(getVal(row, 'коэфф.', 'коэфф', 'coefficient') || 1),
+                        lossNorm: Number(getVal(row, 'потери%', 'потери', 'lossnorm') || 0)
+                    });
                 }
 
-                alert(`Импортировано ${imported} товаров`);
+                if (products.length === 0) {
+                    alert(`Не найдено записей для импорта.\nПропущено: ${skipped}\n\nКолонки в файле: ${headers.join(', ')}\n\nУбедитесь что есть колонки "Код" и "Полное название" (или "Название")`);
+                    return;
+                }
+
+                console.log(`Sending batch import for ${products.length} products...`);
+
+                const token = localStorage.getItem('token');
+                const response = await axios.post(`${API_URL}/api/products/batch-upsert`, {
+                    products
+                }, { headers: { Authorization: `Bearer ${token}` } });
+
+                const result = response.data;
+                let message = `✅ Импорт завершён!\n\nДобавлено: ${result.imported}\nОбновлено: ${result.updated}`;
+                if (skipped > 0) message += `\nПропущено: ${skipped}`;
+                if (result.totalErrors > 0) {
+                    message += `\n\nОшибки (${result.totalErrors}):\n${result.errors.join('\n')}`;
+                }
+
+                alert(message);
                 fetchProducts();
-            } catch (err) {
+            } catch (err: any) {
                 console.error('Excel import error:', err);
-                alert('Ошибка импорта Excel');
+                alert('Ошибка импорта Excel: ' + (err.response?.data?.error || err.message));
             }
         };
         reader.readAsBinaryString(file);
@@ -253,8 +319,8 @@ const ProductsPage = () => {
                         📥 Загрузить Excel
                     </Button>
                     {selectedCodes.size > 0 && (
-                        <Button onClick={deleteSelected} variant="outline" className="flex items-center gap-2 text-red-600 border-red-300 hover:bg-red-50">
-                            <Trash2 size={16} /> Удалить ({selectedCodes.size})
+                        <Button onClick={deactivateSelected} variant="outline" className="flex items-center gap-2 text-orange-600 border-orange-300 hover:bg-orange-50">
+                            ⏸ Отключить ({selectedCodes.size})
                         </Button>
                     )}
                     <Button onClick={handleCreate} className="flex items-center gap-2">
@@ -468,10 +534,10 @@ const ProductsPage = () => {
                                 {editingProduct && (
                                     <button
                                         type="button"
-                                        onClick={() => handleDelete(editingProduct.code)}
-                                        className="ml-auto text-red-500 hover:text-red-700 text-sm font-medium flex items-center gap-1"
+                                        onClick={() => handleToggleStatus(editingProduct.code, editingProduct.status)}
+                                        className={`ml-auto text-sm font-medium flex items-center gap-1 ${editingProduct.status === 'active' ? 'text-orange-500 hover:text-orange-700' : 'text-green-500 hover:text-green-700'}`}
                                     >
-                                        <Trash2 size={16} /> Удалить
+                                        {editingProduct.status === 'active' ? '⏸ Отключить' : '▶ Активировать'}
                                     </button>
                                 )}
                             </div>

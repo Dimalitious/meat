@@ -181,20 +181,32 @@ export const savePurchasePrice = async (req: Request, res: Response) => {
 // Получить список продажных прайсов (журнал)
 export const getSalesPriceLists = async (req: Request, res: Response) => {
     try {
-        const { dateFrom, dateTo, listType, customerId } = req.query;
+        const { dateFrom, dateTo, listType, customerId, showHidden } = req.query;
 
         const where: any = {};
+
+        // Фильтрация по дате вступления в силу (effectiveDate)
         if (dateFrom || dateTo) {
-            where.createdAt = {};
-            if (dateFrom) where.createdAt.gte = new Date(dateFrom as string);
-            if (dateTo) where.createdAt.lte = new Date(dateTo as string);
+            where.effectiveDate = {};
+            if (dateFrom) where.effectiveDate.gte = new Date(dateFrom as string);
+            if (dateTo) {
+                // Устанавливаем конец дня для корректной фильтрации
+                const endDate = new Date(dateTo as string);
+                endDate.setHours(23, 59, 59, 999);
+                where.effectiveDate.lte = endDate;
+            }
         }
         if (listType) where.listType = listType as string;
         if (customerId) where.customerId = Number(customerId);
 
+        // По умолчанию скрытые прайсы не показываются
+        if (showHidden !== 'true') {
+            where.isHidden = false;
+        }
+
         const lists = await prisma.salesPriceList.findMany({
             where,
-            orderBy: { createdAt: 'desc' },
+            orderBy: { effectiveDate: 'desc' },
             include: {
                 customer: true,
                 _count: { select: { items: true } }
@@ -208,11 +220,21 @@ export const getSalesPriceLists = async (req: Request, res: Response) => {
     }
 };
 
-// Получить текущий общий прайс
+// Получить текущий общий прайс (самый актуальный по effectiveDate)
 export const getCurrentGeneralPrice = async (req: Request, res: Response) => {
     try {
+        const now = new Date();
+
         const priceList = await prisma.salesPriceList.findFirst({
-            where: { listType: 'GENERAL', isCurrent: true },
+            where: {
+                listType: 'GENERAL',
+                isHidden: false,
+                effectiveDate: { lte: now }
+            },
+            orderBy: [
+                { effectiveDate: 'desc' },
+                { createdAt: 'desc' }
+            ],
             include: {
                 items: {
                     include: { product: true },
@@ -228,13 +250,23 @@ export const getCurrentGeneralPrice = async (req: Request, res: Response) => {
     }
 };
 
-// Получить текущий прайс заказчика
+// Получить текущий прайс заказчика (самый актуальный по effectiveDate)
 export const getCurrentCustomerPrice = async (req: Request, res: Response) => {
     try {
         const customerId = Number(req.params.customerId);
+        const now = new Date();
 
         const priceList = await prisma.salesPriceList.findFirst({
-            where: { listType: 'CUSTOMER', customerId, isCurrent: true },
+            where: {
+                listType: 'CUSTOMER',
+                customerId,
+                isHidden: false,
+                effectiveDate: { lte: now }
+            },
+            orderBy: [
+                { effectiveDate: 'desc' },
+                { createdAt: 'desc' }
+            ],
             include: {
                 customer: true,
                 items: {
@@ -277,7 +309,7 @@ export const getSalesPriceById = async (req: Request, res: Response) => {
 // Создать новый продажный прайс
 export const createSalesPrice = async (req: Request, res: Response) => {
     try {
-        const { listType, customerId, title } = req.body;
+        const { listType, customerId, title, effectiveDate } = req.body;
         const user = (req as any).user?.username || 'system';
 
         // Валидация
@@ -285,12 +317,18 @@ export const createSalesPrice = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Customer ID required for CUSTOMER price list' });
         }
 
+        if (!effectiveDate) {
+            return res.status(400).json({ error: 'Effective date is required' });
+        }
+
         const priceList = await prisma.salesPriceList.create({
             data: {
                 listType,
                 customerId: listType === 'CUSTOMER' ? customerId : null,
                 title,
+                effectiveDate: new Date(effectiveDate),
                 status: 'draft',
+                isHidden: false,
                 createdBy: user,
                 updatedBy: user
             },
@@ -311,7 +349,7 @@ export const createSalesPrice = async (req: Request, res: Response) => {
 export const saveSalesPrice = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
-        const { title, items, makeCurrent } = req.body;
+        const { title, items, makeCurrent, effectiveDate } = req.body;
         const user = (req as any).user?.username || 'system';
 
         await prisma.$transaction(async (tx) => {
@@ -334,14 +372,21 @@ export const saveSalesPrice = async (req: Request, res: Response) => {
             }
 
             // Обновить шапку
+            const updateData: any = {
+                title,
+                status: 'saved',
+                isCurrent: makeCurrent || false,
+                updatedBy: user
+            };
+
+            // Если передана дата вступления в силу - обновляем
+            if (effectiveDate) {
+                updateData.effectiveDate = new Date(effectiveDate);
+            }
+
             await tx.salesPriceList.update({
                 where: { id },
-                data: {
-                    title,
-                    status: 'saved',
-                    isCurrent: makeCurrent || false,
-                    updatedBy: user
-                }
+                data: updateData
             });
 
             // Пересоздать строки
@@ -377,52 +422,118 @@ export const saveSalesPrice = async (req: Request, res: Response) => {
     }
 };
 
+// Скрыть выбранные продажные прайсы (массовое скрытие)
+export const hideSalesPriceLists = async (req: Request, res: Response) => {
+    try {
+        const { ids } = req.body;
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'No price list IDs provided' });
+        }
+
+        const result = await prisma.salesPriceList.updateMany({
+            where: { id: { in: ids.map((id: number) => Number(id)) } },
+            data: { isHidden: true }
+        });
+
+        res.json({
+            success: true,
+            hiddenCount: result.count,
+            message: `${result.count} прайс-лист(ов) скрыто`
+        });
+    } catch (error) {
+        console.error('Hide sales price lists error:', error);
+        res.status(500).json({ error: 'Failed to hide sales price lists' });
+    }
+};
+
 // ============================================
 // МЕХАНИЗМ ПОЛУЧЕНИЯ ЦЕНЫ (бизнес-логика)
 // ============================================
+
+/**
+ * Новая логика приоритетов (согласно ТЗ):
+ * 1. Если есть персональный прайс для заказчика (активный по дате) — 
+ *    общий прайс НЕ используется ВООБЩЕ, даже для отсутствующих товаров.
+ * 2. Если персонального прайса нет — применяется общий прайс.
+ * 3. Учитываются: isHidden = false, effectiveDate <= текущая дата
+ * 4. При равных условиях берётся самый свежий по effectiveDate, затем по createdAt
+ */
+
+// Получить активный прайс-лист для заказчика или общий
+const findActivePriceList = async (prisma: any, listType: 'GENERAL' | 'CUSTOMER', customerId?: number, targetDate?: Date) => {
+    const now = targetDate || new Date();
+
+    const where: any = {
+        listType,
+        isHidden: false,
+        effectiveDate: { lte: now }
+    };
+
+    if (listType === 'CUSTOMER' && customerId) {
+        where.customerId = customerId;
+    }
+
+    return prisma.salesPriceList.findFirst({
+        where,
+        orderBy: [
+            { effectiveDate: 'desc' },
+            { createdAt: 'desc' }
+        ],
+        include: {
+            items: { include: { product: true } }
+        }
+    });
+};
 
 // Получить цену продажи для заказчика и товара
 export const resolveSalePrice = async (req: Request, res: Response) => {
     try {
         const { customerId, productId } = req.params;
+        const targetDate = req.query.date ? new Date(req.query.date as string) : new Date();
 
-        // 1. Проверить прайс заказчика
-        const customerPrice = await prisma.salesPriceItem.findFirst({
-            where: {
-                product: { id: Number(productId) },
-                priceList: {
-                    listType: 'CUSTOMER',
-                    customerId: Number(customerId),
-                    isCurrent: true
-                }
+        // 1. Проверить наличие персонального прайса для заказчика
+        const customerPriceList = await findActivePriceList(prisma, 'CUSTOMER', Number(customerId), targetDate);
+
+        if (customerPriceList) {
+            // Есть персональный прайс — ищем товар ТОЛЬКО в нём
+            const item = customerPriceList.items.find((i: any) => i.productId === Number(productId));
+
+            if (item) {
+                return res.json({
+                    source: 'CUSTOMER',
+                    price: item.salePrice,
+                    productId: Number(productId),
+                    priceListId: customerPriceList.id,
+                    effectiveDate: customerPriceList.effectiveDate
+                });
             }
-        });
 
-        if (customerPrice) {
+            // Товар не найден в персональном прайсе, но персональный прайс есть
+            // Согласно ТЗ: общий прайс НЕ применяется
             return res.json({
-                source: 'CUSTOMER',
-                price: customerPrice.salePrice,
-                productId: Number(productId)
+                source: null,
+                price: null,
+                productId: Number(productId),
+                message: 'Product not found in customer price list (general price not applied per policy)'
             });
         }
 
-        // 2. Проверить общий прайс
-        const generalPrice = await prisma.salesPriceItem.findFirst({
-            where: {
-                product: { id: Number(productId) },
-                priceList: {
-                    listType: 'GENERAL',
-                    isCurrent: true
-                }
-            }
-        });
+        // 2. Персонального прайса нет — проверить общий прайс
+        const generalPriceList = await findActivePriceList(prisma, 'GENERAL', undefined, targetDate);
 
-        if (generalPrice) {
-            return res.json({
-                source: 'GENERAL',
-                price: generalPrice.salePrice,
-                productId: Number(productId)
-            });
+        if (generalPriceList) {
+            const item = generalPriceList.items.find((i: any) => i.productId === Number(productId));
+
+            if (item) {
+                return res.json({
+                    source: 'GENERAL',
+                    price: item.salePrice,
+                    productId: Number(productId),
+                    priceListId: generalPriceList.id,
+                    effectiveDate: generalPriceList.effectiveDate
+                });
+            }
         }
 
         // 3. Цена не найдена
@@ -442,40 +553,40 @@ export const resolveSalePrice = async (req: Request, res: Response) => {
 export const resolveAllPricesForCustomer = async (req: Request, res: Response) => {
     try {
         const customerId = Number(req.params.customerId);
+        const targetDate = req.query.date ? new Date(req.query.date as string) : new Date();
 
-        // Получить все цены из текущего прайса заказчика
-        const customerPrices = await prisma.salesPriceItem.findMany({
-            where: {
-                priceList: {
-                    listType: 'CUSTOMER',
-                    customerId,
-                    isCurrent: true
-                }
-            },
-            include: { product: true }
-        });
+        // 1. Проверить наличие персонального прайса
+        const customerPriceList = await findActivePriceList(prisma, 'CUSTOMER', customerId, targetDate);
 
-        // Получить все цены из общего прайса
-        const generalPrices = await prisma.salesPriceItem.findMany({
-            where: {
-                priceList: {
-                    listType: 'GENERAL',
-                    isCurrent: true
-                }
-            },
-            include: { product: true }
-        });
+        if (customerPriceList) {
+            // Есть персональный прайс — возвращаем ТОЛЬКО его цены
+            // Общий прайс полностью игнорируется
+            const prices = customerPriceList.items.map((item: any) => ({
+                ...item,
+                source: 'CUSTOMER',
+                priceListId: customerPriceList.id,
+                effectiveDate: customerPriceList.effectiveDate
+            }));
 
-        // Объединить с приоритетом заказчика
-        const customerProductIds = new Set(customerPrices.map(p => p.productId));
-        const mergedPrices = [
-            ...customerPrices.map(p => ({ ...p, source: 'CUSTOMER' })),
-            ...generalPrices
-                .filter(p => !customerProductIds.has(p.productId))
-                .map(p => ({ ...p, source: 'GENERAL' }))
-        ];
+            return res.json(prices);
+        }
 
-        res.json(mergedPrices);
+        // 2. Персонального прайса нет — используем общий
+        const generalPriceList = await findActivePriceList(prisma, 'GENERAL', undefined, targetDate);
+
+        if (generalPriceList) {
+            const prices = generalPriceList.items.map((item: any) => ({
+                ...item,
+                source: 'GENERAL',
+                priceListId: generalPriceList.id,
+                effectiveDate: generalPriceList.effectiveDate
+            }));
+
+            return res.json(prices);
+        }
+
+        // 3. Нет активных прайсов
+        res.json([]);
     } catch (error) {
         console.error('Resolve all prices error:', error);
         res.status(500).json({ error: 'Failed to resolve prices' });

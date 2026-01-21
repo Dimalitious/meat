@@ -63,16 +63,18 @@ const ExpeditorsPage = () => {
         }
     };
 
-    const handleDelete = async (id: number) => {
-        if (!confirm('Вы уверены, что хотите деактивировать этого водителя?')) return;
+    const handleToggleStatus = async (id: number, isActive: boolean) => {
+        const action = isActive ? 'отключить' : 'активировать';
+        if (!confirm(`Вы уверены, что хотите ${action} этого водителя?`)) return;
         try {
             const token = localStorage.getItem('token');
-            await axios.delete(`${API_URL}/api/expeditors/${id}`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            await axios.put(`${API_URL}/api/expeditors/${id}`,
+                { isActive: !isActive },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
             fetchExpeditors();
         } catch (err) {
-            alert('Ошибка при удалении');
+            alert('Ошибка при изменении статуса');
         }
     };
 
@@ -129,8 +131,13 @@ const ExpeditorsPage = () => {
                                         <Button variant="ghost" size="sm" onClick={() => openModal(exp)} className="text-blue-600 hover:text-blue-700 hover:bg-blue-50">
                                             Изменить
                                         </Button>
-                                        <Button variant="ghost" size="sm" onClick={() => handleDelete(exp.id)} className="text-red-600 hover:text-red-700 hover:bg-red-50">
-                                            Удалить
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => handleToggleStatus(exp.id, exp.isActive)}
+                                            className={exp.isActive ? 'text-orange-600 hover:text-orange-700 hover:bg-orange-50' : 'text-green-600 hover:text-green-700 hover:bg-green-50'}
+                                        >
+                                            {exp.isActive ? '⏸ Отключить' : '▶ Активировать'}
                                         </Button>
                                     </TableCell>
                                 </TableRow>

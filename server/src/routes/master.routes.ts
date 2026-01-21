@@ -17,6 +17,8 @@ router.delete('/customers/:code', customers.deleteCustomer);
 // Suppliers
 router.get('/suppliers', suppliers.getSuppliers);
 router.post('/suppliers', suppliers.createSupplier);
+router.post('/suppliers/deactivate', suppliers.deactivateSuppliers);
+router.put('/suppliers/toggle/:code', suppliers.toggleSupplier);
 router.put('/suppliers/:code', suppliers.updateSupplier);
 router.delete('/suppliers/:code', suppliers.deleteSupplier);
 

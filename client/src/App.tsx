@@ -32,6 +32,8 @@ import PurchasePricePage from './pages/PurchasePricePage';
 import PurchasePriceJournalPage from './pages/PurchasePriceJournalPage';
 import SalesPricePage from './pages/SalesPricePage';
 import SalesPriceJournalPage from './pages/SalesPriceJournalPage';
+import PurchasePriceListsPage from './pages/PurchasePriceListsPage';
+import PurchasePriceListFormPage from './pages/PurchasePriceListFormPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -107,6 +109,9 @@ function App() {
           <Route path="/prices/sales" element={<ProtectedRoute><SalesPricePage /></ProtectedRoute>} />
           <Route path="/journals/purchase-prices" element={<ProtectedRoute><PurchasePriceJournalPage /></ProtectedRoute>} />
           <Route path="/journals/sales-prices" element={<ProtectedRoute><SalesPriceJournalPage /></ProtectedRoute>} />
+          {/* NEW: Purchase Price Lists (Journal style) */}
+          <Route path="/purchase-price-lists" element={<ProtectedRoute><PurchasePriceListsPage /></ProtectedRoute>} />
+          <Route path="/purchase-price-list/:id" element={<ProtectedRoute><PurchasePriceListFormPage /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

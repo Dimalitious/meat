@@ -12,7 +12,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Trash2, Plus, X, Save, Settings } from 'lucide-react';
+import { Plus, X, Save, Settings } from 'lucide-react';
 
 interface District {
     id: number;
@@ -125,18 +125,7 @@ const CustomersPage = () => {
         setIsModalOpen(true);
     };
 
-    const handleDelete = async (code: string) => {
-        if (!confirm('Вы уверены, что хотите удалить этого клиента?')) return;
-        try {
-            const token = localStorage.getItem('token');
-            await axios.delete(`${API_URL}/api/customers/${code}`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            fetchCustomers();
-        } catch (err) {
-            alert('Не удалось удалить клиента');
-        }
-    };
+    // Клиенты не удаляются - только редактируются
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -434,15 +423,6 @@ const CustomersPage = () => {
                                 <Button type="submit" className="flex items-center gap-2">
                                     <Save size={16} /> Сохранить
                                 </Button>
-                                {editingCustomer && (
-                                    <button
-                                        type="button"
-                                        onClick={() => handleDelete(editingCustomer.code)}
-                                        className="ml-auto text-red-500 hover:text-red-700 text-sm font-medium flex items-center gap-1"
-                                    >
-                                        <Trash2 size={16} /> Удалить
-                                    </button>
-                                )}
                             </div>
                         </form>
                     </div>
