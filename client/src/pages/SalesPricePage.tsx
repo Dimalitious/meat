@@ -1,9 +1,20 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
-import { Search, Plus, Trash2, Save, X, Users, Globe, ArrowLeft, Package, Calendar, ExternalLink } from 'lucide-react';
+import { Search, Plus, Trash2, Save, X, Users, Globe, ArrowLeft, Package, Calendar, ExternalLink, ChevronDown, ChevronUp, DollarSign } from 'lucide-react';
+
+// Закупочная цена поставщика
+interface SupplierPrice {
+    supplierId: number;
+    supplierName: string;
+    supplierLegalName: string | null;
+    purchasePrice: number;
+    priceListDate: string;
+    priceListId: number;
+    priceListName: string | null;
+}
 
 interface Customer {
     id: number;
@@ -75,6 +86,63 @@ export default function SalesPricePage() {
     // Customer selection modal
     const [showCustomerModal, setShowCustomerModal] = useState(false);
     const [customerModalSearch, setCustomerModalSearch] = useState('');
+
+    // Закупочные цены поставщиков (для отображения)
+    const [expandedProductId, setExpandedProductId] = useState<number | null>(null);
+    const [supplierPrices, setSupplierPrices] = useState<Map<number, SupplierPrice[]>>(new Map());
+    const [loadingPrices, setLoadingPrices] = useState<Set<number>>(new Set());
+
+    // Загрузить закупочные цены для товара
+    const fetchSupplierPrices = useCallback(async (productId: number) => {
+        if (supplierPrices.has(productId)) return; // Уже загружено
+
+        setLoadingPrices(prev => new Set(prev).add(productId));
+        try {
+            const token = localStorage.getItem('token');
+            const params = new URLSearchParams({
+                productId: String(productId),
+                targetDate: effectiveDate
+            });
+            const res = await axios.get(`${API_URL}/api/prices/purchase/product-prices?${params}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            setSupplierPrices(prev => {
+                const newMap = new Map(prev);
+                newMap.set(productId, res.data.supplierPrices || []);
+                return newMap;
+            });
+        } catch (err) {
+            console.error('Failed to fetch supplier prices:', err);
+            setSupplierPrices(prev => {
+                const newMap = new Map(prev);
+                newMap.set(productId, []);
+                return newMap;
+            });
+        } finally {
+            setLoadingPrices(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(productId);
+                return newSet;
+            });
+        }
+    }, [effectiveDate]);
+
+    // Переключение раскрытия строки
+    const toggleExpand = (productId: number) => {
+        if (expandedProductId === productId) {
+            setExpandedProductId(null);
+        } else {
+            setExpandedProductId(productId);
+            fetchSupplierPrices(productId);
+        }
+    };
+
+    // Сброс кеша закупочных цен при изменении даты
+    useEffect(() => {
+        setSupplierPrices(new Map());
+        setExpandedProductId(null);
+    }, [effectiveDate]);
 
     useEffect(() => {
         fetchCustomers();
@@ -592,6 +660,7 @@ export default function SalesPricePage() {
                                     <table className="w-full">
                                         <thead className="bg-gray-50 sticky top-0">
                                             <tr>
+                                                <th className="w-10"></th>
                                                 <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">
                                                     Наименование товара
                                                 </th>
@@ -607,45 +676,112 @@ export default function SalesPricePage() {
                                         <tbody>
                                             {priceList.items.length === 0 ? (
                                                 <tr>
-                                                    <td colSpan={4} className="text-center py-12 text-gray-500">
+                                                    <td colSpan={5} className="text-center py-12 text-gray-500">
                                                         <Package size={32} className="mx-auto mb-2 text-gray-300" />
                                                         Нет позиций. Добавьте товары
                                                     </td>
                                                 </tr>
                                             ) : (
-                                                priceList.items.map(item => (
-                                                    <tr key={item.productId} className="border-b hover:bg-gray-50">
-                                                        <td className="px-4 py-3">
-                                                            <div className="font-medium">
-                                                                {item.product?.priceListName || item.priceListName || item.product?.name || item.productName}
-                                                            </div>
-                                                            <div className="text-xs text-gray-500">{item.product?.code}</div>
-                                                        </td>
-                                                        <td className="px-4 py-3">
-                                                            <input
-                                                                type="number"
-                                                                value={item.salePrice || ''}
-                                                                onChange={e => updateItemPrice(item.productId, Number(e.target.value))}
-                                                                className="w-full text-right border rounded px-3 py-2 text-sm font-medium"
-                                                                min="0"
-                                                                step="0.01"
-                                                                placeholder="0.00"
-                                                            />
-                                                        </td>
-                                                        <td className="px-4 py-3 text-center text-sm text-gray-500">
-                                                            {item.rowDate ? new Date(item.rowDate).toLocaleDateString('ru-RU') : '-'}
-                                                        </td>
-                                                        <td className="px-2">
-                                                            <button
-                                                                onClick={() => removeItem(item.productId)}
-                                                                className="p-2 text-red-500 hover:bg-red-50 rounded transition-colors"
-                                                                title="Удалить"
-                                                            >
-                                                                <Trash2 size={16} />
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))
+                                                priceList.items.map(item => {
+                                                    const isExpanded = expandedProductId === item.productId;
+                                                    const prices = supplierPrices.get(item.productId) || [];
+                                                    const isLoading = loadingPrices.has(item.productId);
+
+                                                    return (
+                                                        <React.Fragment key={item.productId}>
+                                                            <tr className={`border-b hover:bg-gray-50 ${isExpanded ? 'bg-blue-50' : ''}`}>
+                                                                <td className="px-2">
+                                                                    <button
+                                                                        onClick={() => toggleExpand(item.productId)}
+                                                                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                                                        title="Показать закупочные цены"
+                                                                    >
+                                                                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                                                    </button>
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    <div className="font-medium">
+                                                                        {item.product?.priceListName || item.priceListName || item.product?.name || item.productName}
+                                                                    </div>
+                                                                    <div className="text-xs text-gray-500">{item.product?.code}</div>
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    <input
+                                                                        type="number"
+                                                                        value={item.salePrice || ''}
+                                                                        onChange={e => updateItemPrice(item.productId, Number(e.target.value))}
+                                                                        className="w-full text-right border rounded px-3 py-2 text-sm font-medium"
+                                                                        min="0"
+                                                                        step="0.01"
+                                                                        placeholder="0.00"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-4 py-3 text-center text-sm text-gray-500">
+                                                                    {item.rowDate ? new Date(item.rowDate).toLocaleDateString('ru-RU') : '-'}
+                                                                </td>
+                                                                <td className="px-2">
+                                                                    <button
+                                                                        onClick={() => removeItem(item.productId)}
+                                                                        className="p-2 text-red-500 hover:bg-red-50 rounded transition-colors"
+                                                                        title="Удалить"
+                                                                    >
+                                                                        <Trash2 size={16} />
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                            {/* Раскрывающаяся строка с закупочными ценами */}
+                                                            {isExpanded && (
+                                                                <tr className="bg-gradient-to-r from-blue-50 to-indigo-50">
+                                                                    <td colSpan={5} className="px-4 py-3">
+                                                                        <div className="ml-8">
+                                                                            <div className="flex items-center gap-2 mb-2">
+                                                                                <DollarSign size={16} className="text-green-600" />
+                                                                                <span className="text-sm font-semibold text-gray-700">
+                                                                                    Закупочные цены поставщиков (до {new Date(effectiveDate).toLocaleDateString('ru-RU')})
+                                                                                </span>
+                                                                            </div>
+                                                                            {isLoading ? (
+                                                                                <div className="text-sm text-gray-500 py-2">Загрузка...</div>
+                                                                            ) : prices.length === 0 ? (
+                                                                                <div className="text-sm text-gray-500 py-2 italic">
+                                                                                    Нет закупочных цен по товару до даты {new Date(effectiveDate).toLocaleDateString('ru-RU')}
+                                                                                </div>
+                                                                            ) : (
+                                                                                <table className="w-full text-sm bg-white rounded-lg shadow-sm overflow-hidden">
+                                                                                    <thead className="bg-gray-100">
+                                                                                        <tr>
+                                                                                            <th className="text-left px-3 py-2 text-gray-600">Поставщик</th>
+                                                                                            <th className="text-right px-3 py-2 text-gray-600 w-32">Закупочная цена</th>
+                                                                                            <th className="text-center px-3 py-2 text-gray-600 w-32">Дата прайса</th>
+                                                                                        </tr>
+                                                                                    </thead>
+                                                                                    <tbody>
+                                                                                        {prices.map(sp => (
+                                                                                            <tr key={sp.supplierId} className="border-t border-gray-100 hover:bg-gray-50">
+                                                                                                <td className="px-3 py-2">
+                                                                                                    <div className="font-medium text-gray-900">{sp.supplierName}</div>
+                                                                                                    {sp.supplierLegalName && (
+                                                                                                        <div className="text-xs text-gray-500">{sp.supplierLegalName}</div>
+                                                                                                    )}
+                                                                                                </td>
+                                                                                                <td className="px-3 py-2 text-right font-semibold text-green-700">
+                                                                                                    {sp.purchasePrice.toLocaleString('ru-RU', { minimumFractionDigits: 2 })} ₸
+                                                                                                </td>
+                                                                                                <td className="px-3 py-2 text-center text-gray-500">
+                                                                                                    {new Date(sp.priceListDate).toLocaleDateString('ru-RU')}
+                                                                                                </td>
+                                                                                            </tr>
+                                                                                        ))}
+                                                                                    </tbody>
+                                                                                </table>
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            )}
+                                                        </React.Fragment>
+                                                    );
+                                                })
                                             )}
                                         </tbody>
                                     </table>

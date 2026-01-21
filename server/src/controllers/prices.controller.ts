@@ -592,3 +592,107 @@ export const resolveAllPricesForCustomer = async (req: Request, res: Response) =
         res.status(500).json({ error: 'Failed to resolve prices' });
     }
 };
+
+// ============================================
+// ЗАКУПОЧНЫЕ ЦЕНЫ ДЛЯ ФОРМЫ ПРОДАЖНОГО ПРАЙСА
+// ============================================
+
+/**
+ * Получить закупочные цены всех поставщиков по товару
+ * Возвращает последнюю закупочную цену по каждому поставщику 
+ * где дата закупочного прайса <= targetDate
+ * 
+ * Query params:
+ *   - productId: number (обязательный)
+ *   - targetDate: string (ISO date) - дата вступления в силу продажного прайса
+ */
+export const getPurchasePricesForProduct = async (req: Request, res: Response) => {
+    try {
+        const { productId, targetDate } = req.query;
+
+        if (!productId) {
+            return res.status(400).json({ error: 'productId is required' });
+        }
+
+        const pId = Number(productId);
+        const date = targetDate ? new Date(String(targetDate)) : new Date();
+
+        // Устанавливаем конец дня для корректного сравнения
+        date.setHours(23, 59, 59, 999);
+
+        // Получаем все закупочные цены по товару из активных прайсов до targetDate
+        const purchasePrices = await prisma.purchasePriceItem.findMany({
+            where: {
+                productId: pId,
+                priceList: {
+                    isActive: true,
+                    date: { lte: date }
+                }
+            },
+            include: {
+                supplier: {
+                    select: {
+                        id: true,
+                        name: true,
+                        legalName: true,
+                        isActive: true
+                    }
+                },
+                priceList: {
+                    select: {
+                        id: true,
+                        date: true,
+                        name: true
+                    }
+                }
+            },
+            orderBy: [
+                { priceList: { date: 'desc' } }
+            ]
+        });
+
+        // Группируем по поставщику и берём только последнюю цену (самую свежую по дате прайса)
+        const supplierPricesMap = new Map<number, {
+            supplierId: number;
+            supplierName: string;
+            supplierLegalName: string | null;
+            purchasePrice: number;
+            priceListDate: Date;
+            priceListId: number;
+            priceListName: string | null;
+        }>();
+
+        for (const item of purchasePrices) {
+            // Пропускаем неактивных поставщиков
+            if (!item.supplier.isActive) continue;
+
+            // Если поставщик ещё не добавлен — добавляем (первый = самый свежий по дате)
+            if (!supplierPricesMap.has(item.supplierId)) {
+                supplierPricesMap.set(item.supplierId, {
+                    supplierId: item.supplierId,
+                    supplierName: item.supplier.name,
+                    supplierLegalName: item.supplier.legalName,
+                    purchasePrice: Number(item.purchasePrice),
+                    priceListDate: item.priceList.date,
+                    priceListId: item.priceList.id,
+                    priceListName: item.priceList.name
+                });
+            }
+        }
+
+        // Преобразуем Map в массив и сортируем по имени поставщика
+        const result = Array.from(supplierPricesMap.values()).sort((a, b) =>
+            a.supplierName.localeCompare(b.supplierName, 'ru')
+        );
+
+        res.json({
+            productId: pId,
+            targetDate: date.toISOString(),
+            supplierPrices: result,
+            count: result.length
+        });
+    } catch (error) {
+        console.error('getPurchasePricesForProduct error:', error);
+        res.status(500).json({ error: 'Failed to get purchase prices' });
+    }
+};

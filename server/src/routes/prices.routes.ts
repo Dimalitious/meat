@@ -7,6 +7,7 @@ import {
     getPurchasePriceById,
     createPurchasePrice,
     savePurchasePrice,
+    getPurchasePricesForProduct,
     // Продажный прайс
     getSalesPriceLists,
     getCurrentGeneralPrice,
@@ -31,6 +32,9 @@ router.use(authenticateToken);
 
 // Журнал закупочных прайсов
 router.get('/purchase', getPurchasePriceLists);          // GET /api/prices/purchase?dateFrom=&dateTo=&supplierId=
+
+// Закупочные цены поставщиков по товару (для формы продажного прайса)
+router.get('/purchase/product-prices', getPurchasePricesForProduct);  // GET /api/prices/purchase/product-prices?productId=&targetDate=
 
 // Текущий прайс поставщика
 router.get('/purchase/supplier/:supplierId/current', getCurrentPurchasePrice);
