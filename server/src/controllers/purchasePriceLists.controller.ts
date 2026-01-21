@@ -56,6 +56,89 @@ export const getPurchasePriceLists = async (req: Request, res: Response) => {
     }
 };
 
+// Получить шаблон из последнего активного прайса для создания нового
+export const getLastPriceListTemplate = async (req: Request, res: Response) => {
+    try {
+        // Найти последний активный закупочный прайс
+        const lastPriceList = await prisma.purchasePriceList.findFirst({
+            where: { isActive: true },
+            orderBy: { date: 'desc' },
+            include: {
+                suppliers: {
+                    include: {
+                        supplier: {
+                            select: { id: true, code: true, name: true, isActive: true }
+                        },
+                        primaryMml: {
+                            select: {
+                                id: true,
+                                productId: true,
+                                product: {
+                                    select: { id: true, name: true, code: true }
+                                }
+                            }
+                        }
+                    }
+                },
+                items: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, unit: true }
+                        },
+                        supplier: {
+                            select: { id: true, code: true, name: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!lastPriceList) {
+            return res.json({
+                hasTemplate: false,
+                message: 'Нет предыдущих прайсов'
+            });
+        }
+
+        // Группируем товары по поставщикам
+        const supplierItems: Record<number, any[]> = {};
+        for (const item of lastPriceList.items) {
+            if (!supplierItems[item.supplierId]) {
+                supplierItems[item.supplierId] = [];
+            }
+            supplierItems[item.supplierId].push({
+                productId: item.productId,
+                product: item.product,
+                purchasePrice: item.purchasePrice // Копируем последнюю цену как базу
+            });
+        }
+
+        // Формируем структуру шаблона
+        const template = {
+            hasTemplate: true,
+            sourceId: lastPriceList.id,
+            sourceDate: lastPriceList.date,
+            sourceName: lastPriceList.name,
+            suppliers: lastPriceList.suppliers.map(s => ({
+                supplierId: s.supplierId,
+                supplier: s.supplier,
+                primaryMmlId: s.primaryMmlId,
+                primaryMml: s.primaryMml,
+                items: supplierItems[s.supplierId] || []
+            }))
+        };
+
+        console.log('[getLastPriceListTemplate] Template from price list:', lastPriceList.id,
+            'suppliers:', template.suppliers.length,
+            'total items:', lastPriceList.items.length);
+
+        res.json(template);
+    } catch (error) {
+        console.error('Get last price list template error:', error);
+        res.status(500).json({ error: 'Failed to fetch template' });
+    }
+};
+
 // Получить один прайс-лист со всеми деталями
 export const getPurchasePriceList = async (req: Request, res: Response) => {
     try {

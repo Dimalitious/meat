@@ -226,8 +226,8 @@ export default function PurchasePricePage() {
                             key={supplier.id}
                             onClick={() => selectSupplier(supplier)}
                             className={`w-full text-left px-3 py-2 rounded text-sm ${selectedSupplier?.id === supplier.id
-                                    ? 'bg-blue-100 text-blue-700'
-                                    : 'hover:bg-gray-100'
+                                ? 'bg-blue-100 text-blue-700'
+                                : 'hover:bg-gray-100'
                                 }`}
                         >
                             <div className="font-medium">{supplier.name}</div>
@@ -254,8 +254,8 @@ export default function PurchasePricePage() {
                         {priceList && (
                             <div className="flex items-center gap-2 mt-1">
                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${priceList.isCurrent ? 'bg-green-100 text-green-800' :
-                                        priceList.status === 'saved' ? 'bg-blue-100 text-blue-800' :
-                                            'bg-yellow-100 text-yellow-800'
+                                    priceList.status === 'saved' ? 'bg-blue-100 text-blue-800' :
+                                        'bg-yellow-100 text-yellow-800'
                                     }`}>
                                     {priceList.isCurrent ? 'Текущий' : priceList.status === 'saved' ? 'Сохранён' : 'Черновик'}
                                 </span>
@@ -264,11 +264,6 @@ export default function PurchasePricePage() {
                         )}
                     </div>
                     <div className="flex gap-2">
-                        {selectedSupplier && !priceList && (
-                            <Button onClick={createNewPriceList}>
-                                <Plus size={16} className="mr-1" /> Добавить прайс
-                            </Button>
-                        )}
                         {priceList && (
                             <>
                                 <Button variant="outline" onClick={() => savePriceList(false)} disabled={saving}>

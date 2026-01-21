@@ -51,12 +51,17 @@ export default function PurchasePriceListFormPage() {
     const [productSearch, setProductSearch] = useState('');
     const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
     const [supplierModalSearch, setSupplierModalSearch] = useState('');
+    const [templateLoaded, setTemplateLoaded] = useState(false);
+    const [templateSource, setTemplateSource] = useState<{ id: number; date: string; name: string } | null>(null);
 
     useEffect(() => {
         fetchSuppliers();
         fetchProducts();
         if (isEdit) {
             fetchPriceList();
+        } else {
+            // При создании нового прайса — загружаем шаблон из последнего
+            fetchTemplate();
         }
     }, [id]);
 
@@ -85,6 +90,54 @@ export default function PurchasePriceListFormPage() {
         } catch (err) {
             console.error('Fetch products error:', err);
             setAllProducts([]);
+        }
+    };
+
+    // Загрузка шаблона из последнего активного прайса
+    const fetchTemplate = async () => {
+        try {
+            setLoading(true);
+            const token = localStorage.getItem('token');
+            const res = await axios.get(`${API_URL}/api/purchase-price-lists/template`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const template = res.data;
+            if (!template.hasTemplate) {
+                console.log('No previous price list template available');
+                setTemplateLoaded(false);
+                return;
+            }
+
+            console.log('Template loaded from price list:', template.sourceId);
+            setTemplateSource({
+                id: template.sourceId,
+                date: template.sourceDate,
+                name: template.sourceName
+            });
+
+            // Заполняем форму данными из шаблона
+            const suppliersFromTemplate: SupplierWithItems[] = template.suppliers.map((s: any) => ({
+                supplierId: s.supplierId,
+                supplierName: s.supplier?.name || '',
+                items: s.items.map((item: any) => ({
+                    productId: item.productId,
+                    productCode: item.product?.code,
+                    productName: item.product?.name,
+                    purchasePrice: Number(item.purchasePrice) || 0
+                }))
+            }));
+
+            setSuppliersData(suppliersFromTemplate);
+            if (suppliersFromTemplate.length > 0) {
+                setSelectedSupplierId(suppliersFromTemplate[0].supplierId);
+            }
+            setTemplateLoaded(true);
+        } catch (err) {
+            console.error('Fetch template error:', err);
+            // Не показываем ошибку — просто открываем пустую форму
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -301,9 +354,18 @@ export default function PurchasePriceListFormPage() {
         <div className="p-6 h-full flex flex-col">
             {/* Шапка */}
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold text-white">
-                    {isEdit ? 'Редактирование закупочного прайса' : 'Новый закупочный прайс'}
-                </h1>
+                <div>
+                    <h1 className="text-2xl font-bold text-white">
+                        {isEdit ? 'Редактирование закупочного прайса' : 'Новый закупочный прайс'}
+                    </h1>
+                    {!isEdit && templateLoaded && templateSource && (
+                        <p className="text-sm text-emerald-400 mt-1">
+                            ✓ Структура загружена из прайса #{templateSource.id}
+                            от {new Date(templateSource.date).toLocaleDateString('ru-RU')}
+                            {templateSource.name && ` (${templateSource.name})`}
+                        </p>
+                    )}
+                </div>
                 <div className="flex items-center gap-4">
                     <div>
                         <label className="text-sm text-gray-400 mr-2">Дата прайса:</label>

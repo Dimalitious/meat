@@ -5,7 +5,8 @@ import {
     createPurchasePriceList,
     updatePurchasePriceList,
     deactivatePurchasePriceLists,
-    getActivePurchasePrice
+    getActivePurchasePrice,
+    getLastPriceListTemplate
 } from '../controllers/purchasePriceLists.controller';
 import { authenticateToken } from '../middleware/auth.middleware';
 
@@ -15,6 +16,9 @@ router.use(authenticateToken);
 
 // Журнал закупочных прайсов
 router.get('/', getPurchasePriceLists);
+
+// Шаблон из последнего прайса для создания нового
+router.get('/template', getLastPriceListTemplate);
 
 // Получить актуальную цену (должен быть перед /:id)
 router.get('/active-price', getActivePurchasePrice);

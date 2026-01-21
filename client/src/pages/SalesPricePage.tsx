@@ -671,18 +671,19 @@ export default function SalesPricePage() {
                                                 <th className="text-left px-4 py-3 text-sm font-medium text-gray-700 min-w-[200px]">
                                                     Наименование товара
                                                 </th>
-                                                {/* Динамические колонки поставщиков */}
-                                                {allSuppliers.map(supplier => (
+                                                {/* Динамические колонки поставщиков — компактный блок */}
+                                                {allSuppliers.map((supplier, idx) => (
                                                     <th
                                                         key={supplier.id}
-                                                        className="text-right px-3 py-3 text-xs font-medium text-green-700 bg-green-50 min-w-[100px] max-w-[120px]"
+                                                        className={`text-right px-1.5 py-2 text-xs font-medium text-green-700 bg-green-50 whitespace-nowrap ${idx > 0 ? 'border-l border-green-200' : ''}`}
+                                                        style={{ minWidth: '90px', maxWidth: '150px' }}
                                                         title={supplier.name}
                                                     >
                                                         <div className="truncate">{supplier.name}</div>
-                                                        <div className="text-[10px] text-gray-500 font-normal">закуп.</div>
+                                                        <div className="text-[10px] text-gray-500 font-normal border-t border-green-300 mt-1 pt-0.5">закуп.</div>
                                                     </th>
                                                 ))}
-                                                <th className="text-right px-4 py-3 text-sm font-medium text-gray-700 w-32 bg-yellow-50">
+                                                <th className="text-right px-4 py-3 text-sm font-medium text-gray-700 w-32 bg-yellow-50 border-l-2 border-gray-300">
                                                     Цена продажи
                                                 </th>
                                                 <th className="text-center px-4 py-3 text-sm font-medium text-gray-700 w-32">
@@ -708,13 +709,14 @@ export default function SalesPricePage() {
                                                             </div>
                                                             <div className="text-xs text-gray-500">{item.product?.code}</div>
                                                         </td>
-                                                        {/* Цены поставщиков */}
-                                                        {allSuppliers.map(supplier => {
+                                                        {/* Цены поставщиков — компактные ячейки */}
+                                                        {allSuppliers.map((supplier, idx) => {
                                                             const price = productPrices.get(`${item.productId}-${supplier.id}`);
                                                             return (
                                                                 <td
                                                                     key={supplier.id}
-                                                                    className="px-3 py-3 text-right text-sm bg-green-50/30"
+                                                                    className={`px-1.5 py-2 text-right text-sm bg-green-50/30 whitespace-nowrap ${idx > 0 ? 'border-l border-green-100' : ''}`}
+                                                                    style={{ minWidth: '90px', maxWidth: '150px' }}
                                                                 >
                                                                     {price !== undefined ? (
                                                                         <span className="text-green-700 font-medium">
@@ -726,7 +728,7 @@ export default function SalesPricePage() {
                                                                 </td>
                                                             );
                                                         })}
-                                                        <td className="px-4 py-3 bg-yellow-50/30">
+                                                        <td className="px-4 py-3 bg-yellow-50/30 border-l-2 border-gray-300">
                                                             <input
                                                                 type="number"
                                                                 value={item.salePrice || ''}
