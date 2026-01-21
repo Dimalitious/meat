@@ -57,11 +57,10 @@ model Product {
   productionItems       ProductionItem[]
   purchasePriceItems    PurchasePriceItem[]
   salesPriceItems       SalesPriceItem[]
-  // Production relations
-  productionMmls        ProductionMml[]
-  productionBatches     ProductionBatch[]
-  mmlComponents         ProductionMmlItem[]   @relation("MmlComponent")
-  batchComponents       ProductionBatchItem[] @relation("BatchComponent")
+  // Production Module v2 relations
+  productionMmls        ProductionMml[]           // MML для этого товара
+  mmlNodes              ProductionMmlNode[]       @relation("MmlNodeProduct")  // Узлы MML где этот товар
+  productionRuns        ProductionRun[]           @relation("ProductRuns")     // Выработки этого товара
 }
 
 model Customer {
@@ -425,76 +424,89 @@ model SalesPriceItem {
   @@index([rowDate])
 }
 
-// ========== PRODUCTION MODULE ==========
+// ========== PRODUCTION MODULE (v2 - Tree Structure) ==========
 
-// MML (калькуляция/техкарта) - шапка
+// MML (калькуляция/техкарта) - шапка документа
+// Один MML на один товар (productId уникален)
 model ProductionMml {
   id          Int       @id @default(autoincrement())
-  productId   Int       @unique  // Позиция, для которой создан MML
+  productId   Int       @unique  // Товар, для которого создан MML
   createdBy   Int       // User ID создателя
-  isLocked    Boolean   @default(false)  // Зафиксирован галочкой
+  isLocked    Boolean   @default(false)  // Зафиксирован (нельзя редактировать)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   
   product     Product   @relation(fields: [productId], references: [id])
   creator     User      @relation("MmlCreator", fields: [createdBy], references: [id])
-  items       ProductionMmlItem[]
-  batches     ProductionBatch[]
+  nodes       ProductionMmlNode[]  // Дерево узлов (корневые + подпозиции)
+  runs        ProductionRun[]      // Выработки по этому MML
   
   @@index([isLocked])
+  @@index([createdAt])
 }
 
-// MML - строки (5 строк)
-model ProductionMmlItem {
-  id                 Int       @id @default(autoincrement())
-  mmlId              Int       // FK -> ProductionMml
-  lineNo             Int       // 1..5
-  componentProductId Int?      // FK -> Product (товар в строке)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+// MML - узлы дерева (корневые позиции и подпозиции)
+// parentNodeId = NULL → корневая позиция
+// parentNodeId != NULL → подпозиция (дочерняя)
+model ProductionMmlNode {
+  id            Int       @id @default(autoincrement())
+  mmlId         Int       // FK → ProductionMml
+  parentNodeId  Int?      // FK → ProductionMmlNode (NULL = корень)
+  productId     Int       // FK → Product (товар узла)
+  sortOrder     Int       @default(0)  // Порядок отображения
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
   
-  mml               ProductionMml @relation(fields: [mmlId], references: [id], onDelete: Cascade)
-  componentProduct  Product?  @relation("MmlComponent", fields: [componentProductId], references: [id])
+  mml           ProductionMml     @relation(fields: [mmlId], references: [id], onDelete: Cascade)
+  parentNode    ProductionMmlNode?  @relation("NodeChildren", fields: [parentNodeId], references: [id], onDelete: Cascade)
+  children      ProductionMmlNode[] @relation("NodeChildren")
+  product       Product   @relation("MmlNodeProduct", fields: [productId], references: [id])
+  runValues     ProductionRunValue[]  // Значения в выработках
   
-  @@unique([mmlId, lineNo])
-  @@index([componentProductId])
+  @@index([mmlId])
+  @@index([parentNodeId])
+  @@index([productId])
+  @@index([mmlId, parentNodeId, sortOrder])
 }
 
-// Выработка (Batch) - шапка карточки
-model ProductionBatch {
+// Выработка (документ журнала производства)
+// Заменяет старый ProductionBatch
+model ProductionRun {
   id          Int       @id @default(autoincrement())
-  productId   Int       // Что вырабатывается
-  quantity    Decimal?  @db.Decimal(14, 3)  // Количество (вводит пользователь)
+  productId   Int       // Что вырабатывается (основной товар)
+  mmlId       Int       // Какой MML применён
   userId      Int       // Кто сделал выработку
-  mmlId       Int?      // Какой шаблон использовался (nullable)
-  isLocked    Boolean   @default(false)  // Зафиксировано галочкой
+  isLocked    Boolean   @default(false)  // Зафиксировано (нельзя редактировать)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   
-  product     Product   @relation(fields: [productId], references: [id])
-  user        User      @relation("BatchUser", fields: [userId], references: [id])
-  mml         ProductionMml? @relation(fields: [mmlId], references: [id])
-  items       ProductionBatchItem[]
+  product     Product   @relation("ProductRuns", fields: [productId], references: [id])
+  mml         ProductionMml @relation(fields: [mmlId], references: [id])
+  user        User      @relation("RunUser", fields: [userId], references: [id])
+  values      ProductionRunValue[]  // Значения по узлам
   
   @@index([productId])
+  @@index([mmlId])
   @@index([userId])
   @@index([isLocked])
   @@index([createdAt])
 }
 
-// Выработка - строки (5 строк)
-model ProductionBatchItem {
-  id                 Int       @id @default(autoincrement())
-  batchId            Int       // FK -> ProductionBatch
-  lineNo             Int       // 1..5
-  componentProductId Int?      // FK -> Product (товар в строке)
-  value              Decimal?  @db.Decimal(14, 3)  // Число (заполняет пользователь)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+// Значения выработки по узлам MML
+// Каждый узел дерева имеет одно числовое значение в документе выработки
+model ProductionRunValue {
+  id              Int       @id @default(autoincrement())
+  productionRunId Int       // FK → ProductionRun
+  mmlNodeId       Int       // FK → ProductionMmlNode
+  value           Decimal?  @db.Decimal(14, 3)  // Числовое значение (ввод пользователя)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
   
-  batch             ProductionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  componentProduct  Product?  @relation("BatchComponent", fields: [componentProductId], references: [id])
+  run             ProductionRun     @relation(fields: [productionRunId], references: [id], onDelete: Cascade)
+  node            ProductionMmlNode @relation(fields: [mmlNodeId], references: [id])
   
-  @@unique([batchId, lineNo])
-  @@index([componentProductId])
+  @@unique([productionRunId, mmlNodeId])  // Один узел = одно значение в документе
+  @@index([productionRunId])
+  @@index([mmlNodeId])
 }
+

@@ -1,19 +1,14 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
-import { Search, Plus, Trash2, Save, X, Users, Globe, ArrowLeft, Package, Calendar, ExternalLink, ChevronDown, ChevronUp, DollarSign } from 'lucide-react';
+import { Search, Plus, Trash2, Save, X, Users, Globe, ArrowLeft, Package, Calendar, ExternalLink } from 'lucide-react';
 
-// Закупочная цена поставщика
-interface SupplierPrice {
-    supplierId: number;
-    supplierName: string;
-    supplierLegalName: string | null;
-    purchasePrice: number;
-    priceListDate: string;
-    priceListId: number;
-    priceListName: string | null;
+// Поставщик с ценой
+interface SupplierInfo {
+    id: number;
+    name: string;
 }
 
 interface Customer {
@@ -87,62 +82,70 @@ export default function SalesPricePage() {
     const [showCustomerModal, setShowCustomerModal] = useState(false);
     const [customerModalSearch, setCustomerModalSearch] = useState('');
 
-    // Закупочные цены поставщиков (для отображения)
-    const [expandedProductId, setExpandedProductId] = useState<number | null>(null);
-    const [supplierPrices, setSupplierPrices] = useState<Map<number, SupplierPrice[]>>(new Map());
-    const [loadingPrices, setLoadingPrices] = useState<Set<number>>(new Set());
+    // Закупочные цены поставщиков (горизонтальные колонки)
+    const [allSuppliers, setAllSuppliers] = useState<SupplierInfo[]>([]); // Уникальные поставщики
+    const [productPrices, setProductPrices] = useState<Map<string, number>>(new Map()); // key: "productId-supplierId"
+    const [loadingSupplierPrices, setLoadingSupplierPrices] = useState(false);
 
-    // Загрузить закупочные цены для товара
-    const fetchSupplierPrices = useCallback(async (productId: number) => {
-        if (supplierPrices.has(productId)) return; // Уже загружено
+    // Загрузить закупочные цены для всех товаров в прайсе
+    const fetchAllSupplierPrices = useCallback(async (productIds: number[]) => {
+        if (productIds.length === 0) return;
 
-        setLoadingPrices(prev => new Set(prev).add(productId));
+        setLoadingSupplierPrices(true);
         try {
             const token = localStorage.getItem('token');
-            const params = new URLSearchParams({
-                productId: String(productId),
-                targetDate: effectiveDate
-            });
-            const res = await axios.get(`${API_URL}/api/prices/purchase/product-prices?${params}`, {
-                headers: { Authorization: `Bearer ${token}` }
+            const suppliersSet = new Map<number, SupplierInfo>();
+            const pricesMap = new Map<string, number>();
+
+            // Загружаем цены для каждого товара параллельно
+            const promises = productIds.map(async (productId) => {
+                const params = new URLSearchParams({
+                    productId: String(productId),
+                    targetDate: effectiveDate
+                });
+                const res = await axios.get(`${API_URL}/api/prices/purchase/product-prices?${params}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                return { productId, prices: res.data.supplierPrices || [] };
             });
 
-            setSupplierPrices(prev => {
-                const newMap = new Map(prev);
-                newMap.set(productId, res.data.supplierPrices || []);
-                return newMap;
-            });
+            const results = await Promise.all(promises);
+
+            for (const { productId, prices } of results) {
+                for (const sp of prices) {
+                    // Добавляем поставщика
+                    if (!suppliersSet.has(sp.supplierId)) {
+                        suppliersSet.set(sp.supplierId, { id: sp.supplierId, name: sp.supplierName });
+                    }
+                    // Добавляем цену
+                    pricesMap.set(`${productId}-${sp.supplierId}`, sp.purchasePrice);
+                }
+            }
+
+            // Сортируем поставщиков по имени
+            const sortedSuppliers = Array.from(suppliersSet.values()).sort((a, b) =>
+                a.name.localeCompare(b.name, 'ru')
+            );
+
+            setAllSuppliers(sortedSuppliers);
+            setProductPrices(pricesMap);
         } catch (err) {
             console.error('Failed to fetch supplier prices:', err);
-            setSupplierPrices(prev => {
-                const newMap = new Map(prev);
-                newMap.set(productId, []);
-                return newMap;
-            });
         } finally {
-            setLoadingPrices(prev => {
-                const newSet = new Set(prev);
-                newSet.delete(productId);
-                return newSet;
-            });
+            setLoadingSupplierPrices(false);
         }
     }, [effectiveDate]);
 
-    // Переключение раскрытия строки
-    const toggleExpand = (productId: number) => {
-        if (expandedProductId === productId) {
-            setExpandedProductId(null);
-        } else {
-            setExpandedProductId(productId);
-            fetchSupplierPrices(productId);
-        }
-    };
-
-    // Сброс кеша закупочных цен при изменении даты
+    // Загружаем закупочные цены при изменении товаров в прайсе или даты
     useEffect(() => {
-        setSupplierPrices(new Map());
-        setExpandedProductId(null);
-    }, [effectiveDate]);
+        if (priceList && priceList.items.length > 0) {
+            const productIds = priceList.items.map(item => item.productId);
+            fetchAllSupplierPrices(productIds);
+        } else {
+            setAllSuppliers([]);
+            setProductPrices(new Map());
+        }
+    }, [priceList?.items, effectiveDate, fetchAllSupplierPrices]);
 
     useEffect(() => {
         fetchCustomers();
@@ -655,20 +658,35 @@ export default function SalesPricePage() {
                                     </div>
                                 </div>
 
-                                {/* Items Table */}
+                                {/* Items Table with horizontal supplier columns */}
                                 <div className="flex-1 overflow-auto">
+                                    {loadingSupplierPrices && (
+                                        <div className="bg-blue-50 text-blue-700 text-sm px-4 py-2">
+                                            Загрузка закупочных цен...
+                                        </div>
+                                    )}
                                     <table className="w-full">
                                         <thead className="bg-gray-50 sticky top-0">
                                             <tr>
-                                                <th className="w-10"></th>
-                                                <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">
+                                                <th className="text-left px-4 py-3 text-sm font-medium text-gray-700 min-w-[200px]">
                                                     Наименование товара
                                                 </th>
-                                                <th className="text-right px-4 py-3 text-sm font-medium text-gray-700 w-40">
-                                                    Цена
+                                                {/* Динамические колонки поставщиков */}
+                                                {allSuppliers.map(supplier => (
+                                                    <th
+                                                        key={supplier.id}
+                                                        className="text-right px-3 py-3 text-xs font-medium text-green-700 bg-green-50 min-w-[100px] max-w-[120px]"
+                                                        title={supplier.name}
+                                                    >
+                                                        <div className="truncate">{supplier.name}</div>
+                                                        <div className="text-[10px] text-gray-500 font-normal">закуп.</div>
+                                                    </th>
+                                                ))}
+                                                <th className="text-right px-4 py-3 text-sm font-medium text-gray-700 w-32 bg-yellow-50">
+                                                    Цена продажи
                                                 </th>
-                                                <th className="text-center px-4 py-3 text-sm font-medium text-gray-700 w-44">
-                                                    Дата создания записи
+                                                <th className="text-center px-4 py-3 text-sm font-medium text-gray-700 w-32">
+                                                    Дата записи
                                                 </th>
                                                 <th className="w-12"></th>
                                             </tr>
@@ -676,112 +694,63 @@ export default function SalesPricePage() {
                                         <tbody>
                                             {priceList.items.length === 0 ? (
                                                 <tr>
-                                                    <td colSpan={5} className="text-center py-12 text-gray-500">
+                                                    <td colSpan={3 + allSuppliers.length} className="text-center py-12 text-gray-500">
                                                         <Package size={32} className="mx-auto mb-2 text-gray-300" />
                                                         Нет позиций. Добавьте товары
                                                     </td>
                                                 </tr>
                                             ) : (
-                                                priceList.items.map(item => {
-                                                    const isExpanded = expandedProductId === item.productId;
-                                                    const prices = supplierPrices.get(item.productId) || [];
-                                                    const isLoading = loadingPrices.has(item.productId);
-
-                                                    return (
-                                                        <React.Fragment key={item.productId}>
-                                                            <tr className={`border-b hover:bg-gray-50 ${isExpanded ? 'bg-blue-50' : ''}`}>
-                                                                <td className="px-2">
-                                                                    <button
-                                                                        onClick={() => toggleExpand(item.productId)}
-                                                                        className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                                                                        title="Показать закупочные цены"
-                                                                    >
-                                                                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                                                                    </button>
+                                                priceList.items.map(item => (
+                                                    <tr key={item.productId} className="border-b hover:bg-gray-50">
+                                                        <td className="px-4 py-3">
+                                                            <div className="font-medium">
+                                                                {item.product?.priceListName || item.priceListName || item.product?.name || item.productName}
+                                                            </div>
+                                                            <div className="text-xs text-gray-500">{item.product?.code}</div>
+                                                        </td>
+                                                        {/* Цены поставщиков */}
+                                                        {allSuppliers.map(supplier => {
+                                                            const price = productPrices.get(`${item.productId}-${supplier.id}`);
+                                                            return (
+                                                                <td
+                                                                    key={supplier.id}
+                                                                    className="px-3 py-3 text-right text-sm bg-green-50/30"
+                                                                >
+                                                                    {price !== undefined ? (
+                                                                        <span className="text-green-700 font-medium">
+                                                                            {price.toLocaleString('ru-RU', { minimumFractionDigits: 2 })}
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="text-gray-300">—</span>
+                                                                    )}
                                                                 </td>
-                                                                <td className="px-4 py-3">
-                                                                    <div className="font-medium">
-                                                                        {item.product?.priceListName || item.priceListName || item.product?.name || item.productName}
-                                                                    </div>
-                                                                    <div className="text-xs text-gray-500">{item.product?.code}</div>
-                                                                </td>
-                                                                <td className="px-4 py-3">
-                                                                    <input
-                                                                        type="number"
-                                                                        value={item.salePrice || ''}
-                                                                        onChange={e => updateItemPrice(item.productId, Number(e.target.value))}
-                                                                        className="w-full text-right border rounded px-3 py-2 text-sm font-medium"
-                                                                        min="0"
-                                                                        step="0.01"
-                                                                        placeholder="0.00"
-                                                                    />
-                                                                </td>
-                                                                <td className="px-4 py-3 text-center text-sm text-gray-500">
-                                                                    {item.rowDate ? new Date(item.rowDate).toLocaleDateString('ru-RU') : '-'}
-                                                                </td>
-                                                                <td className="px-2">
-                                                                    <button
-                                                                        onClick={() => removeItem(item.productId)}
-                                                                        className="p-2 text-red-500 hover:bg-red-50 rounded transition-colors"
-                                                                        title="Удалить"
-                                                                    >
-                                                                        <Trash2 size={16} />
-                                                                    </button>
-                                                                </td>
-                                                            </tr>
-                                                            {/* Раскрывающаяся строка с закупочными ценами */}
-                                                            {isExpanded && (
-                                                                <tr className="bg-gradient-to-r from-blue-50 to-indigo-50">
-                                                                    <td colSpan={5} className="px-4 py-3">
-                                                                        <div className="ml-8">
-                                                                            <div className="flex items-center gap-2 mb-2">
-                                                                                <DollarSign size={16} className="text-green-600" />
-                                                                                <span className="text-sm font-semibold text-gray-700">
-                                                                                    Закупочные цены поставщиков (до {new Date(effectiveDate).toLocaleDateString('ru-RU')})
-                                                                                </span>
-                                                                            </div>
-                                                                            {isLoading ? (
-                                                                                <div className="text-sm text-gray-500 py-2">Загрузка...</div>
-                                                                            ) : prices.length === 0 ? (
-                                                                                <div className="text-sm text-gray-500 py-2 italic">
-                                                                                    Нет закупочных цен по товару до даты {new Date(effectiveDate).toLocaleDateString('ru-RU')}
-                                                                                </div>
-                                                                            ) : (
-                                                                                <table className="w-full text-sm bg-white rounded-lg shadow-sm overflow-hidden">
-                                                                                    <thead className="bg-gray-100">
-                                                                                        <tr>
-                                                                                            <th className="text-left px-3 py-2 text-gray-600">Поставщик</th>
-                                                                                            <th className="text-right px-3 py-2 text-gray-600 w-32">Закупочная цена</th>
-                                                                                            <th className="text-center px-3 py-2 text-gray-600 w-32">Дата прайса</th>
-                                                                                        </tr>
-                                                                                    </thead>
-                                                                                    <tbody>
-                                                                                        {prices.map(sp => (
-                                                                                            <tr key={sp.supplierId} className="border-t border-gray-100 hover:bg-gray-50">
-                                                                                                <td className="px-3 py-2">
-                                                                                                    <div className="font-medium text-gray-900">{sp.supplierName}</div>
-                                                                                                    {sp.supplierLegalName && (
-                                                                                                        <div className="text-xs text-gray-500">{sp.supplierLegalName}</div>
-                                                                                                    )}
-                                                                                                </td>
-                                                                                                <td className="px-3 py-2 text-right font-semibold text-green-700">
-                                                                                                    {sp.purchasePrice.toLocaleString('ru-RU', { minimumFractionDigits: 2 })} ₸
-                                                                                                </td>
-                                                                                                <td className="px-3 py-2 text-center text-gray-500">
-                                                                                                    {new Date(sp.priceListDate).toLocaleDateString('ru-RU')}
-                                                                                                </td>
-                                                                                            </tr>
-                                                                                        ))}
-                                                                                    </tbody>
-                                                                                </table>
-                                                                            )}
-                                                                        </div>
-                                                                    </td>
-                                                                </tr>
-                                                            )}
-                                                        </React.Fragment>
-                                                    );
-                                                })
+                                                            );
+                                                        })}
+                                                        <td className="px-4 py-3 bg-yellow-50/30">
+                                                            <input
+                                                                type="number"
+                                                                value={item.salePrice || ''}
+                                                                onChange={e => updateItemPrice(item.productId, Number(e.target.value))}
+                                                                className="w-full text-right border rounded px-3 py-2 text-sm font-medium"
+                                                                min="0"
+                                                                step="0.01"
+                                                                placeholder="0.00"
+                                                            />
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center text-sm text-gray-500">
+                                                            {item.rowDate ? new Date(item.rowDate).toLocaleDateString('ru-RU') : '-'}
+                                                        </td>
+                                                        <td className="px-2">
+                                                            <button
+                                                                onClick={() => removeItem(item.productId)}
+                                                                className="p-2 text-red-500 hover:bg-red-50 rounded transition-colors"
+                                                                title="Удалить"
+                                                            >
+                                                                <Trash2 size={16} />
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
                                             )}
                                         </tbody>
                                     </table>
