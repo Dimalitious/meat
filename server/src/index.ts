@@ -42,6 +42,11 @@ app.use('/api/production', productionRoutes);
 app.use('/api/prices', pricesRoutes);
 app.use('/api/purchase-price-lists', purchasePriceListsRoutes);
 app.use('/api/production-module', mmlBatchRoutes);
+
+// Production Module v2 (Tree Structure)
+import productionV2Routes from './routes/production-v2.routes';
+app.use('/api/production-v2', productionV2Routes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 app.get('/health', (req: Request, res: Response) => {

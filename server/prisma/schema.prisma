@@ -17,9 +17,9 @@ model User {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   productionStaff ProductionStaff?
-  // Production relations
+  // Production Module v2 relations
   createdMmls     ProductionMml[]   @relation("MmlCreator")
-  productionBatches ProductionBatch[] @relation("BatchUser")
+  productionRuns  ProductionRun[]   @relation("RunUser")
 }
 
 model District {
@@ -80,17 +80,20 @@ model Customer {
 }
 
 model Supplier {
-  id        Int               @id @default(autoincrement())
-  code      String            @unique
-  name      String
-  legalName String?
-  altName   String?           // Альтернативное название поставщика
-  phone     String?           // Телефон поставщика
-  telegram  String?           // Telegram поставщика
-  isActive  Boolean           @default(true)  // Статус активности
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
-  products  SupplierProduct[]
+  id           Int               @id @default(autoincrement())
+  code         String            @unique
+  name         String
+  legalName    String?
+  altName      String?           // Альтернативное название поставщика
+  phone        String?           // Телефон поставщика
+  telegram     String?           // Telegram поставщика
+  isActive     Boolean           @default(true)  // Статус активности
+  primaryMmlId Int?              // FK -> ProductionMml (первичный MML поставщика)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  
+  primaryMml   ProductionMml?    @relation("SupplierPrimaryMml", fields: [primaryMmlId], references: [id])
+  products     SupplierProduct[]
   purchasePriceListSuppliers PurchasePriceListSupplier[]
   purchasePriceItems         PurchasePriceItem[]
 }
@@ -349,17 +352,21 @@ model PurchasePriceList {
 }
 
 // Связь прайса и поставщика (многие-ко-многим)
+// При сохранении фиксируется первичный MML поставщика на момент создания
 model PurchasePriceListSupplier {
   id            Int       @id @default(autoincrement())
   priceListId   Int       // FK -> PurchasePriceList
   supplierId    Int       // FK -> Supplier
+  primaryMmlId  Int?      // FK -> ProductionMml (зафиксированный первичный MML на момент создания прайса)
   createdAt     DateTime  @default(now())
   
   priceList     PurchasePriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
   supplier      Supplier  @relation(fields: [supplierId], references: [id])
+  primaryMml    ProductionMml?    @relation("PriceListSupplierMml", fields: [primaryMmlId], references: [id])
   
   @@unique([priceListId, supplierId])
   @@index([supplierId])
+  @@index([primaryMmlId])
 }
 
 // Закупочный прайс - строки (товары по поставщикам)
@@ -440,6 +447,10 @@ model ProductionMml {
   creator     User      @relation("MmlCreator", fields: [createdBy], references: [id])
   nodes       ProductionMmlNode[]  // Дерево узлов (корневые + подпозиции)
   runs        ProductionRun[]      // Выработки по этому MML
+  
+  // Обратные связи для первичного MML
+  suppliersWithPrimaryMml   Supplier[]  @relation("SupplierPrimaryMml")
+  priceListSuppliers        PurchasePriceListSupplier[]  @relation("PriceListSupplierMml")
   
   @@index([isLocked])
   @@index([createdAt])

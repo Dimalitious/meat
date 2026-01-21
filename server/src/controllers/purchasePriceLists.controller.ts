@@ -66,7 +66,16 @@ export const getPurchasePriceList = async (req: Request, res: Response) => {
             include: {
                 suppliers: {
                     include: {
-                        supplier: true
+                        supplier: true,
+                        primaryMml: {
+                            select: {
+                                id: true,
+                                productId: true,
+                                product: {
+                                    select: { id: true, name: true, code: true }
+                                }
+                            }
+                        }
                     }
                 },
                 items: {
@@ -134,13 +143,30 @@ export const createPurchasePriceList = async (req: Request, res: Response) => {
                 }
             });
 
+            // Предупреждения о поставщиках без MML
+            const warnings: string[] = [];
+
             // Добавляем поставщиков и их товары
             for (const s of suppliers) {
-                // Связь прайса с поставщиком
+                // Получаем поставщика с его первичным MML
+                const supplierData = await tx.supplier.findUnique({
+                    where: { id: s.supplierId },
+                    select: { id: true, name: true, primaryMmlId: true }
+                });
+
+                // Фиксируем первичный MML поставщика на момент создания прайса
+                const frozenMmlId = supplierData?.primaryMmlId || null;
+
+                if (!frozenMmlId) {
+                    warnings.push(`У поставщика "${supplierData?.name || s.supplierId}" не назначен первичный MML`);
+                }
+
+                // Связь прайса с поставщиком + зафиксированный MML
                 await tx.purchasePriceListSupplier.create({
                     data: {
                         priceListId: pl.id,
-                        supplierId: s.supplierId
+                        supplierId: s.supplierId,
+                        primaryMmlId: frozenMmlId  // Фиксируем MML на момент создания
                     }
                 });
 
@@ -157,13 +183,19 @@ export const createPurchasePriceList = async (req: Request, res: Response) => {
                 }
             }
 
-            return pl;
+            // Логируем предупреждения
+            if (warnings.length > 0) {
+                console.warn('[createPurchasePriceList] Warnings:', warnings);
+            }
+
+            return { priceList: pl, warnings };
         });
 
         res.status(201).json({
             success: true,
-            id: priceList.id,
-            message: 'Закупочный прайс успешно создан'
+            id: priceList.priceList.id,
+            message: 'Закупочный прайс успешно создан',
+            warnings: priceList.warnings.length > 0 ? priceList.warnings : undefined
         });
     } catch (error: any) {
         console.error('Create purchase price list error:', error);
@@ -220,10 +252,20 @@ export const updatePurchasePriceList = async (req: Request, res: Response) => {
 
             // Добавляем новые
             for (const s of suppliers) {
+                // Получаем поставщика с его первичным MML
+                const supplierData = await tx.supplier.findUnique({
+                    where: { id: s.supplierId },
+                    select: { id: true, primaryMmlId: true }
+                });
+
+                // Фиксируем первичный MML поставщика
+                const frozenMmlId = supplierData?.primaryMmlId || null;
+
                 await tx.purchasePriceListSupplier.create({
                     data: {
                         priceListId,
-                        supplierId: s.supplierId
+                        supplierId: s.supplierId,
+                        primaryMmlId: frozenMmlId  // Фиксируем MML
                     }
                 });
 

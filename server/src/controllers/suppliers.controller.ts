@@ -21,7 +21,18 @@ export const getSuppliers = async (req: Request, res: Response) => {
 
         const items = await prisma.supplier.findMany({
             where,
-            orderBy: { name: 'asc' }
+            orderBy: { name: 'asc' },
+            include: {
+                primaryMml: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        product: {
+                            select: { id: true, name: true, code: true }
+                        }
+                    }
+                }
+            }
         });
         res.json(items);
     } catch (error) {
@@ -32,7 +43,7 @@ export const getSuppliers = async (req: Request, res: Response) => {
 // Создать поставщика
 export const createSupplier = async (req: Request, res: Response) => {
     try {
-        const { code, name, legalName, altName, phone, telegram } = req.body;
+        const { code, name, legalName, altName, phone, telegram, primaryMmlId } = req.body;
 
         if (!code || !name) {
             return res.status(400).json({ error: 'Код и название обязательны' });
@@ -51,7 +62,19 @@ export const createSupplier = async (req: Request, res: Response) => {
                 altName: altName || null,
                 phone: phone || null,
                 telegram: telegram || null,
-                isActive: true
+                isActive: true,
+                primaryMmlId: primaryMmlId || null
+            },
+            include: {
+                primaryMml: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        product: {
+                            select: { id: true, name: true, code: true }
+                        }
+                    }
+                }
             }
         });
         res.status(201).json(item);
@@ -65,7 +88,7 @@ export const createSupplier = async (req: Request, res: Response) => {
 export const updateSupplier = async (req: Request, res: Response) => {
     try {
         const { code } = req.params as { code: string };
-        const { name, legalName, altName, phone, telegram, isActive } = req.body;
+        const { name, legalName, altName, phone, telegram, isActive, primaryMmlId } = req.body;
 
         const item = await prisma.supplier.update({
             where: { code },
@@ -75,7 +98,19 @@ export const updateSupplier = async (req: Request, res: Response) => {
                 ...(altName !== undefined && { altName }),
                 ...(phone !== undefined && { phone }),
                 ...(telegram !== undefined && { telegram }),
-                ...(isActive !== undefined && { isActive })
+                ...(isActive !== undefined && { isActive }),
+                ...(primaryMmlId !== undefined && { primaryMmlId: primaryMmlId || null })
+            },
+            include: {
+                primaryMml: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        product: {
+                            select: { id: true, name: true, code: true }
+                        }
+                    }
+                }
             }
         });
         res.json(item);
