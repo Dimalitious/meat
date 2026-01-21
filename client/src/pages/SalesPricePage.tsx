@@ -87,6 +87,16 @@ export default function SalesPricePage() {
     const [productPrices, setProductPrices] = useState<Map<string, number>>(new Map()); // key: "productId-supplierId"
     const [loadingSupplierPrices, setLoadingSupplierPrices] = useState(false);
 
+    // === Новые состояния для отслеживания несохранённых изменений ===
+    const [isDirty, setIsDirty] = useState(false); // Есть ли несохранённые изменения
+    const [savedPriceListSnapshot, setSavedPriceListSnapshot] = useState<string>(''); // Снимок сохранённого прайса для сравнения
+    const [showUnsavedChangesModal, setShowUnsavedChangesModal] = useState(false);
+    const [pendingTabSwitch, setPendingTabSwitch] = useState<{ mode: ViewMode, customer?: Customer | null } | null>(null);
+
+    // Кэш ID прайсов для каждого таба (чтобы восстановить при переключении)
+    const [generalPriceListId, setGeneralPriceListId] = useState<number | null>(null);
+    const [customerPriceListIds, setCustomerPriceListIds] = useState<Map<number, number>>(new Map()); // customerId -> priceListId
+
     // Загрузить закупочные цены для всех товаров в прайсе
     const fetchAllSupplierPrices = useCallback(async (productIds: number[]) => {
         if (productIds.length === 0) return;
@@ -159,14 +169,109 @@ export default function SalesPricePage() {
         }
     }, [editId]);
 
-    // When switching to general mode without edit ID
+    // === Функция для проверки изменений ===
+    const checkForChanges = useCallback(() => {
+        if (!priceList) return false;
+        const currentSnapshot = JSON.stringify({
+            items: priceList.items.map(i => ({ productId: i.productId, salePrice: i.salePrice })),
+            effectiveDate
+        });
+        return currentSnapshot !== savedPriceListSnapshot;
+    }, [priceList, savedPriceListSnapshot, effectiveDate]);
+
+    // Обновляем isDirty при изменении прайса
     useEffect(() => {
-        if (!editId && viewMode === 'general') {
-            // Reset to new general price list state
+        setIsDirty(checkForChanges());
+    }, [priceList?.items, effectiveDate, checkForChanges]);
+
+    // === Загрузка прайса по типу/дате/заказчику ===
+    const loadPriceListForTab = useCallback(async (mode: ViewMode, customerId?: number) => {
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const data: any = {
+                listType: mode === 'general' ? 'GENERAL' : 'CUSTOMER',
+                effectiveDate,
+                title: mode === 'general'
+                    ? `Общий прайс от ${new Date(effectiveDate).toLocaleDateString('ru-RU')}`
+                    : `Прайс от ${new Date(effectiveDate).toLocaleDateString('ru-RU')}`
+            };
+            if (mode === 'customer' && customerId) {
+                data.customerId = customerId;
+            }
+
+            // POST на /api/prices/sales вернёт существующий прайс или создаст новый
+            const res = await axios.post(`${API_URL}/api/prices/sales`, data, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const loadedPriceList = res.data;
+            setPriceList(loadedPriceList);
+
+            // Сохраняем снимок для отслеживания изменений
+            const snapshot = JSON.stringify({
+                items: loadedPriceList.items.map((i: PriceItem) => ({ productId: i.productId, salePrice: i.salePrice })),
+                effectiveDate: loadedPriceList.effectiveDate?.split('T')[0] || effectiveDate
+            });
+            setSavedPriceListSnapshot(snapshot);
+            setIsDirty(false);
+
+            // Кэшируем ID прайса
+            if (mode === 'general') {
+                setGeneralPriceListId(loadedPriceList.id);
+            } else if (customerId) {
+                setCustomerPriceListIds(prev => {
+                    const newMap = new Map(prev);
+                    newMap.set(customerId, loadedPriceList.id);
+                    return newMap;
+                });
+            }
+
+            if (loadedPriceList.effectiveDate) {
+                setEffectiveDate(loadedPriceList.effectiveDate.split('T')[0]);
+            }
+            if (loadedPriceList.customer) {
+                setSelectedCustomer(loadedPriceList.customer);
+            }
+        } catch (err) {
+            console.error('Failed to load price list:', err);
             setPriceList(null);
-            setSelectedCustomer(null);
+        } finally {
+            setLoading(false);
         }
-    }, [viewMode, editId]);
+    }, [effectiveDate]);
+
+    // === Обработка переключения табов с проверкой несохранённых изменений ===
+    const handleTabSwitch = useCallback((newMode: ViewMode, customer?: Customer | null) => {
+        if (isDirty && priceList && priceList.items.length > 0) {
+            // Есть несохранённые изменения — показываем предупреждение
+            setPendingTabSwitch({ mode: newMode, customer });
+            setShowUnsavedChangesModal(true);
+            return;
+        }
+
+        // Переключаемся сразу
+        executeTabSwitch(newMode, customer);
+    }, [isDirty, priceList]);
+
+    const executeTabSwitch = useCallback((newMode: ViewMode, customer?: Customer | null) => {
+        setViewMode(newMode);
+        if (newMode === 'general') {
+            setSelectedCustomer(null);
+            // Загружаем общий прайс на текущую дату
+            loadPriceListForTab('general');
+        } else {
+            if (customer) {
+                setSelectedCustomer(customer);
+                // Загружаем прайс заказчика
+                loadPriceListForTab('customer', customer.id);
+            } else {
+                setPriceList(null);
+            }
+        }
+        setShowUnsavedChangesModal(false);
+        setPendingTabSwitch(null);
+    }, [loadPriceListForTab]);
 
     const fetchCustomers = async () => {
         try {
@@ -216,10 +321,17 @@ export default function SalesPricePage() {
         }
     };
 
-    const selectCustomer = (customer: Customer) => {
+    const selectCustomer = async (customer: Customer) => {
+        if (isDirty && priceList && priceList.items.length > 0) {
+            // Есть несохранённые изменения — показываем предупреждение
+            setPendingTabSwitch({ mode: 'customer', customer });
+            setShowUnsavedChangesModal(true);
+            return;
+        }
+
         setSelectedCustomer(customer);
-        // Reset price list when switching customers
-        setPriceList(null);
+        // Загружаем прайс для этого заказчика
+        loadPriceListForTab('customer', customer.id);
     };
 
     const createNewPriceList = async () => {
@@ -297,6 +409,25 @@ export default function SalesPricePage() {
                 setEffectiveDate(res.data.effectiveDate.split('T')[0]);
             }
             alert(makeCurrent ? 'Прайс сохранён и установлен как текущий!' : 'Прайс сохранён!');
+
+            // Обновляем снимок после сохранения
+            const snapshot = JSON.stringify({
+                items: res.data.items.map((i: PriceItem) => ({ productId: i.productId, salePrice: i.salePrice })),
+                effectiveDate: res.data.effectiveDate?.split('T')[0] || effectiveDate
+            });
+            setSavedPriceListSnapshot(snapshot);
+            setIsDirty(false);
+
+            // Обновляем кэш ID
+            if (priceList.listType === 'GENERAL') {
+                setGeneralPriceListId(res.data.id);
+            } else if (priceList.customerId) {
+                setCustomerPriceListIds(prev => {
+                    const newMap = new Map(prev);
+                    newMap.set(priceList.customerId!, res.data.id);
+                    return newMap;
+                });
+            }
         } catch (err) {
             console.error('Failed to save price list:', err);
             alert('Ошибка сохранения');
@@ -448,10 +579,8 @@ export default function SalesPricePage() {
                     <div className="p-2 border-b flex gap-1 flex-shrink-0">
                         <button
                             onClick={() => {
-                                if (!editId) {
-                                    setViewMode('general');
-                                    setSelectedCustomer(null);
-                                    setPriceList(null);
+                                if (!editId && viewMode !== 'general') {
+                                    handleTabSwitch('general');
                                 }
                             }}
                             disabled={!!editId}
@@ -461,12 +590,12 @@ export default function SalesPricePage() {
                                 }`}
                         >
                             <Globe size={16} /> Общий прайс
+                            {isDirty && viewMode === 'general' && <span className="w-2 h-2 bg-orange-500 rounded-full" title="Есть несохранённые изменения"></span>}
                         </button>
                         <button
                             onClick={() => {
-                                if (!editId) {
-                                    setViewMode('customer');
-                                    setPriceList(null);
+                                if (!editId && viewMode !== 'customer') {
+                                    handleTabSwitch('customer');
                                 }
                             }}
                             disabled={!!editId}
@@ -476,6 +605,7 @@ export default function SalesPricePage() {
                                 }`}
                         >
                             <Users size={16} /> По заказчику
+                            {isDirty && viewMode === 'customer' && <span className="w-2 h-2 bg-orange-500 rounded-full" title="Есть несохранённые изменения"></span>}
                         </button>
                     </div>
 
@@ -924,6 +1054,55 @@ export default function SalesPricePage() {
                                 className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded font-medium"
                             >
                                 Готово
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Модальное окно предупреждения о несохранённых изменениях */}
+            {showUnsavedChangesModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[450px] p-6">
+                        <h3 className="text-lg font-semibold mb-4">Несохранённые изменения</h3>
+                        <p className="text-gray-600 mb-6">
+                            У вас есть несохранённые изменения в текущем прайс-листе. Что вы хотите сделать?
+                        </p>
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={() => {
+                                    setShowUnsavedChangesModal(false);
+                                    setPendingTabSwitch(null);
+                                }}
+                                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded font-medium"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                onClick={() => {
+                                    // Не сохранять — просто переключаемся
+                                    if (pendingTabSwitch) {
+                                        setIsDirty(false);
+                                        executeTabSwitch(pendingTabSwitch.mode, pendingTabSwitch.customer);
+                                    }
+                                }}
+                                className="px-4 py-2 text-orange-600 hover:bg-orange-50 rounded font-medium"
+                            >
+                                Не сохранять
+                            </button>
+                            <button
+                                onClick={async () => {
+                                    // Сохранить и переключиться
+                                    if (priceList && priceList.items.length > 0) {
+                                        await savePriceList(false);
+                                    }
+                                    if (pendingTabSwitch) {
+                                        executeTabSwitch(pendingTabSwitch.mode, pendingTabSwitch.customer);
+                                    }
+                                }}
+                                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded font-medium"
+                            >
+                                Сохранить
                             </button>
                         </div>
                     </div>

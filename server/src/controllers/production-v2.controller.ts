@@ -94,7 +94,7 @@ export const getMmlById = async (req: Request, res: Response) => {
 
         res.json({
             ...mml,
-            tree
+            rootNodes: tree
         });
     } catch (error) {
         console.error('getMmlById error:', error);
@@ -141,7 +141,7 @@ export const getMmlByProductId = async (req: Request, res: Response) => {
 
         res.json({
             ...mml,
-            tree
+            rootNodes: tree
         });
     } catch (error) {
         console.error('getMmlByProductId error:', error);
@@ -155,10 +155,14 @@ export const getMmlByProductId = async (req: Request, res: Response) => {
 export const createMml = async (req: Request, res: Response) => {
     try {
         const { productId } = req.body;
-        const userId = (req as any).user?.id;
+        const userId = (req as any).user?.userId;
 
         if (!productId) {
             return res.status(400).json({ error: 'productId is required' });
+        }
+
+        if (!userId) {
+            return res.status(401).json({ error: 'User not authenticated' });
         }
 
         // Проверка, что MML для этого товара не существует
@@ -178,11 +182,18 @@ export const createMml = async (req: Request, res: Response) => {
             include: {
                 product: {
                     select: { id: true, code: true, name: true, priceListName: true }
+                },
+                creator: {
+                    select: { id: true, name: true }
                 }
             }
         });
 
-        res.status(201).json(mml);
+        // Возвращаем с пустым деревом для нового MML
+        res.status(201).json({
+            ...mml,
+            rootNodes: []
+        });
     } catch (error) {
         console.error('createMml error:', error);
         res.status(500).json({ error: 'Failed to create MML' });
@@ -316,19 +327,52 @@ export const deleteNode = async (req: Request, res: Response) => {
 };
 
 /**
- * Зафиксировать/разблокировать MML
+ * Зафиксировать/разблокировать MML (переключение)
  */
 export const toggleMmlLock = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
-        const { isLocked } = req.body;
 
+        // Получаем текущее состояние
+        const current = await prisma.productionMml.findUnique({ where: { id } });
+        if (!current) {
+            return res.status(404).json({ error: 'MML not found' });
+        }
+
+        // Переключаем состояние
         const mml = await prisma.productionMml.update({
             where: { id },
-            data: { isLocked: Boolean(isLocked) }
+            data: { isLocked: !current.isLocked },
+            include: {
+                product: {
+                    select: { id: true, code: true, name: true, priceListName: true }
+                },
+                creator: {
+                    select: { id: true, name: true }
+                },
+                nodes: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, priceListName: true }
+                        }
+                    },
+                    orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                }
+            }
         });
 
-        res.json(mml);
+        // Строим дерево для ответа
+        const rootNodesT = mml.nodes.filter(n => n.parentNodeId === null);
+        const childNodes = mml.nodes.filter(n => n.parentNodeId !== null);
+        const tree = rootNodesT.map(root => ({
+            ...root,
+            children: childNodes.filter(c => c.parentNodeId === root.id)
+        }));
+
+        res.json({
+            ...mml,
+            rootNodes: tree
+        });
     } catch (error) {
         console.error('toggleMmlLock error:', error);
         res.status(500).json({ error: 'Failed to toggle MML lock' });
@@ -340,21 +384,27 @@ export const toggleMmlLock = async (req: Request, res: Response) => {
 // ============================================
 
 /**
- * Получить список выработок (журнал)
+ * Получить список выработок (журнал производства)
  */
 export const getProductionRuns = async (req: Request, res: Response) => {
     try {
-        const { dateFrom, dateTo, isLocked, productId } = req.query;
+        const { dateFrom, dateTo, isLocked, productId, showHidden } = req.query;
 
-        const where: any = {};
+        const where: any = {
+            // По умолчанию не показываем скрытые
+            isHidden: showHidden === 'true' ? undefined : false
+        };
 
+        // Фильтрация по дате выработки (productionDate)
         if (dateFrom || dateTo) {
-            where.createdAt = {};
-            if (dateFrom) where.createdAt.gte = new Date(String(dateFrom));
+            where.productionDate = {};
+            if (dateFrom) {
+                where.productionDate.gte = new Date(String(dateFrom));
+            }
             if (dateTo) {
                 const to = new Date(String(dateTo));
                 to.setHours(23, 59, 59, 999);
-                where.createdAt.lte = to;
+                where.productionDate.lte = to;
             }
         }
 
@@ -382,7 +432,7 @@ export const getProductionRuns = async (req: Request, res: Response) => {
                     select: { values: true }
                 }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: { productionDate: 'desc' }
         });
 
         res.json(runs);
@@ -447,7 +497,11 @@ export const getProductionRunById = async (req: Request, res: Response) => {
 
         res.json({
             ...run,
-            tree
+            mml: {
+                ...run.mml,
+                rootNodes: tree
+            },
+            values: run.values
         });
     } catch (error) {
         console.error('getProductionRunById error:', error);
@@ -460,8 +514,8 @@ export const getProductionRunById = async (req: Request, res: Response) => {
  */
 export const createProductionRun = async (req: Request, res: Response) => {
     try {
-        const { productId } = req.body;
-        const userId = (req as any).user?.id;
+        const { productId, productionDate, plannedWeight } = req.body;
+        const userId = (req as any).user?.userId;
 
         if (!productId) {
             return res.status(400).json({ error: 'productId is required' });
@@ -480,7 +534,11 @@ export const createProductionRun = async (req: Request, res: Response) => {
             data: {
                 productId: Number(productId),
                 mmlId: mml.id,
-                userId
+                userId,
+                productionDate: productionDate ? new Date(productionDate) : new Date(),
+                plannedWeight: plannedWeight ? Number(plannedWeight) : null,
+                actualWeight: 0,
+                isHidden: false
             },
             include: {
                 product: {
@@ -505,19 +563,53 @@ export const createProductionRun = async (req: Request, res: Response) => {
 export const saveProductionRunValues = async (req: Request, res: Response) => {
     try {
         const runId = Number(req.params.id);
-        const { values } = req.body; // [{ mmlNodeId, value }]
+        const { values, productionDate, plannedWeight } = req.body; // values: [{ mmlNodeId, value }]
 
         // Проверка что выработка не заблокирована
-        const run = await prisma.productionRun.findUnique({ where: { id: runId } });
-        if (!run) {
+        const existingRun = await prisma.productionRun.findUnique({
+            where: { id: runId },
+            include: {
+                mml: {
+                    include: {
+                        nodes: {
+                            include: {
+                                product: { select: { id: true } }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        if (!existingRun) {
             return res.status(404).json({ error: 'Production run not found' });
         }
-        if (run.isLocked) {
+        if (existingRun.isLocked) {
             return res.status(400).json({ error: 'Production run is locked, cannot edit' });
         }
 
-        // Upsert значений
+        // Карта узлов для получения productId и parentNodeId
+        const nodesMap = new Map(existingRun.mml.nodes.map(n => [n.id, n]));
+
+        // Проверяем, есть ли иерархия (узлы с parentNodeId !== null)
+        const hasHierarchy = existingRun.mml.nodes.some(n => n.parentNodeId !== null);
+
+        // Если есть иерархия - считаем только не-корневые узлы
+        // Если структура плоская (все parentNodeId = null) - считаем все
+        const nodesToSum = hasHierarchy
+            ? new Set(existingRun.mml.nodes.filter(n => n.parentNodeId !== null).map(n => n.id))
+            : new Set(existingRun.mml.nodes.map(n => n.id));
+
+        // Upsert значений с сохранением snapshotProductId
+        let calculatedActualWeight = 0;
         for (const { mmlNodeId, value } of values) {
+            const node = nodesMap.get(Number(mmlNodeId));
+            const numericValue = value !== null && value !== '' ? Number(value) : null;
+
+            // Суммируем узлы согласно логике
+            if (nodesToSum.has(Number(mmlNodeId)) && numericValue !== null && !isNaN(numericValue)) {
+                calculatedActualWeight += numericValue;
+            }
+
             await prisma.productionRunValue.upsert({
                 where: {
                     productionRunId_mmlNodeId: {
@@ -526,17 +618,88 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
                     }
                 },
                 update: {
-                    value: value !== null ? Number(value) : null
+                    value: numericValue,
+                    snapshotProductId: node?.productId || null
                 },
                 create: {
                     productionRunId: runId,
                     mmlNodeId: Number(mmlNodeId),
-                    value: value !== null ? Number(value) : null
+                    value: numericValue,
+                    snapshotProductId: node?.productId || null
                 }
             });
         }
 
-        res.json({ success: true });
+        // Обновить actualWeight и другие поля выработки
+        const updateData: any = {
+            actualWeight: calculatedActualWeight
+        };
+        if (productionDate !== undefined) {
+            updateData.productionDate = new Date(productionDate);
+        }
+        if (plannedWeight !== undefined) {
+            updateData.plannedWeight = plannedWeight !== null ? Number(plannedWeight) : null;
+        }
+
+        await prisma.productionRun.update({
+            where: { id: runId },
+            data: updateData
+        });
+
+        // Вернуть обновлённые данные
+        const run = await prisma.productionRun.findUnique({
+            where: { id: runId },
+            include: {
+                product: {
+                    select: { id: true, code: true, name: true, priceListName: true }
+                },
+                user: {
+                    select: { id: true, name: true }
+                },
+                mml: {
+                    include: {
+                        nodes: {
+                            include: {
+                                product: {
+                                    select: { id: true, code: true, name: true, priceListName: true }
+                                }
+                            },
+                            orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                        }
+                    }
+                },
+                values: true
+            }
+        });
+
+        if (!run) {
+            return res.status(404).json({ error: 'Production run not found' });
+        }
+
+        // Построение дерева с значениями
+        const valuesMap = new Map(run.values.map(v => [v.mmlNodeId, v.value]));
+        const nodes = run.mml.nodes;
+        const rootNodesT = nodes.filter(n => n.parentNodeId === null);
+        const childNodes = nodes.filter(n => n.parentNodeId !== null);
+        const tree = rootNodesT.map(root => ({
+            ...root,
+            value: valuesMap.get(root.id) ?? null,
+            children: childNodes
+                .filter(c => c.parentNodeId === root.id)
+                .map(child => ({
+                    ...child,
+                    value: valuesMap.get(child.id) ?? null
+                }))
+        }));
+
+        res.json({
+            ...run,
+            mml: {
+                ...run.mml,
+                rootNodes: tree
+            },
+            values: run.values
+        });
     } catch (error) {
         console.error('saveProductionRunValues error:', error);
         res.status(500).json({ error: 'Failed to save production run values' });
@@ -544,19 +707,68 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
 };
 
 /**
- * Зафиксировать/разблокировать выработку
+ * Зафиксировать/разблокировать выработку (переключение)
  */
 export const toggleProductionRunLock = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
-        const { isLocked } = req.body;
+
+        // Получаем текущее состояние
+        const current = await prisma.productionRun.findUnique({ where: { id } });
+        if (!current) {
+            return res.status(404).json({ error: 'Production run not found' });
+        }
 
         const run = await prisma.productionRun.update({
             where: { id },
-            data: { isLocked: Boolean(isLocked) }
+            data: { isLocked: !current.isLocked },
+            include: {
+                product: {
+                    select: { id: true, code: true, name: true, priceListName: true }
+                },
+                user: {
+                    select: { id: true, name: true }
+                },
+                mml: {
+                    include: {
+                        nodes: {
+                            include: {
+                                product: {
+                                    select: { id: true, code: true, name: true, priceListName: true }
+                                }
+                            },
+                            orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                        }
+                    }
+                },
+                values: true
+            }
         });
 
-        res.json(run);
+        // Построение дерева с значениями
+        const valuesMap = new Map(run.values.map(v => [v.mmlNodeId, v.value]));
+        const nodes = run.mml.nodes;
+        const rootNodesT = nodes.filter(n => n.parentNodeId === null);
+        const childNodes = nodes.filter(n => n.parentNodeId !== null);
+        const tree = rootNodesT.map(root => ({
+            ...root,
+            value: valuesMap.get(root.id) ?? null,
+            children: childNodes
+                .filter(c => c.parentNodeId === root.id)
+                .map(child => ({
+                    ...child,
+                    value: valuesMap.get(child.id) ?? null
+                }))
+        }));
+
+        res.json({
+            ...run,
+            mml: {
+                ...run.mml,
+                rootNodes: tree
+            },
+            values: run.values
+        });
     } catch (error) {
         console.error('toggleProductionRunLock error:', error);
         res.status(500).json({ error: 'Failed to toggle production run lock' });
@@ -569,7 +781,7 @@ export const toggleProductionRunLock = async (req: Request, res: Response) => {
 export const cloneProductionRun = async (req: Request, res: Response) => {
     try {
         const sourceId = Number(req.params.id);
-        const userId = (req as any).user?.id;
+        const userId = (req as any).user?.userId;
 
         const source = await prisma.productionRun.findUnique({
             where: { id: sourceId },
@@ -580,23 +792,28 @@ export const cloneProductionRun = async (req: Request, res: Response) => {
             return res.status(404).json({ error: 'Source production run not found' });
         }
 
-        // Создать новую выработку
+        // Создать новую выработку с копированием полей
         const newRun = await prisma.productionRun.create({
             data: {
                 productId: source.productId,
                 mmlId: source.mmlId,
                 userId,
-                isLocked: false
+                isLocked: false,
+                productionDate: new Date(),
+                plannedWeight: source.plannedWeight,
+                actualWeight: source.actualWeight,
+                isHidden: false
             }
         });
 
-        // Скопировать значения
+        // Скопировать значения с snapshotProductId
         if (source.values.length > 0) {
             await prisma.productionRunValue.createMany({
                 data: source.values.map(v => ({
                     productionRunId: newRun.id,
                     mmlNodeId: v.mmlNodeId,
-                    value: v.value
+                    value: v.value,
+                    snapshotProductId: v.snapshotProductId
                 }))
             });
         }
@@ -631,3 +848,58 @@ export const deleteProductionRun = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to delete production run' });
     }
 };
+
+/**
+ * Массовое скрытие выработок
+ */
+export const hideProductionRuns = async (req: Request, res: Response) => {
+    try {
+        const { ids } = req.body; // массив ID выработок
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'ids array is required' });
+        }
+
+        await prisma.productionRun.updateMany({
+            where: {
+                id: { in: ids.map(Number) }
+            },
+            data: {
+                isHidden: true
+            }
+        });
+
+        res.json({ success: true, hiddenCount: ids.length });
+    } catch (error) {
+        console.error('hideProductionRuns error:', error);
+        res.status(500).json({ error: 'Failed to hide production runs' });
+    }
+};
+
+/**
+ * Показать скрытые выработки (отменить скрытие)
+ */
+export const unhideProductionRuns = async (req: Request, res: Response) => {
+    try {
+        const { ids } = req.body;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'ids array is required' });
+        }
+
+        await prisma.productionRun.updateMany({
+            where: {
+                id: { in: ids.map(Number) }
+            },
+            data: {
+                isHidden: false
+            }
+        });
+
+        res.json({ success: true, unhiddenCount: ids.length });
+    } catch (error) {
+        console.error('unhideProductionRuns error:', error);
+        res.status(500).json({ error: 'Failed to unhide production runs' });
+    }
+};
+

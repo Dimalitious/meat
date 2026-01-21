@@ -17,7 +17,9 @@ import {
     saveProductionRunValues,
     toggleProductionRunLock,
     cloneProductionRun,
-    deleteProductionRun
+    deleteProductionRun,
+    hideProductionRuns,
+    unhideProductionRuns
 } from '../controllers/production-v2.controller';
 
 const router = Router();
@@ -78,4 +80,11 @@ router.post('/runs/:id/clone', cloneProductionRun);
 // Удалить выработку
 router.delete('/runs/:id', deleteProductionRun);
 
+// Массовое скрытие выработок
+router.post('/runs/hide', hideProductionRuns);
+
+// Отмена массового скрытия выработок
+router.post('/runs/unhide', unhideProductionRuns);
+
 export default router;
+

@@ -20,6 +20,7 @@ import {
     ChevronRight,
     FolderOpen,
     DollarSign,
+    MessageCircle,
 } from 'lucide-react';
 
 interface NavItem {
@@ -53,10 +54,10 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Главная', path: '/', icon: <LayoutDashboard size={20} /> },
         { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
         { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} /> },
-        { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={20} /> },
         { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} /> },
         { label: 'Производство', path: '/production', icon: <Warehouse size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
+        { label: 'Telegram заказы', path: '/telegram-orders', icon: <MessageCircle size={20} /> },
         {
             label: 'Прайсы',
             icon: <DollarSign size={20} />,
@@ -69,9 +70,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             label: 'Журналы',
             icon: <FolderOpen size={20} />,
             children: [
+                { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} /> },
                 { label: 'Журнал сводок', path: '/journals/summary', icon: <BookOpen size={18} /> },
                 { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
                 { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
+                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },
                 { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} /> },
             ]
         },
@@ -82,12 +85,22 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Товары', path: '/products', icon: <Package size={18} /> },
                 { label: 'Клиенты', path: '/customers', icon: <Users size={18} /> },
                 { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} /> },
+                { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} /> },
                 { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
                 { label: 'Производственный персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
+                { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} /> },
+            ]
+        },
+        {
+            label: 'Закупки',
+            icon: <ShoppingCart size={20} />,
+            children: [
+                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },
             ]
         },
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
     ];
+
 
     const renderNavItem = (item: NavItem, depth = 0) => {
         if (item.children) {

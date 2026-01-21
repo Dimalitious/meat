@@ -20,6 +20,10 @@ model User {
   // Production Module v2 relations
   createdMmls     ProductionMml[]   @relation("MmlCreator")
   productionRuns  ProductionRun[]   @relation("RunUser")
+  // Purchase Module relations
+  purchases       Purchase[]        @relation("PurchaseCreator")
+  // Warehouse Module relations
+  warehouses      Warehouse[]       @relation("WarehouseResponsible")
 }
 
 model District {
@@ -61,6 +65,9 @@ model Product {
   productionMmls        ProductionMml[]           // MML для этого товара
   mmlNodes              ProductionMmlNode[]       @relation("MmlNodeProduct")  // Узлы MML где этот товар
   productionRuns        ProductionRun[]           @relation("ProductRuns")     // Выработки этого товара
+  runValueSnapshots     ProductionRunValue[]      @relation("RunValueSnapshot") // Снимки значений
+  // Purchase Module relations
+  purchaseItemsRel      PurchaseItem[]            @relation("PurchaseItemProduct") // Строки закупок с этим товаром
 }
 
 model Customer {
@@ -96,6 +103,9 @@ model Supplier {
   products     SupplierProduct[]
   purchasePriceListSuppliers PurchasePriceListSupplier[]
   purchasePriceItems         PurchasePriceItem[]
+  // Purchase Module relations
+  purchases       PurchaseSupplier[]
+  purchaseItems   PurchaseItem[]
 }
 
 model SupplierProduct {
@@ -483,13 +493,17 @@ model ProductionMmlNode {
 // Выработка (документ журнала производства)
 // Заменяет старый ProductionBatch
 model ProductionRun {
-  id          Int       @id @default(autoincrement())
-  productId   Int       // Что вырабатывается (основной товар)
-  mmlId       Int       // Какой MML применён
-  userId      Int       // Кто сделал выработку
-  isLocked    Boolean   @default(false)  // Зафиксировано (нельзя редактировать)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              Int       @id @default(autoincrement())
+  productId       Int       // Что вырабатывается (основной товар)
+  mmlId           Int       // Какой MML применён
+  userId          Int       // Кто сделал выработку
+  productionDate  DateTime  @default(now())  // Редактируемая дата выработки
+  plannedWeight   Decimal?  @db.Decimal(14, 3)  // Вес (план) - ввод пользователя
+  actualWeight    Decimal?  @db.Decimal(14, 3)  // Фактический вес (сумма значений)
+  isLocked        Boolean   @default(false)  // Зафиксировано (нельзя редактировать)
+  isHidden        Boolean   @default(false)  // Скрыто в журнале
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
   
   product     Product   @relation("ProductRuns", fields: [productId], references: [id])
   mml         ProductionMml @relation(fields: [mmlId], references: [id])
@@ -501,23 +515,206 @@ model ProductionRun {
   @@index([userId])
   @@index([isLocked])
   @@index([createdAt])
+  @@index([productionDate])
+  @@index([isHidden, productionDate])
 }
 
 // Значения выработки по узлам MML
 // Каждый узел дерева имеет одно числовое значение в документе выработки
 model ProductionRunValue {
-  id              Int       @id @default(autoincrement())
-  productionRunId Int       // FK → ProductionRun
-  mmlNodeId       Int       // FK → ProductionMmlNode
-  value           Decimal?  @db.Decimal(14, 3)  // Числовое значение (ввод пользователя)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                Int       @id @default(autoincrement())
+  productionRunId   Int       // FK → ProductionRun
+  mmlNodeId         Int       // FK → ProductionMmlNode
+  snapshotProductId Int?      // Снимок productId узла на момент выработки (для истории)
+  value             Decimal?  @db.Decimal(14, 3)  // Числовое значение (ввод пользователя)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   
   run             ProductionRun     @relation(fields: [productionRunId], references: [id], onDelete: Cascade)
   node            ProductionMmlNode @relation(fields: [mmlNodeId], references: [id])
+  snapshotProduct Product?          @relation("RunValueSnapshot", fields: [snapshotProductId], references: [id])
   
   @@unique([productionRunId, mmlNodeId])  // Один узел = одно значение в документе
   @@index([productionRunId])
   @@index([mmlNodeId])
 }
 
+// ============================================
+// МОДУЛЬ ЗАКУПКИ
+// ============================================
+
+// Справочник типов оплат
+model PaymentType {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  isDefault   Boolean   @default(false)  // Тип оплаты по умолчанию
+  isDisabled  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  purchaseItems PurchaseItem[]
+}
+
+// Шапка закупки (документ)
+model Purchase {
+  id              Int       @id @default(autoincrement())
+  purchaseDate    DateTime  // Дата закупки (редактируемая)
+  totalAmount     Decimal?  @db.Decimal(14, 2)  // Итоговая сумма закупки
+  createdByUserId Int       // Кто создал
+  isDisabled      Boolean   @default(false)     // Для скрытия в журнале
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  createdByUser   User              @relation("PurchaseCreator", fields: [createdByUserId], references: [id])
+  suppliers       PurchaseSupplier[]
+  items           PurchaseItem[]
+  
+  @@index([purchaseDate])
+  @@index([isDisabled, purchaseDate])
+  @@index([createdByUserId])
+}
+
+// Связь закупки с поставщиками (мультипоставщик)
+model PurchaseSupplier {
+  id          Int       @id @default(autoincrement())
+  purchaseId  Int
+  supplierId  Int
+  createdAt   DateTime  @default(now())
+  
+  purchase    Purchase  @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  supplier    Supplier  @relation(fields: [supplierId], references: [id])
+  
+  @@unique([purchaseId, supplierId])
+  @@index([purchaseId])
+  @@index([supplierId])
+}
+
+// Строки закупки (товары)
+model PurchaseItem {
+  id              Int       @id @default(autoincrement())
+  purchaseId      Int
+  supplierId      Int       // Какой поставщик в этой закупке
+  productId       Int
+  price           Decimal   @db.Decimal(14, 2)  // Закупочная цена
+  qty             Decimal   @db.Decimal(14, 3)  // Количество
+  amount          Decimal   @db.Decimal(14, 2)  // Сумма (price * qty)
+  paymentTypeId   Int?      // Тип оплаты (может быть разный для каждой строки)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  purchase      Purchase      @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  supplier      Supplier      @relation(fields: [supplierId], references: [id])
+  product       Product       @relation("PurchaseItemProduct", fields: [productId], references: [id])
+  paymentType   PaymentType?  @relation(fields: [paymentTypeId], references: [id])
+  
+  @@index([purchaseId, supplierId])
+  @@index([purchaseId])
+  @@index([supplierId])
+  @@index([productId])
+}
+
+// ============================================
+// TELEGRAM USERBOT MODULE
+// ============================================
+
+// Группы Telegram для мониторинга
+model TelegramGroup {
+  id            Int       @id @default(autoincrement())
+  chatId        String    @unique  // Telegram chat ID (может быть отрицательным)
+  title         String              // Название группы
+  username      String?             // @username группы (если публичная)
+  isActive      Boolean   @default(true)   // Активен ли мониторинг
+  lastMessageId Int?                // ID последнего обработанного сообщения
+  parsePatterns Json?               // Кастомные regex-шаблоны для парсинга заказов
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  orderDrafts   TelegramOrderDraft[]
+  
+  @@index([isActive])
+}
+
+// Черновики заказов из Telegram (перед переносом в Order)
+model TelegramOrderDraft {
+  id              Int       @id @default(autoincrement())
+  groupId         Int       // FK -> TelegramGroup
+  messageId       String    // Telegram message ID
+  messageText     String    // Оригинальный текст сообщения
+  messageDate     DateTime  // Дата сообщения в Telegram
+  senderName      String?   // Имя отправителя
+  senderId        String?   // Telegram ID отправителя
+  
+  // Распознанные данные
+  parsedOrderNumber String?  // Номер заказа (если распознан)
+  parsedCustomer    String?  // Клиент (если распознан)
+  parsedAddress     String?  // Адрес доставки (если распознан)
+  
+  status          String    @default("pending")  // pending, approved, rejected, transferred
+  transferredOrderId Int?   // FK -> Order (если заказ перенесён)
+  approvedBy      String?   // Кто одобрил
+  approvedAt      DateTime?
+  rejectedReason  String?   // Причина отклонения
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  group           TelegramGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  items           TelegramOrderDraftItem[]
+  
+  @@unique([groupId, messageId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// Строки черновика заказа
+model TelegramOrderDraftItem {
+  id              Int       @id @default(autoincrement())
+  draftId         Int       // FK -> TelegramOrderDraft
+  
+  // Распознанные данные из сообщения
+  rawProductName  String    // Как написано в сообщении
+  rawQuantity     String    // Как написано в сообщении (например "10кг" или "5 шт")
+  rawPrice        String?   // Цена (если указана)
+  
+  // Связь с реальными данными (заполняется при подтверждении)
+  productId       Int?      // FK -> Product (если сопоставлен)
+  quantity        Float?    // Преобразованное количество
+  price           Decimal?  @db.Decimal(14, 2)
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  draft           TelegramOrderDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  
+  @@index([draftId])
+  @@index([productId])
+}
+
+// ============================================
+// WAREHOUSE MODULE (Справочник складов)
+// ============================================
+
+model Warehouse {
+  id                  Int       @id @default(autoincrement())
+  code                String    @unique  // Уникальный код склада для импорта
+  name                String               // Название склада (обяз.)
+  address             String               // Адрес склада (обяз.)
+  phone               String?              // Телефон
+  responsibleUserId   Int?                 // FK → User (ответственный)
+  comment             String?              // Комментарий
+  isDisabled          Boolean   @default(false)
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  
+  // Relations
+  responsibleUser     User?     @relation("WarehouseResponsible", fields: [responsibleUserId], references: [id])
+  
+  // Future: documents linking
+  // orders            Order[]
+  // purchases         Purchase[]
+  // productionRuns    ProductionRun[]
+  
+  @@index([name])
+  @@index([isDisabled])
+}

@@ -1,12 +1,18 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { initializeSocketServer } from './socket';
 
-// Force restart: 2026-01-21 09:33
+// Force restart: 2026-01-22 00:36 - Socket.IO Integration
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
+
+// Initialize Socket.IO
+const io = initializeSocketServer(httpServer);
 
 import authRoutes from './routes/auth.routes';
 import productsRoutes from './routes/products.routes';
@@ -23,10 +29,20 @@ import productionRoutes from './routes/production.routes';
 import pricesRoutes from './routes/prices.routes';
 import purchasePriceListsRoutes from './routes/purchasePriceLists.routes';
 import mmlBatchRoutes from './routes/mmlBatch.routes';
+import paymentTypesRoutes from './routes/paymentTypes.routes';
+import purchasesRoutes from './routes/purchases.routes';
+import telegramRoutes from './controllers/telegram.controller';
+import warehousesRoutes from './routes/warehouses.routes';
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // Increased limit for batch imports
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Middleware to attach Socket.IO to requests
+app.use((req: Request, res: Response, next: NextFunction) => {
+    (req as any).io = io;
+    next();
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productsRoutes);
@@ -47,12 +63,29 @@ app.use('/api/production-module', mmlBatchRoutes);
 import productionV2Routes from './routes/production-v2.routes';
 app.use('/api/production-v2', productionV2Routes);
 
+// Purchase Module
+app.use('/api/payment-types', paymentTypesRoutes);
+app.use('/api/purchases', purchasesRoutes);
+
+// Telegram Agent Module
+app.use('/api/telegram', telegramRoutes);
+
+// Warehouses Module (Справочник складов)
+app.use('/api/warehouses', warehousesRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
+// Health check (also for telegram agent)
 app.get('/health', (req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+app.get('/api/health', (req: Request, res: Response) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+httpServer.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    console.log(`Socket.IO server ready`);
+});
+

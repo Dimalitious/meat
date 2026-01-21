@@ -1,0 +1,6 @@
+# Telegram Agent Session Files
+# This directory stores Telegram session data
+
+# Keep this file to track the folder
+*.session
+!.gitkeep

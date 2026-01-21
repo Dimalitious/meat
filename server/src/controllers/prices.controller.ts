@@ -306,7 +306,7 @@ export const getSalesPriceById = async (req: Request, res: Response) => {
     }
 };
 
-// Создать новый продажный прайс
+// Создать новый продажный прайс или вернуть существующий (upsert-логика)
 export const createSalesPrice = async (req: Request, res: Response) => {
     try {
         const { listType, customerId, title, effectiveDate } = req.body;
@@ -321,6 +321,40 @@ export const createSalesPrice = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Effective date is required' });
         }
 
+        const parsedDate = new Date(effectiveDate);
+        // Нормализуем дату до начала дня для точного сравнения
+        const dateStart = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate());
+        const dateEnd = new Date(parsedDate.getFullYear(), parsedDate.getMonth(), parsedDate.getDate(), 23, 59, 59, 999);
+
+        // Сначала ищем существующий прайс на эту дату
+        const existingPriceList = await prisma.salesPriceList.findFirst({
+            where: {
+                listType,
+                customerId: listType === 'CUSTOMER' ? customerId : null,
+                effectiveDate: {
+                    gte: dateStart,
+                    lte: dateEnd
+                },
+                isHidden: false
+            },
+            orderBy: [
+                { createdAt: 'desc' }
+            ],
+            include: {
+                customer: true,
+                items: {
+                    include: { product: true },
+                    orderBy: { createdAt: 'asc' }
+                }
+            }
+        });
+
+        // Если нашли — возвращаем его
+        if (existingPriceList) {
+            return res.json(existingPriceList);
+        }
+
+        // Если не нашли — создаём новый
         const priceList = await prisma.salesPriceList.create({
             data: {
                 listType,
