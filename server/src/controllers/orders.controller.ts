@@ -1,28 +1,47 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
 
-// Get all orders (with optional filters)
+// Get all orders (with optional filters) - Journal style
 export const getOrders = async (req: Request, res: Response) => {
     try {
-        const { date, customerId, status } = req.query;
+        const { dateFrom, dateTo, customerId, status, showDisabled } = req.query;
 
         let where: any = {};
-        if (date) where.date = new Date(String(date));
+
+        // Фильтрация по периоду дат
+        if (dateFrom || dateTo) {
+            where.date = {};
+            if (dateFrom) where.date.gte = new Date(String(dateFrom));
+            if (dateTo) {
+                // Устанавливаем конец дня для корректной фильтрации
+                const endDate = new Date(String(dateTo));
+                endDate.setHours(23, 59, 59, 999);
+                where.date.lte = endDate;
+            }
+        }
+
         if (customerId) where.customerId = Number(customerId);
         if (status) where.status = String(status);
+
+        // По умолчанию отключенные заказы не показываются
+        if (showDisabled !== 'true') {
+            where.isDisabled = false;
+        }
 
         const orders = await prisma.order.findMany({
             where,
             include: {
                 customer: true,
+                expeditor: true,
                 items: {
                     include: { product: true }
                 }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: { date: 'desc' }
         });
         res.json(orders);
     } catch (error) {
+        console.error('getOrders error:', error);
         res.status(500).json({ error: 'Failed to fetch orders' });
     }
 };
@@ -186,6 +205,31 @@ export const deleteOrder = async (req: Request, res: Response) => {
         res.json({ message: 'Order deleted' });
     } catch (error) {
         res.status(400).json({ error: 'Failed to delete order' });
+    }
+};
+
+// Disable Orders (массовое отключение заказов - soft disable)
+export const disableOrders = async (req: Request, res: Response) => {
+    try {
+        const { ids } = req.body;
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'No order IDs provided' });
+        }
+
+        const result = await prisma.order.updateMany({
+            where: { id: { in: ids.map((id: number) => Number(id)) } },
+            data: { isDisabled: true }
+        });
+
+        res.json({
+            success: true,
+            disabledCount: result.count,
+            message: `${result.count} заказ(ов) отключено`
+        });
+    } catch (error) {
+        console.error('disableOrders error:', error);
+        res.status(500).json({ error: 'Failed to disable orders' });
     }
 };
 

@@ -9,6 +9,11 @@ interface Customer {
     id: number;
     code: string;
     name: string;
+    legalName?: string;
+    district?: { name: string } | null;
+    manager?: { name: string } | null;
+    phone?: string;
+    isActive?: boolean;
 }
 
 interface Product {
@@ -50,6 +55,7 @@ export default function SalesPricePage() {
 
     const [viewMode, setViewMode] = useState<ViewMode>('general');
     const [customers, setCustomers] = useState<Customer[]>([]);
+    const [selectedCustomers, setSelectedCustomers] = useState<Customer[]>([]);
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
     const [priceList, setPriceList] = useState<SalesPriceList | null>(null);
     const [loading, setLoading] = useState(false);
@@ -65,6 +71,10 @@ export default function SalesPricePage() {
     const [showProductModal, setShowProductModal] = useState(false);
     const [products, setProducts] = useState<Product[]>([]);
     const [productSearch, setProductSearch] = useState('');
+
+    // Customer selection modal
+    const [showCustomerModal, setShowCustomerModal] = useState(false);
+    const [customerModalSearch, setCustomerModalSearch] = useState('');
 
     useEffect(() => {
         fetchCustomers();
@@ -266,7 +276,7 @@ export default function SalesPricePage() {
         });
     };
 
-    const filteredCustomers = customers.filter(c =>
+    const filteredCustomers = selectedCustomers.filter(c =>
         c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
         c.code.toLowerCase().includes(customerSearch.toLowerCase())
     );
@@ -276,6 +286,41 @@ export default function SalesPricePage() {
         p.code.toLowerCase().includes(productSearch.toLowerCase()) ||
         (p.priceListName && p.priceListName.toLowerCase().includes(productSearch.toLowerCase()))
     );
+
+    // Фильтрация заказчиков в модальном окне
+    const filteredModalCustomers = customers.filter(c => {
+        if (c.isActive === false) return false;
+        const search = customerModalSearch.toLowerCase();
+        if (!search) return true;
+        return (
+            c.name.toLowerCase().includes(search) ||
+            c.code.toLowerCase().includes(search) ||
+            (c.legalName && c.legalName.toLowerCase().includes(search)) ||
+            (c.phone && c.phone.toLowerCase().includes(search)) ||
+            (c.district?.name && c.district.name.toLowerCase().includes(search)) ||
+            (c.manager?.name && c.manager.name.toLowerCase().includes(search))
+        );
+    });
+
+    // Проверка, добавлен ли заказчик
+    const isCustomerAdded = (customerId: number) =>
+        selectedCustomers.some(c => c.id === customerId);
+
+    // Добавить заказчика в список
+    const handleAddCustomer = (customer: Customer) => {
+        if (!isCustomerAdded(customer.id)) {
+            setSelectedCustomers([...selectedCustomers, customer]);
+        }
+    };
+
+    // Удалить заказчика из списка
+    const handleRemoveCustomer = (customerId: number) => {
+        setSelectedCustomers(selectedCustomers.filter(c => c.id !== customerId));
+        if (selectedCustomer?.id === customerId) {
+            setSelectedCustomer(null);
+            setPriceList(null);
+        }
+    };
 
     const canCreate = viewMode === 'general' || (viewMode === 'customer' && selectedCustomer);
 
@@ -366,46 +411,61 @@ export default function SalesPricePage() {
                     {viewMode === 'customer' && (
                         <>
                             <div className="p-4 border-b flex-shrink-0">
-                                <h2 className="font-semibold mb-2">Выбор заказчика</h2>
-                                <div className="relative">
+                                <h2 className="font-semibold mb-2">Заказчики</h2>
+                                <div className="relative mb-3">
                                     <Search className="absolute left-2 top-2.5 text-gray-400" size={16} />
                                     <input
                                         type="text"
-                                        placeholder="Поиск заказчика..."
+                                        placeholder="Поиск в списке..."
                                         className="w-full border rounded pl-8 pr-3 py-2 text-sm"
                                         value={customerSearch}
                                         onChange={e => setCustomerSearch(e.target.value)}
                                     />
                                 </div>
+                                <button
+                                    onClick={() => setShowCustomerModal(true)}
+                                    disabled={!!editId}
+                                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded text-sm font-medium flex items-center justify-center gap-1 disabled:opacity-50"
+                                >
+                                    <Plus size={16} /> Добавить заказчика
+                                </button>
                             </div>
 
                             <div className="flex-1 overflow-auto p-2">
-                                {filteredCustomers.map(customer => (
-                                    <button
-                                        key={customer.id}
-                                        onClick={() => selectCustomer(customer)}
-                                        disabled={!!editId}
-                                        className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${selectedCustomer?.id === customer.id
-                                            ? 'bg-blue-100 text-blue-700'
-                                            : editId ? 'text-gray-400' : 'hover:bg-gray-100'
-                                            }`}
-                                    >
-                                        <div className="font-medium">{customer.name}</div>
-                                        <div className="text-xs text-gray-500">{customer.code}</div>
-                                    </button>
-                                ))}
-                            </div>
-
-                            <div className="p-3 border-t flex-shrink-0">
-                                <a
-                                    href="/customers"
-                                    target="_blank"
-                                    className="text-blue-600 hover:underline text-sm flex items-center justify-center gap-1"
-                                >
-                                    <Plus size={14} />
-                                    Добавить заказчика
-                                    <ExternalLink size={12} />
-                                </a>
+                                {filteredCustomers.length === 0 ? (
+                                    <div className="text-center text-gray-500 py-8 text-sm">
+                                        {selectedCustomers.length === 0
+                                            ? 'Нажмите "Добавить заказчика"'
+                                            : 'Заказчики не найдены'}
+                                    </div>
+                                ) : (
+                                    filteredCustomers.map(customer => (
+                                        <div
+                                            key={customer.id}
+                                            className={`w-full text-left px-3 py-2 rounded text-sm transition-colors flex justify-between items-center mb-1 ${selectedCustomer?.id === customer.id
+                                                ? 'bg-blue-100 text-blue-700'
+                                                : 'hover:bg-gray-100'
+                                                }`}
+                                        >
+                                            <button
+                                                onClick={() => selectCustomer(customer)}
+                                                className="flex-1 text-left"
+                                            >
+                                                <div className="font-medium">{customer.name}</div>
+                                                <div className="text-xs text-gray-500">{customer.code}</div>
+                                            </button>
+                                            {!editId && (
+                                                <button
+                                                    onClick={() => handleRemoveCustomer(customer.id)}
+                                                    className="text-red-400 hover:text-red-600 p-1"
+                                                    title="Удалить из прайса"
+                                                >
+                                                    <X size={14} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
                             </div>
                         </>
                     )}
@@ -663,6 +723,101 @@ export default function SalesPricePage() {
                                 Открыть справочник товаров
                                 <ExternalLink size={12} />
                             </a>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Customer Selection Modal */}
+            {showCustomerModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[900px] max-h-[700px] flex flex-col">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h3 className="text-lg font-semibold">Выбор заказчика</h3>
+                            <button
+                                onClick={() => {
+                                    setShowCustomerModal(false);
+                                    setCustomerModalSearch('');
+                                }}
+                                className="text-gray-500 hover:text-gray-700"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-4 border-b">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                                <input
+                                    type="text"
+                                    placeholder="Поиск по названию, юр. названию, району, менеджеру, телефону..."
+                                    className="w-full border rounded pl-9 pr-3 py-2"
+                                    value={customerModalSearch}
+                                    onChange={e => setCustomerModalSearch(e.target.value)}
+                                    autoFocus
+                                />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full">
+                                <thead className="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Название</th>
+                                        <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Юридическое название</th>
+                                        <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Район</th>
+                                        <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Менеджер</th>
+                                        <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Телефон</th>
+                                        <th className="w-32"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredModalCustomers.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={6} className="text-center py-8 text-gray-500">
+                                                Заказчики не найдены
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredModalCustomers.map(customer => {
+                                            const added = isCustomerAdded(customer.id);
+                                            return (
+                                                <tr key={customer.id} className="border-b hover:bg-gray-50">
+                                                    <td className="px-4 py-3">
+                                                        <div className="font-medium">{customer.name}</div>
+                                                        <div className="text-xs text-gray-500">{customer.code}</div>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-sm text-gray-600">{customer.legalName || '-'}</td>
+                                                    <td className="px-4 py-3 text-sm text-gray-600">{customer.district?.name || '-'}</td>
+                                                    <td className="px-4 py-3 text-sm text-gray-600">{customer.manager?.name || '-'}</td>
+                                                    <td className="px-4 py-3 text-sm text-gray-600">{customer.phone || '-'}</td>
+                                                    <td className="px-4 py-3 text-center">
+                                                        {added ? (
+                                                            <span className="text-green-600 text-sm font-medium">✓ Добавлен</span>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => handleAddCustomer(customer)}
+                                                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm"
+                                                            >
+                                                                + Добавить
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="p-4 border-t flex justify-end bg-gray-50">
+                            <button
+                                onClick={() => {
+                                    setShowCustomerModal(false);
+                                    setCustomerModalSearch('');
+                                }}
+                                className="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded font-medium"
+                            >
+                                Готово
+                            </button>
                         </div>
                     </div>
                 </div>

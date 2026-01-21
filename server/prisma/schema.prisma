@@ -107,6 +107,7 @@ model Order {
   expeditorId       Int?
   totalAmount       Decimal            @default(0.0)
   totalWeight       Float              @default(0.0)
+  isDisabled        Boolean            @default(false)  // Отключенный заказ (soft-disable)
   
   // Expedition fields
   deliveryAddress   String?            // Адрес доставки/точка
@@ -123,6 +124,10 @@ model Order {
   items             OrderItem[]
   stockTransactions StockTransaction[]
   attachments       OrderAttachment[]
+  
+  @@index([date])
+  @@index([isDisabled])
+  @@index([isDisabled, date])
 }
 
 // Вложения к заказу (подписи, накладные, документы)

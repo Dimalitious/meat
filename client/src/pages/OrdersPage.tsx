@@ -3,7 +3,10 @@ import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Link } from 'react-router-dom';
 import { Button } from "../components/ui/Button";
-import { UserPlus, Printer, X, FileCheck, Download, Loader2 } from 'lucide-react';
+import {
+    Plus, Printer, X, FileCheck, Download, Loader2,
+    UserPlus, Filter, RefreshCw, Calendar, Check, Power, Edit, Eye
+} from 'lucide-react';
 import { toPng } from 'html-to-image';
 import {
     Table,
@@ -58,13 +61,33 @@ const PAYMENT_LABELS: { [key: string]: string } = {
     'Перечисление': 'Перечисление'
 };
 
+const STATUS_LABELS: { [key: string]: string } = {
+    'new': 'Новый',
+    'assigned': 'Назначен',
+    'processing': 'В обработке',
+    'in_delivery': 'В доставке',
+    'delivered': 'Доставлен',
+    'rework': 'На доработке',
+    'cancelled': 'Отменён'
+};
+
 const OrdersPage = () => {
     const [orders, setOrders] = useState<Order[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
     const [expeditors, setExpeditors] = useState<Expeditor[]>([]);
     const [showExpeditorModal, setShowExpeditorModal] = useState(false);
     const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
     const [searchExpeditor, setSearchExpeditor] = useState('');
+
+    // Date filters - default: last week
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const [dateFrom, setDateFrom] = useState(weekAgo);
+    const [dateTo, setDateTo] = useState(today);
+
+    // Selection for disable
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [disabling, setDisabling] = useState(false);
 
     // Signed invoice modal
     const [showSignedInvoiceModal, setShowSignedInvoiceModal] = useState(false);
@@ -75,19 +98,26 @@ const OrdersPage = () => {
     const invoiceRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        fetchOrders();
         fetchExpeditors();
+        // Fetch orders on mount with default dates
+        fetchOrders();
     }, []);
 
     const fetchOrders = async () => {
+        setLoading(true);
+        setSelectedIds(new Set());
         try {
             const token = localStorage.getItem('token');
-            const res = await axios.get(`${API_URL}/api/orders`, {
+            const params = new URLSearchParams();
+            if (dateFrom) params.append('dateFrom', dateFrom);
+            if (dateTo) params.append('dateTo', dateTo);
+
+            const res = await axios.get(`${API_URL}/api/orders?${params}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setOrders(res.data);
         } catch (err) {
-            console.error(err);
+            console.error('Failed to fetch orders:', err);
         } finally {
             setLoading(false);
         }
@@ -105,56 +135,50 @@ const OrdersPage = () => {
         }
     };
 
-    const deleteOrder = async (id: number) => {
-        if (!confirm('Вы уверены, что хотите удалить этот заказ?')) return;
-        try {
-            const token = localStorage.getItem('token');
-            await axios.delete(`${API_URL}/api/orders/${id}`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            fetchOrders();
-        } catch (err) {
-            alert('Ошибка при удалении');
+    const toggleSelectAll = () => {
+        if (selectedIds.size === orders.length) {
+            setSelectedIds(new Set());
+        } else {
+            setSelectedIds(new Set(orders.map(o => o.id)));
         }
     };
 
-    const confirmOrder = async (id: number) => {
-        if (!confirm('Подтвердить заказ? Это отправит его на сборку.')) return;
-        try {
-            const token = localStorage.getItem('token');
-            await axios.patch(`${API_URL}/api/orders/${id}`,
-                { status: 'processing' },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            fetchOrders();
-        } catch (err) {
-            console.error(err);
-            alert('Не удалось подтвердить заказ');
+    const toggleSelect = (id: number) => {
+        const newSet = new Set(selectedIds);
+        if (newSet.has(id)) {
+            newSet.delete(id);
+        } else {
+            newSet.add(id);
         }
+        setSelectedIds(newSet);
     };
 
-    const sendToRework = async (order: Order) => {
-        if (!order.idn) {
-            alert('У заказа нет связи со сводкой');
+    const handleDisableSelected = async () => {
+        if (selectedIds.size === 0) {
+            alert('Выберите заказы для отключения');
             return;
         }
-        if (!confirm('Отправить заказ на доработку? Он вернётся в сводку заказов.')) return;
 
+        if (!window.confirm(`Выключить выбранные заказы (${selectedIds.size})? Они пропадут из списка.`)) {
+            return;
+        }
+
+        setDisabling(true);
         try {
             const token = localStorage.getItem('token');
-            await axios.patch(`${API_URL}/api/orders/${order.id}`,
-                { status: 'rework' },
+            await axios.post(`${API_URL}/api/orders/disable`,
+                { ids: Array.from(selectedIds) },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
-            await axios.post(`${API_URL}/api/summary-orders/rework`,
-                { idn: order.idn },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            alert('Заказ отправлен на доработку');
-            fetchOrders();
+
+            // Refresh the list
+            await fetchOrders();
+            alert(`${selectedIds.size} заказ(ов) выключено`);
         } catch (err) {
-            console.error(err);
-            alert('Ошибка при отправке на доработку');
+            console.error('Failed to disable orders:', err);
+            alert('Ошибка при отключении заказов');
+        } finally {
+            setDisabling(false);
         }
     };
 
@@ -189,7 +213,6 @@ const OrdersPage = () => {
         setShowSignedInvoiceModal(true);
 
         try {
-            // Fetch full order with items
             const token = localStorage.getItem('token');
             const res = await axios.get(`${API_URL}/api/orders/${order.id}`, {
                 headers: { Authorization: `Bearer ${token}` }
@@ -233,60 +256,176 @@ const OrdersPage = () => {
         )
     );
 
-    if (loading) return <div className="p-8 text-center text-slate-500">Загрузка...</div>;
+    const formatDate = (dateStr: string) => {
+        return new Date(dateStr).toLocaleDateString('ru-RU');
+    };
+
+    const getStatusStyle = (status: string) => {
+        switch (status) {
+            case 'new': return 'bg-yellow-100 text-yellow-800';
+            case 'assigned': return 'bg-purple-100 text-purple-800';
+            case 'processing': return 'bg-primary-100 text-primary-800';
+            case 'in_delivery': return 'bg-blue-100 text-blue-800';
+            case 'delivered': return 'bg-emerald-100 text-emerald-800';
+            case 'rework': return 'bg-orange-100 text-orange-800';
+            default: return 'bg-gray-100 text-gray-800';
+        }
+    };
 
     const totalSum = selectedInvoiceOrder?.items?.reduce((sum, item) => sum + Number(item.amount), 0) || 0;
 
     return (
         <div>
+            {/* Header */}
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold tracking-tight text-slate-900">Заказы</h1>
+                <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+                    Журнал заказов
+                </h1>
                 <Link to="/orders/new">
                     <Button>
-                        + Новый заказ
+                        <Plus size={16} className="mr-2" />
+                        Новый заказ
                     </Button>
                 </Link>
             </div>
 
+            {/* Filters */}
+            <div className="bg-white rounded-lg shadow p-4 mb-4">
+                <div className="flex items-center gap-4 flex-wrap">
+                    <Filter size={18} className="text-gray-500" />
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium">С:</label>
+                        <div className="relative">
+                            <Calendar size={16} className="absolute left-2 top-2.5 text-gray-400" />
+                            <input
+                                type="date"
+                                value={dateFrom}
+                                onChange={e => setDateFrom(e.target.value)}
+                                className="border rounded pl-8 pr-3 py-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium">По:</label>
+                        <div className="relative">
+                            <Calendar size={16} className="absolute left-2 top-2.5 text-gray-400" />
+                            <input
+                                type="date"
+                                value={dateTo}
+                                onChange={e => setDateTo(e.target.value)}
+                                className="border rounded pl-8 pr-3 py-2 text-sm"
+                            />
+                        </div>
+                    </div>
+                    <Button onClick={fetchOrders} variant="outline" disabled={loading}>
+                        <RefreshCw size={16} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+                        Сформировать
+                    </Button>
+                </div>
+            </div>
+
+            {/* Action Bar */}
+            <div className="bg-white rounded-lg shadow p-3 mb-4 flex items-center gap-4">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDisableSelected}
+                    disabled={selectedIds.size === 0 || disabling}
+                    className={selectedIds.size > 0 ? 'border-red-300 text-red-700 hover:bg-red-50' : ''}
+                >
+                    <Power size={16} className="mr-2" />
+                    Выключить выбранные {selectedIds.size > 0 && `(${selectedIds.size})`}
+                </Button>
+
+                {selectedIds.size > 0 && (
+                    <span className="text-sm text-gray-500">
+                        Выбрано: {selectedIds.size} из {orders.length}
+                    </span>
+                )}
+            </div>
+
+            {/* Table */}
             <div className="rounded-md border border-slate-200 overflow-hidden bg-white shadow-sm">
                 <Table>
                     <TableHeader className="bg-slate-50">
                         <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
+                            <TableHead className="w-[50px]">
+                                <button
+                                    onClick={toggleSelectAll}
+                                    className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedIds.size === orders.length && orders.length > 0
+                                        ? 'bg-blue-600 border-blue-600 text-white'
+                                        : 'border-gray-300 hover:border-gray-400'
+                                        }`}
+                                >
+                                    {selectedIds.size === orders.length && orders.length > 0 && (
+                                        <Check size={14} />
+                                    )}
+                                </button>
+                            </TableHead>
                             <TableHead className="w-[80px]">№</TableHead>
-                            <TableHead>Дата</TableHead>
-                            <TableHead>№ Сводки</TableHead>
+                            <TableHead className="w-[110px]">Дата</TableHead>
+                            <TableHead className="w-[100px]">№ Сводки</TableHead>
                             <TableHead>Клиент</TableHead>
-                            <TableHead>Сумма</TableHead>
-                            <TableHead>Экспедитор</TableHead>
-                            <TableHead>Накладная</TableHead>
-                            <TableHead>Статус</TableHead>
-                            <TableHead className="text-right">Действия</TableHead>
+                            <TableHead className="w-[120px] text-right">Сумма</TableHead>
+                            <TableHead className="w-[120px]">Экспедитор</TableHead>
+                            <TableHead className="w-[100px]">Накладная</TableHead>
+                            <TableHead className="w-[110px]">Статус</TableHead>
+                            <TableHead className="text-right w-[200px]">Действия</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {orders.length === 0 ? (
+                        {loading ? (
                             <TableRow>
-                                <TableCell colSpan={9} className="h-24 text-center text-slate-500">
-                                    Нет заказов
+                                <TableCell colSpan={10} className="h-24 text-center text-slate-500">
+                                    <RefreshCw size={20} className="animate-spin inline mr-2" />
+                                    Загрузка...
+                                </TableCell>
+                            </TableRow>
+                        ) : orders.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={10} className="h-24 text-center text-slate-500">
+                                    Нет заказов за выбранный период
                                 </TableCell>
                             </TableRow>
                         ) : (
                             orders.map((o) => (
-                                <TableRow key={o.id}>
+                                <TableRow
+                                    key={o.id}
+                                    className={selectedIds.has(o.id) ? 'bg-blue-50' : ''}
+                                >
+                                    <TableCell>
+                                        <button
+                                            onClick={() => toggleSelect(o.id)}
+                                            className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${selectedIds.has(o.id)
+                                                ? 'bg-blue-600 border-blue-600 text-white'
+                                                : 'border-gray-300 hover:border-gray-400'
+                                                }`}
+                                        >
+                                            {selectedIds.has(o.id) && <Check size={14} />}
+                                        </button>
+                                    </TableCell>
                                     <TableCell className="font-medium">#{o.id}</TableCell>
-                                    <TableCell>{new Date(o.date).toLocaleDateString('ru-RU')}</TableCell>
+                                    <TableCell>{formatDate(o.date)}</TableCell>
                                     <TableCell className="text-gray-500 font-mono text-xs">
-                                        {o.idn || '-'}
+                                        {o.idn || '—'}
                                     </TableCell>
                                     <TableCell className="font-medium text-slate-700">{o.customer?.name}</TableCell>
-                                    <TableCell>{Number(o.totalAmount).toLocaleString('ru-RU')} ₽</TableCell>
+                                    <TableCell className="text-right font-medium">
+                                        {Number(o.totalAmount).toLocaleString('ru-RU')} ₽
+                                    </TableCell>
                                     <TableCell>
                                         {o.expeditor ? (
                                             <span className="text-purple-600 font-medium text-sm">
                                                 {o.expeditor.name}
                                             </span>
                                         ) : (
-                                            <span className="text-gray-400 text-sm">—</span>
+                                            <button
+                                                onClick={() => openExpeditorModal(o.id)}
+                                                className="text-gray-400 hover:text-purple-600 text-sm flex items-center gap-1"
+                                            >
+                                                <UserPlus size={14} />
+                                                Назначить
+                                            </button>
                                         )}
                                     </TableCell>
                                     <TableCell>
@@ -304,27 +443,20 @@ const OrdersPage = () => {
                                         )}
                                     </TableCell>
                                     <TableCell>
-                                        <span className={`px-2.5 py-0.5 inline-flex text-xs font-medium rounded-full ${o.status === 'new' ? 'bg-yellow-100 text-yellow-800' :
-                                                o.status === 'assigned' ? 'bg-purple-100 text-purple-800' :
-                                                    o.status === 'processing' ? 'bg-primary-100 text-primary-800' :
-                                                        o.status === 'in_delivery' ? 'bg-blue-100 text-blue-800' :
-                                                            o.status === 'delivered' ? 'bg-emerald-100 text-emerald-800' :
-                                                                o.status === 'rework' ? 'bg-orange-100 text-orange-800' :
-                                                                    'bg-gray-100 text-gray-800'
-                                            }`}>
-                                            {o.status === 'new' ? 'Новый' :
-                                                o.status === 'assigned' ? 'Назначен' :
-                                                    o.status === 'processing' ? 'В обработке' :
-                                                        o.status === 'in_delivery' ? 'В доставке' :
-                                                            o.status === 'delivered' ? 'Доставлен' :
-                                                                o.status === 'rework' ? 'На доработке' : o.status}
+                                        <span className={`px-2.5 py-0.5 inline-flex text-xs font-medium rounded-full ${getStatusStyle(o.status)}`}>
+                                            {STATUS_LABELS[o.status] || o.status}
                                         </span>
                                     </TableCell>
                                     <TableCell className="text-right">
-                                        <div className="flex justify-end gap-1 flex-wrap">
+                                        <div className="flex justify-end gap-1">
                                             <Link to={`/orders/${o.id}`}>
-                                                <Button variant="outline" size="sm">
-                                                    Просмотр
+                                                <Button variant="outline" size="sm" title="Просмотр">
+                                                    <Eye size={14} />
+                                                </Button>
+                                            </Link>
+                                            <Link to={`/orders/${o.id}/edit`}>
+                                                <Button variant="outline" size="sm" title="Редактировать">
+                                                    <Edit size={14} />
                                                 </Button>
                                             </Link>
                                             <Link to={`/orders/${o.id}/print`}>
@@ -332,47 +464,6 @@ const OrdersPage = () => {
                                                     <Printer size={14} />
                                                 </Button>
                                             </Link>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => openExpeditorModal(o.id)}
-                                                className="text-purple-600 border-purple-300 hover:bg-purple-50"
-                                                title="Прикрепить экспедитора"
-                                            >
-                                                <UserPlus size={14} />
-                                            </Button>
-                                            <Link to={`/orders/${o.id}/edit`}>
-                                                <Button variant="secondary" size="sm">
-                                                    Ред.
-                                                </Button>
-                                            </Link>
-                                            {o.status === 'new' && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    onClick={() => confirmOrder(o.id)}
-                                                    className="text-primary-600 hover:text-primary-700 hover:bg-primary-50"
-                                                >
-                                                    Подтвердить
-                                                </Button>
-                                            )}
-                                            <Button
-                                                variant="destructive"
-                                                size="sm"
-                                                onClick={() => deleteOrder(o.id)}
-                                            >
-                                                Удалить
-                                            </Button>
-                                            {o.idn && o.status !== 'rework' && (
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() => sendToRework(o)}
-                                                    className="text-orange-600 border-orange-300 hover:bg-orange-50"
-                                                >
-                                                    На доработку
-                                                </Button>
-                                            )}
                                         </div>
                                     </TableCell>
                                 </TableRow>
@@ -381,6 +472,16 @@ const OrdersPage = () => {
                     </TableBody>
                 </Table>
             </div>
+
+            {/* Footer info */}
+            {orders.length > 0 && (
+                <div className="mt-4 flex justify-between items-center text-sm text-gray-500">
+                    <span>Всего заказов: {orders.length}</span>
+                    <span>
+                        Общая сумма: {orders.reduce((sum, o) => sum + Number(o.totalAmount), 0).toLocaleString('ru-RU')} ₽
+                    </span>
+                </div>
+            )}
 
             {/* Expeditor Selection Modal */}
             {showExpeditorModal && (
@@ -478,7 +579,7 @@ const OrdersPage = () => {
                                     <div className="text-center mb-6 border-b pb-4">
                                         <div className="text-2xl font-bold">НАКЛАДНАЯ №{selectedInvoiceOrder.id}</div>
                                         <div className="text-gray-500 mt-1">
-                                            от {new Date(selectedInvoiceOrder.date).toLocaleDateString('ru-RU')}
+                                            от {formatDate(selectedInvoiceOrder.date)}
                                         </div>
                                         {selectedInvoiceOrder.idn && (
                                             <div className="text-sm text-gray-400 font-mono mt-1">IDN: {selectedInvoiceOrder.idn}</div>

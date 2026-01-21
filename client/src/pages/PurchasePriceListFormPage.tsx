@@ -8,6 +8,10 @@ interface Supplier {
     id: number;
     code: string;
     name: string;
+    legalName?: string;
+    altName?: string;
+    phone?: string;
+    telegram?: string;
     isActive: boolean;
 }
 
@@ -47,6 +51,7 @@ export default function PurchasePriceListFormPage() {
     const [showProductModal, setShowProductModal] = useState(false);
     const [productSearch, setProductSearch] = useState('');
     const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
+    const [supplierModalSearch, setSupplierModalSearch] = useState('');
 
     useEffect(() => {
         fetchSuppliers();
@@ -276,9 +281,22 @@ export default function PurchasePriceListFormPage() {
         p.code.toLowerCase().includes(productSearch.toLowerCase())
     );
 
-    const availableSuppliers = allSuppliers.filter(s =>
-        !suppliersData.some(sd => sd.supplierId === s.id)
-    );
+    // Фильтрация поставщиков в модальном окне
+    const filteredModalSuppliers = allSuppliers.filter(s => {
+        const search = supplierModalSearch.toLowerCase();
+        if (!search) return true;
+        return (
+            s.name.toLowerCase().includes(search) ||
+            (s.altName && s.altName.toLowerCase().includes(search)) ||
+            (s.legalName && s.legalName.toLowerCase().includes(search)) ||
+            (s.phone && s.phone.toLowerCase().includes(search)) ||
+            (s.telegram && s.telegram.toLowerCase().includes(search))
+        );
+    });
+
+    // Проверка, добавлен ли поставщик
+    const isSupplierAdded = (supplierId: number) =>
+        suppliersData.some(sd => sd.supplierId === supplierId);
 
     return (
         <div className="p-6 h-full flex flex-col">
@@ -448,40 +466,86 @@ export default function PurchasePriceListFormPage() {
             {/* Модальное окно добавления поставщика */}
             {showAddSupplierModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                    <div className="bg-slate-800 rounded-lg w-[500px] max-h-[600px] flex flex-col">
+                    <div className="bg-slate-800 rounded-lg w-[900px] max-h-[700px] flex flex-col">
                         <div className="p-4 border-b border-slate-700 flex justify-between items-center">
-                            <h3 className="text-lg font-semibold text-white">Добавить поставщика</h3>
+                            <h3 className="text-lg font-semibold text-white">Выбор поставщика</h3>
                             <button
-                                onClick={() => setShowAddSupplierModal(false)}
+                                onClick={() => {
+                                    setShowAddSupplierModal(false);
+                                    setSupplierModalSearch('');
+                                }}
                                 className="text-gray-400 hover:text-white text-xl"
                             >
                                 ×
                             </button>
                         </div>
-                        <div className="p-4 flex-1 overflow-auto">
-                            {availableSuppliers.length === 0 ? (
-                                <div className="text-center text-gray-500 py-8">
-                                    Все поставщики уже добавлены или отсутствуют
-                                </div>
-                            ) : (
-                                availableSuppliers.map(s => (
-                                    <div
-                                        key={s.id}
-                                        className="p-3 bg-slate-700 rounded-lg mb-2 cursor-pointer hover:bg-slate-600"
-                                        onClick={() => handleAddSupplier(s)}
-                                    >
-                                        <div className="text-white font-medium">{s.name}</div>
-                                        <div className="text-sm text-gray-400">{s.code}</div>
-                                    </div>
-                                ))
-                            )}
+                        <div className="p-4 border-b border-slate-700">
+                            <input
+                                type="text"
+                                placeholder="Поиск по названию, альт. названию, телефону, Telegram..."
+                                value={supplierModalSearch}
+                                onChange={(e) => setSupplierModalSearch(e.target.value)}
+                                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white"
+                            />
                         </div>
-                        <div className="p-4 border-t border-slate-700">
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full">
+                                <thead className="bg-slate-700 sticky top-0">
+                                    <tr>
+                                        <th className="text-left p-3 text-gray-300">Название поставщика</th>
+                                        <th className="text-left p-3 text-gray-300">Юридическое название</th>
+                                        <th className="text-left p-3 text-gray-300">Телефон</th>
+                                        <th className="text-left p-3 text-gray-300">Telegram</th>
+                                        <th className="w-32"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredModalSuppliers.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={5} className="text-center p-8 text-gray-500">
+                                                Поставщики не найдены
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredModalSuppliers.map(s => {
+                                            const added = isSupplierAdded(s.id);
+                                            return (
+                                                <tr key={s.id} className="border-t border-slate-700 hover:bg-slate-700/50">
+                                                    <td className="p-3">
+                                                        <div className="text-white font-medium">{s.name}</div>
+                                                        {s.altName && <div className="text-sm text-gray-500">{s.altName}</div>}
+                                                    </td>
+                                                    <td className="p-3 text-gray-300">{s.legalName || '-'}</td>
+                                                    <td className="p-3 text-gray-300">{s.phone || '-'}</td>
+                                                    <td className="p-3 text-gray-300">{s.telegram || '-'}</td>
+                                                    <td className="p-3 text-center">
+                                                        {added ? (
+                                                            <span className="text-green-400 text-sm">✓ Добавлен</span>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => handleAddSupplier(s)}
+                                                                className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded text-sm"
+                                                            >
+                                                                + Добавить
+                                                            </button>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="p-4 border-t border-slate-700 flex justify-end">
                             <button
-                                onClick={() => navigate('/suppliers')}
-                                className="text-blue-400 hover:text-blue-300"
+                                onClick={() => {
+                                    setShowAddSupplierModal(false);
+                                    setSupplierModalSearch('');
+                                }}
+                                className="bg-slate-600 hover:bg-slate-500 text-white px-6 py-2 rounded-lg"
                             >
-                                → Перейти в справочник поставщиков
+                                Готово
                             </button>
                         </div>
                     </div>

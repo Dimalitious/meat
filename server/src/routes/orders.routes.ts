@@ -6,9 +6,10 @@ const router = Router();
 router.use(authenticateToken);
 
 // Standard CRUD
-router.get('/', orders.getOrders);
-router.get('/:id', orders.getOrder);
-router.post('/', orders.createOrder);
+router.get('/', orders.getOrders);                         // GET /api/orders?dateFrom=&dateTo=&showDisabled=
+router.post('/', orders.createOrder);                      // POST /api/orders
+router.post('/disable', orders.disableOrders);             // POST /api/orders/disable { ids: number[] }
+router.get('/:id', orders.getOrder);                       // GET /api/orders/:id
 router.patch('/:id', orders.updateOrder);
 router.put('/:id', orders.updateOrder);
 router.delete('/:id', orders.deleteOrder);
