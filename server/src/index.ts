@@ -22,6 +22,7 @@ import journalsRoutes from './routes/journals.routes';
 import productionRoutes from './routes/production.routes';
 import pricesRoutes from './routes/prices.routes';
 import purchasePriceListsRoutes from './routes/purchasePriceLists.routes';
+import mmlBatchRoutes from './routes/mmlBatch.routes';
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // Increased limit for batch imports
@@ -40,6 +41,7 @@ app.use('/api/journals', journalsRoutes);
 app.use('/api/production', productionRoutes);
 app.use('/api/prices', pricesRoutes);
 app.use('/api/purchase-price-lists', purchasePriceListsRoutes);
+app.use('/api/production-module', mmlBatchRoutes);
 app.use('/api', masterRoutes); // /api/customers etc.
 
 app.get('/health', (req: Request, res: Response) => {

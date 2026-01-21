@@ -17,6 +17,9 @@ model User {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   productionStaff ProductionStaff?
+  // Production relations
+  createdMmls     ProductionMml[]   @relation("MmlCreator")
+  productionBatches ProductionBatch[] @relation("BatchUser")
 }
 
 model District {
@@ -54,6 +57,11 @@ model Product {
   productionItems       ProductionItem[]
   purchasePriceItems    PurchasePriceItem[]
   salesPriceItems       SalesPriceItem[]
+  // Production relations
+  productionMmls        ProductionMml[]
+  productionBatches     ProductionBatch[]
+  mmlComponents         ProductionMmlItem[]   @relation("MmlComponent")
+  batchComponents       ProductionBatchItem[] @relation("BatchComponent")
 }
 
 model Customer {
@@ -417,3 +425,76 @@ model SalesPriceItem {
   @@index([rowDate])
 }
 
+// ========== PRODUCTION MODULE ==========
+
+// MML (калькуляция/техкарта) - шапка
+model ProductionMml {
+  id          Int       @id @default(autoincrement())
+  productId   Int       @unique  // Позиция, для которой создан MML
+  createdBy   Int       // User ID создателя
+  isLocked    Boolean   @default(false)  // Зафиксирован галочкой
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  product     Product   @relation(fields: [productId], references: [id])
+  creator     User      @relation("MmlCreator", fields: [createdBy], references: [id])
+  items       ProductionMmlItem[]
+  batches     ProductionBatch[]
+  
+  @@index([isLocked])
+}
+
+// MML - строки (5 строк)
+model ProductionMmlItem {
+  id                 Int       @id @default(autoincrement())
+  mmlId              Int       // FK -> ProductionMml
+  lineNo             Int       // 1..5
+  componentProductId Int?      // FK -> Product (товар в строке)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  
+  mml               ProductionMml @relation(fields: [mmlId], references: [id], onDelete: Cascade)
+  componentProduct  Product?  @relation("MmlComponent", fields: [componentProductId], references: [id])
+  
+  @@unique([mmlId, lineNo])
+  @@index([componentProductId])
+}
+
+// Выработка (Batch) - шапка карточки
+model ProductionBatch {
+  id          Int       @id @default(autoincrement())
+  productId   Int       // Что вырабатывается
+  quantity    Decimal?  @db.Decimal(14, 3)  // Количество (вводит пользователь)
+  userId      Int       // Кто сделал выработку
+  mmlId       Int?      // Какой шаблон использовался (nullable)
+  isLocked    Boolean   @default(false)  // Зафиксировано галочкой
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  product     Product   @relation(fields: [productId], references: [id])
+  user        User      @relation("BatchUser", fields: [userId], references: [id])
+  mml         ProductionMml? @relation(fields: [mmlId], references: [id])
+  items       ProductionBatchItem[]
+  
+  @@index([productId])
+  @@index([userId])
+  @@index([isLocked])
+  @@index([createdAt])
+}
+
+// Выработка - строки (5 строк)
+model ProductionBatchItem {
+  id                 Int       @id @default(autoincrement())
+  batchId            Int       // FK -> ProductionBatch
+  lineNo             Int       // 1..5
+  componentProductId Int?      // FK -> Product (товар в строке)
+  value              Decimal?  @db.Decimal(14, 3)  // Число (заполняет пользователь)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  
+  batch             ProductionBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  componentProduct  Product?  @relation("BatchComponent", fields: [componentProductId], references: [id])
+  
+  @@unique([batchId, lineNo])
+  @@index([componentProductId])
+}

@@ -34,6 +34,7 @@ import SalesPricePage from './pages/SalesPricePage';
 import SalesPriceJournalPage from './pages/SalesPriceJournalPage';
 import PurchasePriceListsPage from './pages/PurchasePriceListsPage';
 import PurchasePriceListFormPage from './pages/PurchasePriceListFormPage';
+import ProductionModulePage from './pages/ProductionModulePage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -103,6 +104,7 @@ function App() {
           {/* Production routes */}
           <Route path="/production" element={<ProtectedRoute><ProductionPage /></ProtectedRoute>} />
           <Route path="/production/staff" element={<ProtectedRoute><ProductionStaffPage /></ProtectedRoute>} />
+          <Route path="/production/module" element={<ProtectedRoute><ProductionModulePage /></ProtectedRoute>} />
           <Route path="/journals/production" element={<ProtectedRoute><ProductionJournalPage /></ProtectedRoute>} />
           {/* Price routes */}
           <Route path="/prices/purchase" element={<ProtectedRoute><PurchasePricePage /></ProtectedRoute>} />

@@ -65,7 +65,7 @@ export default function PurchasePriceListFormPage() {
         try {
             const token = localStorage.getItem('token');
             if (!token) return;
-            const res = await axios.get(`${API_URL}/api/suppliers?activeOnly=true`, {
+            const res = await axios.get(`${API_URL}/api/suppliers`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setAllSuppliers(Array.isArray(res.data) ? res.data : []);
@@ -509,10 +509,16 @@ export default function PurchasePriceListFormPage() {
                                     ) : (
                                         filteredModalSuppliers.map(s => {
                                             const added = isSupplierAdded(s.id);
+                                            const isInactive = !s.isActive;
                                             return (
-                                                <tr key={s.id} className="border-t border-slate-700 hover:bg-slate-700/50">
+                                                <tr key={s.id} className={`border-t border-slate-700 hover:bg-slate-700/50 ${isInactive ? 'opacity-50' : ''}`}>
                                                     <td className="p-3">
-                                                        <div className="text-white font-medium">{s.name}</div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-white font-medium">{s.name}</span>
+                                                            {isInactive && (
+                                                                <span className="text-xs bg-red-600/50 text-red-200 px-1.5 py-0.5 rounded">Неактивен</span>
+                                                            )}
+                                                        </div>
                                                         {s.altName && <div className="text-sm text-gray-500">{s.altName}</div>}
                                                     </td>
                                                     <td className="p-3 text-gray-300">{s.legalName || '-'}</td>
@@ -521,6 +527,8 @@ export default function PurchasePriceListFormPage() {
                                                     <td className="p-3 text-center">
                                                         {added ? (
                                                             <span className="text-green-400 text-sm">✓ Добавлен</span>
+                                                        ) : isInactive ? (
+                                                            <span className="text-gray-500 text-sm">—</span>
                                                         ) : (
                                                             <button
                                                                 onClick={() => handleAddSupplier(s)}
