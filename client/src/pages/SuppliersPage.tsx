@@ -14,6 +14,16 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Plus, X, Save, Settings } from 'lucide-react';
 
+interface Mml {
+    id: number;
+    productId: number;
+    product: {
+        id: number;
+        name: string;
+        code: string;
+    };
+}
+
 interface Supplier {
     id: number;
     code: string;
@@ -23,6 +33,8 @@ interface Supplier {
     phone?: string;
     telegram?: string;
     isActive: boolean;
+    primaryMmlId?: number | null;
+    primaryMml?: Mml | null;
 }
 
 const SuppliersPage = () => {
@@ -30,6 +42,9 @@ const SuppliersPage = () => {
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+
+    // MML list for dropdown
+    const [mmlList, setMmlList] = useState<Mml[]>([]);
 
     // Filters
     const [filterCode, setFilterCode] = useState('');
@@ -40,19 +55,21 @@ const SuppliersPage = () => {
     const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
 
     // Form data
-    const [formData, setFormData] = useState<Partial<Supplier>>({
+    const [formData, setFormData] = useState<Partial<Supplier> & { primaryMmlId?: number | null }>({
         code: '',
         name: '',
         legalName: '',
         altName: '',
         phone: '',
         telegram: '',
+        primaryMmlId: null,
     });
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         fetchSuppliers();
+        fetchMmlList();
     }, []);
 
     const fetchSuppliers = async () => {
@@ -69,6 +86,18 @@ const SuppliersPage = () => {
         }
     };
 
+    const fetchMmlList = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.get(`${API_URL}/api/production-v2/mml`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setMmlList(res.data);
+        } catch (err) {
+            console.error('Failed to fetch MML list:', err);
+        }
+    };
+
     const handleEdit = (supplier: Supplier) => {
         setEditingSupplier(supplier);
         setFormData({
@@ -78,6 +107,7 @@ const SuppliersPage = () => {
             altName: supplier.altName || '',
             phone: supplier.phone || '',
             telegram: supplier.telegram || '',
+            primaryMmlId: supplier.primaryMmlId || null,
         });
         setIsModalOpen(true);
     };
@@ -91,6 +121,7 @@ const SuppliersPage = () => {
             altName: '',
             phone: '',
             telegram: '',
+            primaryMmlId: null,
         });
         setIsModalOpen(true);
     };
@@ -165,6 +196,7 @@ const SuppliersPage = () => {
                 altName: formData.altName || null,
                 phone: formData.phone || null,
                 telegram: formData.telegram || null,
+                primaryMmlId: formData.primaryMmlId || null,
             };
 
             if (editingSupplier) {
@@ -499,6 +531,31 @@ const SuppliersPage = () => {
                                         placeholder="@username"
                                     />
                                 </div>
+                            </div>
+
+                            {/* Первичный MML */}
+                            <div className="border-t border-slate-100 pt-4 mt-2">
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    Первичный MML (калькуляция)
+                                </label>
+                                <select
+                                    value={formData.primaryMmlId || ''}
+                                    onChange={e => setFormData({
+                                        ...formData,
+                                        primaryMmlId: e.target.value ? Number(e.target.value) : null
+                                    })}
+                                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                    <option value="">— Не назначен —</option>
+                                    {mmlList.map(mml => (
+                                        <option key={mml.id} value={mml.id}>
+                                            {mml.product.name} ({mml.product.code})
+                                        </option>
+                                    ))}
+                                </select>
+                                <p className="text-xs text-slate-500 mt-1">
+                                    MML фиксируется в закупочном прайсе на момент создания
+                                </p>
                             </div>
 
                             <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 mt-2">
