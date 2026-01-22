@@ -379,6 +379,42 @@ export const toggleMmlLock = async (req: Request, res: Response) => {
     }
 };
 
+/**
+ * Удалить MML
+ */
+export const deleteMml = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+
+        const mml = await prisma.productionMml.findUnique({
+            where: { id },
+            include: {
+                _count: { select: { runs: true } }
+            }
+        });
+
+        if (!mml) {
+            return res.status(404).json({ error: 'MML not found' });
+        }
+
+        if (mml.isLocked) {
+            return res.status(400).json({ error: 'Cannot delete locked MML. Unlock it first.' });
+        }
+
+        if (mml._count.runs > 0) {
+            return res.status(400).json({ error: 'Cannot delete MML with production runs. Delete runs first.' });
+        }
+
+        // Удаляем MML (cascade удалит узлы)
+        await prisma.productionMml.delete({ where: { id } });
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('deleteMml error:', error);
+        res.status(500).json({ error: 'Failed to delete MML' });
+    }
+};
+
 // ============================================
 // PRODUCTION RUN - Выработка (журнал)
 // ============================================
@@ -521,9 +557,19 @@ export const createProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'productId is required' });
         }
 
-        // Проверка что MML существует
+        // Проверка что MML существует и получаем его структуру
         const mml = await prisma.productionMml.findUnique({
-            where: { productId: Number(productId) }
+            where: { productId: Number(productId) },
+            include: {
+                nodes: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, priceListName: true }
+                        }
+                    },
+                    orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                }
+            }
         });
 
         if (!mml) {
@@ -550,7 +596,28 @@ export const createProductionRun = async (req: Request, res: Response) => {
             }
         });
 
-        res.status(201).json(run);
+        // Построение дерева MML для ответа
+        const rootNodes = mml.nodes.filter(n => n.parentNodeId === null);
+        const childNodes = mml.nodes.filter(n => n.parentNodeId !== null);
+        const tree = rootNodes.map(root => ({
+            ...root,
+            value: null,
+            children: childNodes
+                .filter(c => c.parentNodeId === root.id)
+                .map(child => ({
+                    ...child,
+                    value: null
+                }))
+        }));
+
+        res.status(201).json({
+            ...run,
+            mml: {
+                ...mml,
+                rootNodes: tree
+            },
+            values: []
+        });
     } catch (error) {
         console.error('createProductionRun error:', error);
         res.status(500).json({ error: 'Failed to create production run' });
@@ -599,8 +666,10 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
             ? new Set(existingRun.mml.nodes.filter(n => n.parentNodeId !== null).map(n => n.id))
             : new Set(existingRun.mml.nodes.map(n => n.id));
 
-        // Upsert значений с сохранением snapshotProductId
+        // Подготовка данных для batch-операции (оптимизация производительности)
         let calculatedActualWeight = 0;
+        const valuesToCreate: { productionRunId: number; mmlNodeId: number; value: number | null; snapshotProductId: number | null }[] = [];
+
         for (const { mmlNodeId, value } of values) {
             const node = nodesMap.get(Number(mmlNodeId));
             const numericValue = value !== null && value !== '' ? Number(value) : null;
@@ -610,25 +679,23 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
                 calculatedActualWeight += numericValue;
             }
 
-            await prisma.productionRunValue.upsert({
-                where: {
-                    productionRunId_mmlNodeId: {
-                        productionRunId: runId,
-                        mmlNodeId: Number(mmlNodeId)
-                    }
-                },
-                update: {
-                    value: numericValue,
-                    snapshotProductId: node?.productId || null
-                },
-                create: {
-                    productionRunId: runId,
-                    mmlNodeId: Number(mmlNodeId),
-                    value: numericValue,
-                    snapshotProductId: node?.productId || null
-                }
+            valuesToCreate.push({
+                productionRunId: runId,
+                mmlNodeId: Number(mmlNodeId),
+                value: numericValue,
+                snapshotProductId: node?.productId || null
             });
         }
+
+        // Атомарная транзакция: удаляем старые значения и создаём новые одним batch
+        await prisma.$transaction([
+            prisma.productionRunValue.deleteMany({
+                where: { productionRunId: runId }
+            }),
+            prisma.productionRunValue.createMany({
+                data: valuesToCreate
+            })
+        ]);
 
         // Обновить actualWeight и другие поля выработки
         const updateData: any = {

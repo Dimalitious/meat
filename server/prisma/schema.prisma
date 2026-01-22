@@ -24,6 +24,10 @@ model User {
   purchases       Purchase[]        @relation("PurchaseCreator")
   // Warehouse Module relations
   warehouses      Warehouse[]       @relation("WarehouseResponsible")
+  // Production-Purchase Integration
+  productionDocs      ProductionDoc[]         @relation("ProductionDocCreator")
+  productionInputs    ProductionInput[]       @relation("ProductionInputLoader")
+  cuttingLines        ProductionCuttingLine[] @relation("CuttingLineCreator")
 }
 
 model District {
@@ -68,6 +72,15 @@ model Product {
   runValueSnapshots     ProductionRunValue[]      @relation("RunValueSnapshot") // Снимки значений
   // Purchase Module relations
   purchaseItemsRel      PurchaseItem[]            @relation("PurchaseItemProduct") // Строки закупок с этим товаром
+  // SVOD Module relations
+  svodLines             SvodLine[]
+  svodSupplierValues    SvodSupplierValue[]
+  // Production-Purchase Integration
+  productionInputs      ProductionInput[]         @relation("ProductionInputProduct")
+  productionOutputs     ProductionOutput[]        @relation("ProductionOutputProduct")
+  cuttingLineOutputs    ProductionCuttingLine[]   @relation("CuttingLineOutput")
+  // Customer-specific product catalogs
+  customerProducts      CustomerProduct[]
 }
 
 model Customer {
@@ -84,6 +97,26 @@ model Customer {
   orders                Order[]
   summaryJournalEntries SummaryOrderJournal[]
   salesPriceLists       SalesPriceList[]
+  // Customer-specific product catalog (персональный каталог товаров клиента)
+  customerProducts      CustomerProduct[]
+}
+
+// Связь клиента с его товарами (персональный каталог)
+// Позволяет клиенту видеть только те товары, которые он обычно заказывает
+model CustomerProduct {
+  id          Int       @id @default(autoincrement())
+  customerId  Int       // FK → Customer
+  productId   Int       // FK → Product
+  sortOrder   Int       @default(0)    // Порядок отображения в каталоге клиента
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id])
+  
+  @@unique([customerId, productId])  // Один товар - один раз у клиента
+  @@index([customerId])
+  @@index([productId])
 }
 
 model Supplier {
@@ -106,6 +139,9 @@ model Supplier {
   // Purchase Module relations
   purchases       PurchaseSupplier[]
   purchaseItems   PurchaseItem[]
+  // SVOD Module relations
+  svodSupplierCols    SvodSupplierCol[]
+  svodSupplierValues  SvodSupplierValue[]
 }
 
 model SupplierProduct {
@@ -233,16 +269,51 @@ model SummaryOrderJournal {
   district            String?   // Район (из клиента)
   pointAddress        String?   // Адрес точки доставки
   status              String    @default("draft") // draft, forming, synced, rework
+  
+  // Assembly tracking fields (Отслеживание сборки)
+  preAssemblyStatus     String?   // Предыдущий статус до отправки в сборку (для возврата)
+  assemblyStartedAt     DateTime? // Когда отправлен в сборку
+  assemblyStartedBy     String?   // Кто отправил в сборку (username)
+  assemblyReturnedAt    DateTime? // Когда вернули со сборки
+  assemblyReturnedBy    String?   // Кто вернул со сборки (username)
+  assemblyReturnReason  String?   // Причина возврата
+  assemblyReturnComment String?   // Комментарий к возврату
+  
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   customer            Customer? @relation(fields: [customerId], references: [id])
   product             Product?  @relation(fields: [productId], references: [id])
+  events              SummaryOrderEvent[]  // История событий
   
   @@index([shipDate])
   @@index([customerId])
   @@index([category])
   @@index([district])
   @@index([managerId])
+  @@index([status])
+  @@index([createdAt])  // Для быстрой сортировки
+  @@index([shipDate, status])  // Составной индекс для часто используемого фильтра
+  @@index([status, createdAt(sort: Desc)])  // Для быстрого получения последних записей по статусу
+}
+
+// История событий для записей сводки заказов
+model SummaryOrderEvent {
+  id              Int       @id @default(autoincrement())
+  summaryOrderId  Int       // FK -> SummaryOrderJournal
+  eventType       String    // ASSEMBLY_START, ASSEMBLY_RETURN, STATUS_CHANGE, SYNC_TO_ORDER
+  fromStatus      String?   // Предыдущий статус
+  toStatus        String?   // Новый статус
+  reason          String?   // Причина (для возврата)
+  comment         String?   // Комментарий
+  createdAt       DateTime  @default(now())
+  createdBy       String    // Username кто сделал
+  payload         Json?     // Дополнительные данные (опционально)
+  
+  summaryOrder    SummaryOrderJournal @relation(fields: [summaryOrderId], references: [id], onDelete: Cascade)
+  
+  @@index([summaryOrderId])
+  @@index([eventType])
+  @@index([createdAt])
 }
 
 // Журнал сводок заказов - хранит снимки формы "Сводка заказов"
@@ -461,6 +532,8 @@ model ProductionMml {
   // Обратные связи для первичного MML
   suppliersWithPrimaryMml   Supplier[]  @relation("SupplierPrimaryMml")
   priceListSuppliers        PurchasePriceListSupplier[]  @relation("PriceListSupplierMml")
+  // Production-Purchase Integration
+  cuttingLines              ProductionCuttingLine[]
   
   @@index([isLocked])
   @@index([createdAt])
@@ -568,6 +641,8 @@ model Purchase {
   createdByUser   User              @relation("PurchaseCreator", fields: [createdByUserId], references: [id])
   suppliers       PurchaseSupplier[]
   items           PurchaseItem[]
+  // Production-Purchase Integration
+  productionInputs  ProductionInput[]
   
   @@index([purchaseDate])
   @@index([isDisabled, purchaseDate])
@@ -606,6 +681,8 @@ model PurchaseItem {
   supplier      Supplier      @relation(fields: [supplierId], references: [id])
   product       Product       @relation("PurchaseItemProduct", fields: [productId], references: [id])
   paymentType   PaymentType?  @relation(fields: [paymentTypeId], references: [id])
+  // Production-Purchase Integration
+  productionInputs  ProductionInput[]
   
   @@index([purchaseId, supplierId])
   @@index([purchaseId])
@@ -710,11 +787,213 @@ model Warehouse {
   // Relations
   responsibleUser     User?     @relation("WarehouseResponsible", fields: [responsibleUserId], references: [id])
   
-  // Future: documents linking
-  // orders            Order[]
-  // purchases         Purchase[]
-  // productionRuns    ProductionRun[]
+  // Production-Purchase Integration
+  productionDocs      ProductionDoc[]
+  productionInputs    ProductionInput[]
   
   @@index([name])
   @@index([isDisabled])
+}
+
+// ============================================
+// МОДУЛЬ СВОД (Сводная таблица заказов)
+// ============================================
+
+// Шапка свода (один документ на дату)
+model SvodHeader {
+  id              Int       @id @default(autoincrement())
+  svodDate        DateTime  @db.Date  // Дата формирования свода (D)
+  status          String    @default("draft")  // draft / saved / edited
+  createdAt       DateTime  @default(now())
+  createdBy       String    // username кто создал
+  updatedAt       DateTime  @updatedAt
+  updatedBy       String?   // username кто правил
+  
+  lines           SvodLine[]
+  supplierCols    SvodSupplierCol[]
+  supplierValues  SvodSupplierValue[]
+  
+  @@unique([svodDate])  // Один свод на дату
+  @@index([status])
+}
+
+// Строки свода по товарам
+model SvodLine {
+  id                    Int       @id @default(autoincrement())
+  svodId                Int       // FK -> SvodHeader
+  productId             Int       // FK -> Product
+  
+  // Snapshot полей из справочника (на момент сохранения)
+  shortName             String?   // Название прайс-листа (snapshot)
+  category              String?   // Категория товара (snapshot)
+  coefficient           Decimal?  @db.Decimal(10, 4)  // Коэффициент (snapshot)
+  
+  // Источниковые поля (автоматически подтягиваемые)
+  orderQty              Decimal   @default(0) @db.Decimal(14, 3)  // Заказ (из Сводки заказов)
+  productionInQty       Decimal   @default(0) @db.Decimal(14, 3)  // Приход с производства
+  
+  // Редактируемые поля
+  openingStock          Decimal   @default(0) @db.Decimal(14, 3)  // Остаток на начало дня
+  openingStockIsManual  Boolean   @default(false)  // Ручная правка остатка
+  afterPurchaseStock    Decimal?  @db.Decimal(14, 3)  // Остаток после закупки
+  afterShipmentStock    Decimal?  @db.Decimal(14, 3)  // Остаток после отгрузки
+  
+  // Расчётные поля (формульные, placeholder - формулы будут позже)
+  qtyToShip             Decimal?  @db.Decimal(14, 3)  // Количество к отгрузке
+  factMinusWaste        Decimal?  @db.Decimal(14, 3)  // Факт (минус отходы)
+  weightToShip          Decimal?  @db.Decimal(14, 3)  // Вес к отгрузке
+  planFactDiff          Decimal?  @db.Decimal(14, 3)  // Разница план-факт
+  underOver             Decimal?  @db.Decimal(14, 3)  // Недобор-перебор
+  
+  sortOrder             Int       @default(0)  // Порядок в блоке категории
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  svod                  SvodHeader @relation(fields: [svodId], references: [id], onDelete: Cascade)
+  product               Product    @relation(fields: [productId], references: [id])
+  
+  @@unique([svodId, productId])  // Один товар = одна строка в своде
+  @@index([svodId])
+  @@index([productId])
+  @@index([category])
+}
+
+// Колонки поставщиков в своде (до 10 штук)
+model SvodSupplierCol {
+  id              Int       @id @default(autoincrement())
+  svodId          Int       // FK -> SvodHeader
+  colIndex        Int       // Позиция 1..10
+  supplierId      Int       // FK -> Supplier
+  supplierName    String    // Snapshot имени поставщика
+  totalPurchase   Decimal   @default(0) @db.Decimal(14, 2)  // Общая сумма закупки (для сортировки ТОП-10)
+  
+  createdAt       DateTime  @default(now())
+  
+  svod            SvodHeader @relation(fields: [svodId], references: [id], onDelete: Cascade)
+  supplier        Supplier   @relation(fields: [supplierId], references: [id])
+  
+  @@unique([svodId, colIndex])      // Один индекс = одна колонка
+  @@unique([svodId, supplierId])    // Один поставщик не повторяется
+  @@index([svodId])
+}
+
+// Значения закупа по поставщикам для каждой строки товара
+model SvodSupplierValue {
+  id              Int       @id @default(autoincrement())
+  svodId          Int       // FK -> SvodHeader
+  productId       Int       // FK -> Product
+  supplierId      Int       // FK -> Supplier
+  purchaseQty     Decimal   @default(0) @db.Decimal(14, 3)  // Количество закупа
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  svod            SvodHeader @relation(fields: [svodId], references: [id], onDelete: Cascade)
+  product         Product    @relation(fields: [productId], references: [id])
+  supplier        Supplier   @relation(fields: [supplierId], references: [id])
+  
+  @@unique([svodId, productId, supplierId])  // Уникальная комбинация
+  @@index([svodId])
+  @@index([productId])
+  @@index([supplierId])
+}
+
+// ============================================
+// ИНТЕГРАЦИЯ ПРОИЗВОДСТВО-ЗАКУПКА
+// ============================================
+
+// Документ производства (шапка)
+model ProductionDoc {
+  id              Int       @id @default(autoincrement())
+  date            DateTime  @db.Date  // Дата производства
+  warehouseId     Int       // FK → Warehouse (склад-приёмник)
+  status          String    @default("draft")  // draft / loaded / cutting / done / canceled
+  createdByUserId Int       // FK → User
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  createdBy       User      @relation("ProductionDocCreator", fields: [createdByUserId], references: [id])
+  inputs          ProductionInput[]
+  outputs         ProductionOutput[]
+  cuttingLines    ProductionCuttingLine[]
+  
+  @@unique([date, warehouseId])  // Один документ на дату и склад
+  @@index([date])
+  @@index([status])
+  @@index([warehouseId])
+}
+
+// Входные партии сырья (из закупки)
+model ProductionInput {
+  id              Int       @id @default(autoincrement())
+  productionDocId Int       // FK → ProductionDoc
+  purchaseId      Int       // FK → Purchase (документ закупки)
+  purchaseItemId  Int       // FK → PurchaseItem (конкретная строка закупа)
+  productId       Int       // FK → Product
+  warehouseId     Int       // FK → Warehouse
+  qtyIn           Decimal   @db.Decimal(14, 3)  // Кол-во загружено
+  qtyUsed         Decimal   @default(0) @db.Decimal(14, 3)  // Сколько уже использовано в разделке
+  priceIn         Decimal?  @db.Decimal(14, 2)  // Закупочная цена (опционально)
+  loadedAt        DateTime  @default(now())
+  loadedByUserId  Int       // FK → User
+  
+  productionDoc   ProductionDoc @relation(fields: [productionDocId], references: [id], onDelete: Cascade)
+  purchase        Purchase      @relation(fields: [purchaseId], references: [id])
+  purchaseItem    PurchaseItem  @relation(fields: [purchaseItemId], references: [id])
+  product         Product       @relation("ProductionInputProduct", fields: [productId], references: [id])
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
+  loadedBy        User          @relation("ProductionInputLoader", fields: [loadedByUserId], references: [id])
+  cuttingLines    ProductionCuttingLine[]
+  
+  @@unique([productionDocId, purchaseItemId])  // Одна позиция закупа = один раз в документе
+  @@index([productionDocId])
+  @@index([purchaseItemId])
+  @@index([productId])
+  @@index([purchaseId])
+}
+
+// Выход после разделки (результат производства)
+model ProductionOutput {
+  id              Int       @id @default(autoincrement())
+  productionDocId Int       // FK → ProductionDoc
+  productId       Int       // FK → Product (выходная часть/товар)
+  qtyOut          Decimal   @db.Decimal(14, 3)  // Количество выхода
+  uom             String    @default("kg")  // Ед. измерения (kg / pcs)
+  costTotal       Decimal?  @db.Decimal(14, 2)  // Себестоимость общая
+  costPerUnit     Decimal?  @db.Decimal(14, 4)  // Себестоимость за единицу
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  productionDoc   ProductionDoc @relation(fields: [productionDocId], references: [id], onDelete: Cascade)
+  product         Product       @relation("ProductionOutputProduct", fields: [productId], references: [id])
+  
+  @@unique([productionDocId, productId])  // Один товар = одна строка выхода
+  @@index([productionDocId])
+  @@index([productId])
+}
+
+// Линии разделки по MML (детализация: какое сырьё → какой выход)
+model ProductionCuttingLine {
+  id                Int       @id @default(autoincrement())
+  productionDocId   Int       // FK → ProductionDoc
+  productionInputId Int       // FK → ProductionInput (из какой партии сырья)
+  mmlId             Int       // FK → ProductionMml (какой MML применён)
+  outProductId      Int       // FK → Product (выходной товар)
+  qtyOut            Decimal   @db.Decimal(14, 3)  // Кол-во выхода
+  qtyInConsumed     Decimal   @db.Decimal(14, 3)  // Сколько сырья израсходовано
+  createdAt         DateTime  @default(now())
+  createdByUserId   Int       // FK → User
+  
+  productionDoc     ProductionDoc     @relation(fields: [productionDocId], references: [id], onDelete: Cascade)
+  productionInput   ProductionInput   @relation(fields: [productionInputId], references: [id])
+  mml               ProductionMml     @relation(fields: [mmlId], references: [id])
+  outProduct        Product           @relation("CuttingLineOutput", fields: [outProductId], references: [id])
+  createdBy         User              @relation("CuttingLineCreator", fields: [createdByUserId], references: [id])
+  
+  @@index([productionDocId])
+  @@index([productionInputId])
+  @@index([mmlId])
+  @@index([outProductId])
 }

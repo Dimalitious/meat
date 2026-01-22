@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
+import { ORDER_STATUS } from '../constants';
 
 // Get all orders (with optional filters) - Journal style
 export const getOrders = async (req: Request, res: Response) => {
@@ -418,6 +420,47 @@ export const completeOrder = async (req: Request, res: Response) => {
     }
 };
 
+// Get orders pending dispatch (ready for expeditor assignment)
+export const getOrdersPendingDispatch = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.query;
+
+        const where: Prisma.OrderWhereInput = {
+            expeditorId: null,
+            isDisabled: false,
+            status: { in: [ORDER_STATUS.NEW, ORDER_STATUS.PROCESSING] }
+        };
+
+        if (date) {
+            const startDate = new Date(String(date));
+            startDate.setHours(0, 0, 0, 0);
+            const endDate = new Date(startDate);
+            endDate.setHours(23, 59, 59, 999);
+            where.date = { gte: startDate, lte: endDate };
+        }
+
+        const orders = await prisma.order.findMany({
+            where,
+            include: {
+                customer: true,
+                expeditor: true,
+                items: {
+                    include: { product: true }
+                }
+            },
+            orderBy: [
+                { customer: { name: 'asc' } },
+                { id: 'asc' }
+            ]
+        });
+
+        res.json(orders);
+    } catch (error) {
+        console.error('getOrdersPendingDispatch error:', error);
+        res.status(500).json({ error: 'Failed to fetch pending dispatch orders' });
+    }
+};
+
 // Get order attachments
 export const getOrderAttachments = async (req: Request, res: Response) => {
     try {
@@ -431,5 +474,136 @@ export const getOrderAttachments = async (req: Request, res: Response) => {
         res.json(attachments);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch attachments' });
+    }
+};
+
+// Отправить заказ на доработку (вернуть в сводку)
+export const sendOrderToRework = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Найти заказ с позициями
+            const order = await tx.order.findUnique({
+                where: { id: Number(id) },
+                include: {
+                    items: { include: { product: true } },
+                    customer: true
+                }
+            });
+
+            if (!order) {
+                throw new Error('ORDER_NOT_FOUND');
+            }
+
+            // 2. Проверить что заказ не отключён
+            if (order.isDisabled) {
+                throw new Error('ORDER_DISABLED');
+            }
+
+            // 3. Проверить что заказ не в статусе rework уже
+            if (order.status === 'rework') {
+                throw new Error('ALREADY_IN_REWORK');
+            }
+
+            // 4. Генерируем IDN из даты заказа
+            const dateObj = new Date(order.date);
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const year = dateObj.getFullYear();
+            const idn = `${day}${month}${year}`;
+
+            // 5. Создать записи в SummaryOrderJournal из позиций заказа
+            const createdEntries = [];
+            for (const item of order.items) {
+                const entry = await tx.summaryOrderJournal.create({
+                    data: {
+                        idn,
+                        shipDate: order.date,
+                        paymentType: order.paymentType || 'bank',
+                        customerId: order.customerId,
+                        customerName: order.customer?.name || '',
+                        productId: item.productId,
+                        productFullName: item.product?.name || '',
+                        category: item.product?.category || null,
+                        price: Number(item.price),
+                        shippedQty: item.shippedQty || 0,
+                        orderQty: item.quantity,
+                        sumWithRevaluation: Number(item.amount),
+                        distributionCoef: Number(item.distributionCoef) || 0,
+                        weightToDistribute: Number(item.weightToDistribute) || 0,
+                        managerId: null,
+                        managerName: '',
+                        status: 'draft' // Готово к "Начать сборку"
+                    }
+                });
+                createdEntries.push(entry);
+            }
+
+            // 6. Пометить заказ как на доработке
+            await tx.order.update({
+                where: { id: Number(id) },
+                data: {
+                    status: 'rework',
+                    isDisabled: true // Скрыть из журнала заказов
+                }
+            });
+
+            // 7. Попытка создать событие аудита
+            try {
+                if (createdEntries.length > 0) {
+                    await tx.summaryOrderEvent.create({
+                        data: {
+                            summaryOrderId: createdEntries[0].id,
+                            eventType: 'ORDER_REWORK',
+                            fromStatus: order.status,
+                            toStatus: 'draft',
+                            createdBy: username,
+                            comment: `Заказ #${id} отправлен на доработку`,
+                            payload: {
+                                orderId: Number(id),
+                                itemsCount: createdEntries.length,
+                                originalDate: order.date
+                            }
+                        }
+                    });
+                }
+            } catch (e) {
+                console.log('Audit event not created (optional)');
+            }
+
+            // DEBUG: Вывод информации о созданных записях
+            console.log(`[REWORK] Order #${id} sent to rework:`);
+            console.log(`  - Order date: ${order.date}`);
+            console.log(`  - IDN: ${idn}`);
+            console.log(`  - Entries created: ${createdEntries.length}`);
+            createdEntries.forEach(e => console.log(`    Entry #${e.id}: status=${e.status}, product=${e.productFullName}`));
+
+            return {
+                orderId: Number(id),
+                entriesCreated: createdEntries.length,
+                orderDate: order.date
+            };
+        });
+
+        res.json({
+            message: 'Заказ отправлен на доработку',
+            ...result
+        });
+    } catch (error: any) {
+        console.error('Send order to rework error:', error);
+
+        if (error.message === 'ORDER_NOT_FOUND') {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        if (error.message === 'ORDER_DISABLED') {
+            return res.status(400).json({ error: 'Заказ уже отключён' });
+        }
+        if (error.message === 'ALREADY_IN_REWORK') {
+            return res.status(400).json({ error: 'Заказ уже на доработке' });
+        }
+
+        res.status(500).json({ error: 'Ошибка отправки на доработку' });
     }
 };

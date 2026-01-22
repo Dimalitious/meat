@@ -1,7 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import axios from 'axios';
-import { API_URL } from '../config/api';
+import api from '../config/axios';
 import {
     Table,
     TableHeader,
@@ -55,10 +54,7 @@ const ProductsPage = () => {
 
     const fetchProducts = async () => {
         try {
-            const token = localStorage.getItem('token');
-            const res = await axios.get(`${API_URL}/api/products`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const res = await api.get('/api/products');
             setProducts(res.data);
         } catch (err) {
             console.error(err);
@@ -94,10 +90,7 @@ const ProductsPage = () => {
         const action = currentStatus === 'active' ? 'отключить' : 'активировать';
         if (!confirm(`Вы уверены, что хотите ${action} этот товар?`)) return;
         try {
-            const token = localStorage.getItem('token');
-            await axios.put(`${API_URL}/api/products/${code}`, { status: newStatus }, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            await api.put(`/api/products/${code}`, { status: newStatus });
             alert(newStatus === 'inactive' ? 'Товар отключён' : 'Товар активирован');
             setIsModalOpen(false);
             fetchProducts();
@@ -131,16 +124,12 @@ const ProductsPage = () => {
         if (selectedCodes.size === 0) return;
         if (!confirm(`Отключить ${selectedCodes.size} выбранных товаров?`)) return;
 
-        const token = localStorage.getItem('token');
         let deactivatedCount = 0;
         let errorCount = 0;
 
         for (const code of Array.from(selectedCodes)) {
             try {
-                // Находим текущий статус и меняем на inactive
-                await axios.put(`${API_URL}/api/products/${code}`, { status: 'inactive' }, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                await api.put(`/api/products/${code}`, { status: 'inactive' });
                 deactivatedCount++;
             } catch (err: any) {
                 console.error('Toggle status error for', code, ':', err.response?.data || err.message);
@@ -159,7 +148,6 @@ const ProductsPage = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
-            const token = localStorage.getItem('token');
             const payload = {
                 ...formData,
                 coefficient: Number(formData.coefficient),
@@ -167,13 +155,9 @@ const ProductsPage = () => {
             };
 
             if (editingProduct) {
-                await axios.put(`${API_URL}/api/products/${editingProduct.code}`, payload, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                await api.put(`/api/products/${editingProduct.code}`, payload);
             } else {
-                await axios.post(`${API_URL}/api/products`, payload, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
+                await api.post('/api/products', payload);
             }
             setIsModalOpen(false);
             fetchProducts();
@@ -269,10 +253,7 @@ const ProductsPage = () => {
 
                 console.log(`Sending batch import for ${products.length} products...`);
 
-                const token = localStorage.getItem('token');
-                const response = await axios.post(`${API_URL}/api/products/batch-upsert`, {
-                    products
-                }, { headers: { Authorization: `Bearer ${token}` } });
+                const response = await api.post('/api/products/batch-upsert', { products });
 
                 const result = response.data;
                 let message = `✅ Импорт завершён!\n\nДобавлено: ${result.imported}\nОбновлено: ${result.updated}`;

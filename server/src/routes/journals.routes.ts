@@ -5,10 +5,12 @@ import {
     createSummaryJournal,
     updateSummaryJournal,
     getSummaryJournalById,
+    sendSummaryJournalToRework,
     getAssemblyJournals,
     createAssemblyJournal,
     updateAssemblyJournal,
-    getAssemblyJournalById
+    getAssemblyJournalById,
+    sendAssemblyJournalToRework
 } from '../controllers/journals.controller';
 
 const router = Router();
@@ -18,11 +20,14 @@ router.get('/summary', authenticateToken, getSummaryJournals);
 router.get('/summary/:id', authenticateToken, getSummaryJournalById);
 router.post('/summary', authenticateToken, createSummaryJournal);
 router.put('/summary/:id', authenticateToken, updateSummaryJournal);
+router.post('/summary/:id/rework', authenticateToken, sendSummaryJournalToRework);
 
 // Assembly Orders Journal
 router.get('/assembly', authenticateToken, getAssemblyJournals);
 router.get('/assembly/:id', authenticateToken, getAssemblyJournalById);
 router.post('/assembly', authenticateToken, createAssemblyJournal);
 router.put('/assembly/:id', authenticateToken, updateAssemblyJournal);
+router.post('/assembly/:id/rework', authenticateToken, sendAssemblyJournalToRework);
 
 export default router;
+

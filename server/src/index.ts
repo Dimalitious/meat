@@ -73,6 +73,18 @@ app.use('/api/telegram', telegramRoutes);
 // Warehouses Module (Справочник складов)
 app.use('/api/warehouses', warehousesRoutes);
 
+// Customer Products (Персональный каталог товаров клиента)
+import customerProductsRoutes from './routes/customerProducts.routes';
+app.use('/api/customer-products', customerProductsRoutes);
+
+// SVOD Module (Сводная таблица)
+import svodRoutes from './routes/svod.routes';
+app.use('/api/svod', svodRoutes);
+
+// Production-Purchase Integration (Производство из закупок)
+import productionDocRoutes from './routes/productionDoc.routes';
+app.use('/api/production-docs', productionDocRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // Health check (also for telegram agent)

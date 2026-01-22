@@ -10,6 +10,7 @@ import {
     addChildNode,
     deleteNode,
     toggleMmlLock,
+    deleteMml,
     // Production Run
     getProductionRuns,
     getProductionRunById,
@@ -54,6 +55,9 @@ router.delete('/mml/node/:nodeId', deleteNode);
 
 // Зафиксировать/разблокировать MML
 router.patch('/mml/:id/lock', toggleMmlLock);
+
+// Удалить MML
+router.delete('/mml/:id', deleteMml);
 
 // ============================================
 // Production Run - Выработка

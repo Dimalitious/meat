@@ -92,6 +92,246 @@ export const getSummaryJournalById = async (req: Request, res: Response) => {
     }
 };
 
+// Отправить журнал сводки на доработку
+export const sendSummaryJournalToRework = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        // Начинаем транзакцию для атомарности
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Находим журнал
+            const journal = await tx.summaryOrdersJournal.findUnique({
+                where: { id: Number(id) }
+            });
+
+            if (!journal) {
+                throw new Error('JOURNAL_NOT_FOUND');
+            }
+
+            // 2. Проверяем, не в процессе ли уже возврат (идемпотентность)
+            if (journal.isHidden) {
+                throw new Error('ALREADY_IN_REWORK');
+            }
+
+            // 3. Получаем данные журнала (массив записей сводки)
+            const journalData = journal.data as any[];
+            if (!Array.isArray(journalData) || journalData.length === 0) {
+                throw new Error('EMPTY_JOURNAL_DATA');
+            }
+
+            // 4. Возвращаем все записи в SummaryOrderJournal со статусом 'draft'
+            const createdEntries = [];
+            for (const item of journalData) {
+                // Проверяем, не существует ли уже запись с таким ID и статусом draft
+                const existingEntry = await tx.summaryOrderJournal.findFirst({
+                    where: {
+                        id: item.id,
+                        status: 'draft'
+                    }
+                });
+
+                if (!existingEntry) {
+                    // Если запись существует, обновляем её статус
+                    const existingById = await tx.summaryOrderJournal.findUnique({
+                        where: { id: item.id }
+                    });
+
+                    if (existingById) {
+                        // Обновляем существующую запись
+                        const updated = await tx.summaryOrderJournal.update({
+                            where: { id: item.id },
+                            data: {
+                                status: 'draft',
+                                preAssemblyStatus: existingById.status
+                            }
+                        });
+                        createdEntries.push(updated);
+                    } else {
+                        // Создаём новую запись из данных журнала
+                        const created = await tx.summaryOrderJournal.create({
+                            data: {
+                                idn: item.idn || null,
+                                shipDate: new Date(item.shipDate || journal.summaryDate),
+                                paymentType: item.paymentType || 'bank',
+                                customerId: item.customerId ? Number(item.customerId) : null,
+                                customerName: item.customerName || '',
+                                productId: item.productId ? Number(item.productId) : null,
+                                productFullName: item.productFullName || '',
+                                category: item.category || null,
+                                shortNameMorning: item.shortNameMorning || null,
+                                priceType: item.priceType || null,
+                                price: Number(item.price) || 0,
+                                shippedQty: Number(item.shippedQty) || 0,
+                                orderQty: Number(item.orderQty) || 0,
+                                sumWithRevaluation: Number(item.sumWithRevaluation) || 0,
+                                distributionCoef: Number(item.distributionCoef) || 0,
+                                weightToDistribute: Number(item.weightToDistribute) || 0,
+                                managerId: item.managerId || null,
+                                managerName: item.managerName || '',
+                                status: 'draft' // Готово к "Начать сборку"
+                            }
+                        });
+                        createdEntries.push(created);
+                    }
+                }
+            }
+
+            // 5. Помечаем журнал как скрытый/неактивный
+            await tx.summaryOrdersJournal.update({
+                where: { id: Number(id) },
+                data: {
+                    isHidden: true
+                }
+            });
+
+            // 6. Создаём событие аудита (если есть модель)
+            try {
+                await tx.summaryOrderEvent.create({
+                    data: {
+                        summaryOrderId: createdEntries[0]?.id || 0,
+                        eventType: 'JOURNAL_REWORK',
+                        fromStatus: 'journal',
+                        toStatus: 'draft',
+                        createdBy: username,
+                        comment: `Возвращено на доработку из журнала #${id}`,
+                        payload: {
+                            journalId: Number(id),
+                            entriesCount: createdEntries.length,
+                            summaryDate: journal.summaryDate
+                        }
+                    }
+                });
+            } catch (e) {
+                // Если модели событий нет - пропускаем
+                console.log('Audit event not created (optional)');
+            }
+
+            return {
+                journalId: Number(id),
+                entriesReturned: createdEntries.length,
+                summaryDate: journal.summaryDate
+            };
+        });
+
+        res.json({
+            message: 'Журнал отправлен на доработку',
+            ...result
+        });
+    } catch (error: any) {
+        console.error('Send to rework error:', error);
+
+        if (error.message === 'JOURNAL_NOT_FOUND') {
+            return res.status(404).json({ error: 'Журнал не найден' });
+        }
+        if (error.message === 'ALREADY_IN_REWORK') {
+            return res.status(400).json({ error: 'Журнал уже отправлен на доработку' });
+        }
+        if (error.message === 'EMPTY_JOURNAL_DATA') {
+            return res.status(400).json({ error: 'Журнал не содержит данных' });
+        }
+
+        res.status(500).json({ error: 'Ошибка отправки на доработку' });
+    }
+};
+
+// Отправить журнал сборки на доработку
+export const sendAssemblyJournalToRework = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        const result = await prisma.$transaction(async (tx) => {
+            const journal = await tx.assemblyOrdersJournal.findUnique({
+                where: { id: Number(id) }
+            });
+
+            if (!journal) {
+                throw new Error('JOURNAL_NOT_FOUND');
+            }
+
+            if (journal.isHidden) {
+                throw new Error('ALREADY_IN_REWORK');
+            }
+
+            const journalData = journal.data as any[];
+            if (!Array.isArray(journalData) || journalData.length === 0) {
+                throw new Error('EMPTY_JOURNAL_DATA');
+            }
+
+            // Возвращаем записи в SummaryOrderJournal
+            const createdEntries = [];
+            for (const item of journalData) {
+                const existingById = await tx.summaryOrderJournal.findUnique({
+                    where: { id: item.id }
+                });
+
+                if (existingById) {
+                    const updated = await tx.summaryOrderJournal.update({
+                        where: { id: item.id },
+                        data: {
+                            status: 'draft',
+                            preAssemblyStatus: existingById.status
+                        }
+                    });
+                    createdEntries.push(updated);
+                } else {
+                    const created = await tx.summaryOrderJournal.create({
+                        data: {
+                            idn: item.idn || null,
+                            shipDate: new Date(item.shipDate || journal.assemblyDate),
+                            paymentType: item.paymentType || 'bank',
+                            customerId: item.customerId ? Number(item.customerId) : null,
+                            customerName: item.customerName || '',
+                            productId: item.productId ? Number(item.productId) : null,
+                            productFullName: item.productFullName || '',
+                            category: item.category || null,
+                            price: Number(item.price) || 0,
+                            shippedQty: Number(item.shippedQty) || 0,
+                            orderQty: Number(item.orderQty) || 0,
+                            sumWithRevaluation: Number(item.sumWithRevaluation) || 0,
+                            managerId: item.managerId || null,
+                            managerName: item.managerName || '',
+                            status: 'draft'
+                        }
+                    });
+                    createdEntries.push(created);
+                }
+            }
+
+            await tx.assemblyOrdersJournal.update({
+                where: { id: Number(id) },
+                data: { isHidden: true }
+            });
+
+            return {
+                journalId: Number(id),
+                entriesReturned: createdEntries.length,
+                assemblyDate: journal.assemblyDate
+            };
+        });
+
+        res.json({
+            message: 'Журнал сборки отправлен на доработку',
+            ...result
+        });
+    } catch (error: any) {
+        console.error('Send assembly to rework error:', error);
+
+        if (error.message === 'JOURNAL_NOT_FOUND') {
+            return res.status(404).json({ error: 'Журнал не найден' });
+        }
+        if (error.message === 'ALREADY_IN_REWORK') {
+            return res.status(400).json({ error: 'Журнал уже отправлен на доработку' });
+        }
+        if (error.message === 'EMPTY_JOURNAL_DATA') {
+            return res.status(400).json({ error: 'Журнал не содержит данных' });
+        }
+
+        res.status(500).json({ error: 'Ошибка отправки на доработку' });
+    }
+};
+
 // ============ ASSEMBLY ORDERS JOURNAL ============
 
 export const getAssemblyJournals = async (req: Request, res: Response) => {

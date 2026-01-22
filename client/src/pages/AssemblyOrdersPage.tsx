@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
-import { Check, Edit2, Search, Save } from 'lucide-react';
+import { Check, Edit2, Search, Save, Undo2, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface AssemblyItem {
@@ -16,6 +16,7 @@ interface AssemblyItem {
     customerId: number;
     customerName: string;
     price: number;
+    status: string;  // Added to track forming/synced
 }
 
 interface Customer {
@@ -34,6 +35,15 @@ const getCategoryIcon = (category: string) => {
     return '📦';
 };
 
+// Return reasons
+const RETURN_REASONS = [
+    'Ошибка в заказе',
+    'Отмена клиентом',
+    'Нет товара на складе',
+    'Изменение количества',
+    'Другое'
+];
+
 export default function AssemblyOrdersPage() {
     const { user } = useAuth();
     const [customers, setCustomers] = useState<Customer[]>([]);
@@ -42,6 +52,13 @@ export default function AssemblyOrdersPage() {
     const [loading, setLoading] = useState(true);
     const [currentIdn, setCurrentIdn] = useState<string>('');
     const [assemblyDate, setAssemblyDate] = useState(new Date().toISOString().split('T')[0]);
+
+    // Return modal state
+    const [showReturnModal, setShowReturnModal] = useState(false);
+    const [returnItemId, setReturnItemId] = useState<number | null>(null);
+    const [returnReason, setReturnReason] = useState('');
+    const [returnComment, setReturnComment] = useState('');
+    const [returning, setReturning] = useState(false);
 
     useEffect(() => {
         loadAssemblyData();
@@ -87,7 +104,8 @@ export default function AssemblyOrdersPage() {
                     confirmed: entry.status === 'synced',
                     customerId: entry.customerId,
                     customerName: entry.customerName,
-                    price: Number(entry.price) || 0
+                    price: Number(entry.price) || 0,
+                    status: entry.status
                 });
             }
 
@@ -154,7 +172,7 @@ export default function AssemblyOrdersPage() {
             setCustomers(customers.map(c => ({
                 ...c,
                 items: c.items.map(item =>
-                    item.id === itemId ? { ...item, confirmed: true } : item
+                    item.id === itemId ? { ...item, confirmed: true, status: 'synced' } : item
                 )
             })));
 
@@ -176,11 +194,64 @@ export default function AssemblyOrdersPage() {
             setCustomers(customers.map(c => ({
                 ...c,
                 items: c.items.map(item =>
-                    item.id === itemId ? { ...item, confirmed: false } : item
+                    item.id === itemId ? { ...item, confirmed: false, status: 'forming' } : item
                 )
             })));
         } catch (err) {
             console.error('Edit error:', err);
+        }
+    };
+
+    // ============================================
+    // RETURN FROM ASSEMBLY (Вернуть со сборки)
+    // ============================================
+
+    const openReturnModal = (itemId: number) => {
+        setReturnItemId(itemId);
+        setReturnReason('');
+        setReturnComment('');
+        setShowReturnModal(true);
+    };
+
+    const closeReturnModal = () => {
+        setShowReturnModal(false);
+        setReturnItemId(null);
+        setReturnReason('');
+        setReturnComment('');
+    };
+
+    const returnFromAssembly = async () => {
+        if (!returnItemId) return;
+
+        setReturning(true);
+        try {
+            const token = localStorage.getItem('token');
+
+            const res = await axios.post(
+                `${API_URL}/api/summary-orders/${returnItemId}/assembly/return`,
+                {
+                    reason: returnReason || null,
+                    comment: returnComment || null
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            console.log('[RETURN] Response:', res.data);
+
+            // Remove item from local state
+            setCustomers(prev => prev.map(c => ({
+                ...c,
+                items: c.items.filter(item => item.id !== returnItemId)
+            })).filter(c => c.items.length > 0));
+
+            closeReturnModal();
+            alert('Позиция возвращена в Сводку');
+
+        } catch (err: any) {
+            console.error('Return error:', err);
+            alert(err.response?.data?.error || 'Ошибка возврата со сборки');
+        } finally {
+            setReturning(false);
         }
     };
 
@@ -321,15 +392,27 @@ export default function AssemblyOrdersPage() {
                                                     {item.category || 'Без категории'}
                                                 </p>
                                             </div>
-                                            {item.confirmed && (
-                                                <button
-                                                    onClick={() => enableEdit(item.id)}
-                                                    className="bg-blue-100 text-blue-600 hover:bg-blue-200 p-2 rounded-lg"
-                                                    title="Редактировать"
-                                                >
-                                                    <Edit2 size={20} />
-                                                </button>
-                                            )}
+                                            <div className="flex gap-1">
+                                                {/* Вернуть со сборки - только для forming (не synced) */}
+                                                {item.status === 'forming' && (
+                                                    <button
+                                                        onClick={() => openReturnModal(item.id)}
+                                                        className="bg-orange-100 text-orange-600 hover:bg-orange-200 p-2 rounded-lg"
+                                                        title="Вернуть со сборки"
+                                                    >
+                                                        <Undo2 size={18} />
+                                                    </button>
+                                                )}
+                                                {item.confirmed && (
+                                                    <button
+                                                        onClick={() => enableEdit(item.id)}
+                                                        className="bg-blue-100 text-blue-600 hover:bg-blue-200 p-2 rounded-lg"
+                                                        title="Редактировать"
+                                                    >
+                                                        <Edit2 size={18} />
+                                                    </button>
+                                                )}
+                                            </div>
                                         </div>
 
                                         {/* Card Body - Quantities */}
@@ -376,6 +459,74 @@ export default function AssemblyOrdersPage() {
                     )}
                 </div>
             </div>
+
+            {/* Return Modal */}
+            {showReturnModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                    <div className="bg-white rounded-lg shadow-xl w-[450px] max-w-[90vw]">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h3 className="text-lg font-semibold flex items-center gap-2">
+                                <Undo2 size={20} className="text-orange-500" />
+                                Вернуть со сборки
+                            </h3>
+                            <button onClick={closeReturnModal} className="text-gray-500 hover:text-gray-700">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Причина возврата
+                                </label>
+                                <select
+                                    value={returnReason}
+                                    onChange={e => setReturnReason(e.target.value)}
+                                    className="w-full border rounded px-3 py-2"
+                                >
+                                    <option value="">Выберите причину...</option>
+                                    {RETURN_REASONS.map(r => (
+                                        <option key={r} value={r}>{r}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Комментарий (необязательно)
+                                </label>
+                                <textarea
+                                    value={returnComment}
+                                    onChange={e => setReturnComment(e.target.value)}
+                                    className="w-full border rounded px-3 py-2 h-20 resize-none"
+                                    placeholder="Дополнительная информация..."
+                                />
+                            </div>
+                            <div className="bg-orange-50 border border-orange-200 rounded p-3 text-sm text-orange-800">
+                                ⚠️ Позиция будет возвращена в форму "Сводка заказов" в исходный статус.
+                            </div>
+                        </div>
+                        <div className="p-4 border-t flex justify-end gap-3">
+                            <button
+                                onClick={closeReturnModal}
+                                className="px-4 py-2 border rounded hover:bg-gray-50"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                onClick={returnFromAssembly}
+                                disabled={returning}
+                                className="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {returning ? 'Возврат...' : (
+                                    <>
+                                        <Undo2 size={16} />
+                                        Вернуть
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

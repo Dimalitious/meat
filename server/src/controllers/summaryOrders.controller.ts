@@ -3,7 +3,7 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-// Get summary orders with filters and pagination
+// Get summary orders with filters and pagination - OPTIMIZED
 export const getSummaryOrders = async (req: Request, res: Response) => {
     try {
         const {
@@ -13,9 +13,9 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
             category,
             district,
             managerId,
-            status, // NEW: filter by status
+            status,
             page = '1',
-            limit = '50'
+            limit = '100'  // Увеличили лимит для меньшего количества запросов
         } = req.query;
 
         const pageNum = Number(page);
@@ -24,7 +24,7 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
 
         const where: any = {};
 
-        // Date filter (optional now)
+        // Date filter
         if (date) {
             const startDate = new Date(date as string);
             const endDate = new Date(startDate);
@@ -32,7 +32,7 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
             where.shipDate = { gte: startDate, lt: endDate };
         }
 
-        // Status filter - support multiple statuses separated by comma
+        // Status filter
         if (status) {
             const statuses = (status as string).split(',');
             if (statuses.length === 1) {
@@ -42,45 +42,49 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
             }
         }
 
-        // Customer filter
-        if (customerId) {
-            where.customerId = Number(customerId);
-        }
+        if (customerId) where.customerId = Number(customerId);
+        if (productId) where.productId = Number(productId);
+        if (category) where.category = category;
+        if (district) where.district = district;
+        if (managerId) where.managerId = managerId;
 
-        // Product filter
-        if (productId) {
-            where.productId = Number(productId);
-        }
-
-        // Category filter
-        if (category) {
-            where.category = category;
-        }
-
-        // District filter
-        if (district) {
-            where.district = district;
-        }
-
-        // Manager filter
-        if (managerId) {
-            where.managerId = managerId;
-        }
-
-        // Get total count for pagination
-        const total = await prisma.summaryOrderJournal.count({ where });
-
-        // Get paginated data
-        const orders = await prisma.summaryOrderJournal.findMany({
-            where,
-            include: {
-                customer: true,
-                product: true
-            },
-            orderBy: { createdAt: 'desc' },
-            skip,
-            take: limitNum
-        });
+        // Выполняем count и findMany ПАРАЛЛЕЛЬНО
+        const [total, orders] = await Promise.all([
+            prisma.summaryOrderJournal.count({ where }),
+            prisma.summaryOrderJournal.findMany({
+                where,
+                // SELECT только нужные поля — НЕ тянем связи customer/product
+                select: {
+                    id: true,
+                    idn: true,
+                    shipDate: true,
+                    paymentType: true,
+                    customerId: true,
+                    customerName: true,  // Уже есть в записи
+                    productId: true,
+                    productCode: true,
+                    productFullName: true,  // Уже есть в записи
+                    category: true,
+                    shortNameMorning: true,
+                    priceType: true,
+                    price: true,
+                    shippedQty: true,
+                    orderQty: true,
+                    sumWithRevaluation: true,
+                    distributionCoef: true,
+                    weightToDistribute: true,
+                    managerId: true,
+                    managerName: true,
+                    district: true,
+                    pointAddress: true,
+                    status: true,
+                    createdAt: true
+                },
+                orderBy: { createdAt: 'desc' },
+                skip,
+                take: limitNum
+            })
+        ]);
 
         res.json({
             data: orders,
@@ -98,52 +102,44 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
     }
 };
 
-// Get filter options (unique values for dropdowns)
+// Get filter options (unique values for dropdowns) - OPTIMIZED
 export const getFilterOptions = async (req: Request, res: Response) => {
     try {
-        let categories: string[] = [];
-        let districts: string[] = [];
-        let managers: { id: string; name: string | null }[] = [];
-
-        // Get unique categories
-        try {
-            const catData = await prisma.summaryOrderJournal.findMany({
+        // Выполняем все запросы ПАРАЛЛЕЛЬНО
+        const [catData, distData, mgrData] = await Promise.all([
+            // Categories
+            prisma.summaryOrderJournal.findMany({
                 where: { category: { not: null } },
                 select: { category: true },
                 distinct: ['category']
-            });
-            categories = catData.map(c => c.category).filter(Boolean) as string[];
-        } catch (e) {
-            console.log('Categories field not available');
-        }
+            }).catch(() => []),
 
-        // Get unique districts (may not exist yet)
-        try {
-            const distData = await prisma.$queryRaw`SELECT DISTINCT district FROM "SummaryOrderJournal" WHERE district IS NOT NULL`;
-            districts = (distData as any[]).map(d => d.district).filter(Boolean);
-        } catch (e) {
-            console.log('Districts field not available');
-        }
+            // Districts - raw query быстрее
+            prisma.$queryRaw<{ district: string }[]>`
+                SELECT DISTINCT district 
+                FROM "SummaryOrderJournal" 
+                WHERE district IS NOT NULL 
+                LIMIT 100
+            `.catch(() => []),
 
-        // Get managers
-        try {
-            const mgrData = await prisma.summaryOrderJournal.findMany({
+            // Managers
+            prisma.summaryOrderJournal.findMany({
                 where: { managerId: { not: null } },
                 select: { managerId: true, managerName: true },
                 distinct: ['managerId']
-            });
-            managers = mgrData.filter(m => m.managerId).map(m => ({
-                id: m.managerId!,
-                name: m.managerName
-            }));
-        } catch (e) {
-            console.log('Managers field not available');
-        }
+            }).catch(() => [])
+        ]);
+
+        const categories = catData.map(c => c.category).filter(Boolean) as string[];
+        const districts = (distData as any[]).map(d => d.district).filter(Boolean);
+        const managers = mgrData.filter(m => m.managerId).map(m => ({
+            id: m.managerId!,
+            name: m.managerName
+        }));
 
         res.json({ categories, districts, managers });
     } catch (error) {
         console.error('Get filter options error:', error);
-        // Return empty data instead of error
         res.json({ categories: [], districts: [], managers: [] });
     }
 };
@@ -231,6 +227,73 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
     }
 };
 
+// BULK CREATE - for fast Excel import
+export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
+    try {
+        const { items } = req.body;
+
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ error: 'Items array is required' });
+        }
+
+        console.log(`[BULK IMPORT] Starting import of ${items.length} items...`);
+        const startTime = Date.now();
+
+        // Prepare all data for batch insert
+        const dataToCreate = items.map((item: any) => {
+            const priceNum = Number(item.price) || 0;
+            const shippedNum = Number(item.shippedQty) || 0;
+            const dateObj = new Date(item.shipDate);
+
+            // Generate IDN based on date: format DDMMYYYY
+            const day = String(dateObj.getDate()).padStart(2, '0');
+            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const year = dateObj.getFullYear();
+            const idn = `${day}${month}${year}`;
+
+            return {
+                idn,
+                shipDate: dateObj,
+                paymentType: item.paymentType || 'bank',
+                customerId: item.customerId ? Number(item.customerId) : null,
+                customerName: item.customerName || '',
+                productId: item.productId ? Number(item.productId) : null,
+                productFullName: item.productFullName || '',
+                category: item.category || null,
+                shortNameMorning: item.shortNameMorning || null,
+                priceType: item.priceType || null,
+                price: priceNum,
+                shippedQty: shippedNum,
+                orderQty: Number(item.orderQty) || 0,
+                sumWithRevaluation: priceNum * shippedNum,
+                distributionCoef: Number(item.distributionCoef) || 0,
+                weightToDistribute: Number(item.weightToDistribute) || 0,
+                managerId: item.managerId || null,
+                managerName: item.managerName || '',
+                status: item.status || 'draft'
+            };
+        });
+
+        // Use createMany for maximum performance (single SQL INSERT)
+        const result = await prisma.summaryOrderJournal.createMany({
+            data: dataToCreate,
+            skipDuplicates: false
+        });
+
+        const elapsed = Date.now() - startTime;
+        console.log(`[BULK IMPORT] Created ${result.count} entries in ${elapsed}ms`);
+
+        res.json({
+            message: `Импортировано ${result.count} записей`,
+            count: result.count,
+            timeMs: elapsed
+        });
+    } catch (error: any) {
+        console.error('Bulk create error:', error);
+        res.status(400).json({ error: 'Failed to bulk create', details: error.message });
+    }
+};
+
 // Update summary order entry
 export const updateSummaryOrder = async (req: Request, res: Response) => {
     try {
@@ -254,10 +317,10 @@ export const updateSummaryOrder = async (req: Request, res: Response) => {
             }
         }
 
+        // Оптимизация: убираем include при update для ускорения
         const entry = await prisma.summaryOrderJournal.update({
             where: { id: Number(id) },
-            data,
-            include: { customer: true, product: true }
+            data
         });
         res.json(entry);
     } catch (error) {
@@ -406,5 +469,249 @@ export const sendToRework = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Send to rework error:', error);
         res.status(500).json({ error: 'Failed to send to rework' });
+    }
+};
+
+// ============================================
+// ASSEMBLY MANAGEMENT (Управление сборкой)
+// ============================================
+
+// Статусы, запрещающие возврат со сборки
+const FINAL_STATUSES = ['synced', 'packed', 'shipped', 'closed'];
+
+// Начать сборку - POST /api/summary-orders/:id/assembly/start
+export const startAssembly = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        const entry = await prisma.summaryOrderJournal.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!entry) {
+            return res.status(404).json({ error: 'Запись не найдена' });
+        }
+
+        // Проверка: уже в сборке?
+        if (entry.status === 'forming') {
+            return res.status(400).json({ error: 'Запись уже находится в сборке' });
+        }
+
+        // Проверка: запрещённый статус?
+        if (FINAL_STATUSES.includes(entry.status)) {
+            return res.status(400).json({ error: `Невозможно отправить в сборку из статуса "${entry.status}"` });
+        }
+
+        // Транзакция: обновление записи + создание события
+        const result = await prisma.$transaction(async (tx) => {
+            // Обновляем запись
+            const updated = await tx.summaryOrderJournal.update({
+                where: { id: Number(id) },
+                data: {
+                    preAssemblyStatus: entry.status,  // Сохраняем предыдущий статус
+                    status: 'forming',
+                    assemblyStartedAt: new Date(),
+                    assemblyStartedBy: username,
+                    // Сбрасываем поля возврата
+                    assemblyReturnedAt: null,
+                    assemblyReturnedBy: null,
+                    assemblyReturnReason: null,
+                    assemblyReturnComment: null
+                }
+            });
+
+            // Создаём событие в истории
+            await tx.summaryOrderEvent.create({
+                data: {
+                    summaryOrderId: Number(id),
+                    eventType: 'ASSEMBLY_START',
+                    fromStatus: entry.status,
+                    toStatus: 'forming',
+                    createdBy: username
+                }
+            });
+
+            return updated;
+        });
+
+        res.json({
+            message: 'Отправлено в сборку',
+            entry: result
+        });
+    } catch (error) {
+        console.error('Start assembly error:', error);
+        res.status(500).json({ error: 'Ошибка отправки в сборку' });
+    }
+};
+
+// Вернуть со сборки - POST /api/summary-orders/:id/assembly/return
+export const returnFromAssembly = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { reason, comment } = req.body;
+        const username = (req as any).user?.username || 'system';
+
+        const entry = await prisma.summaryOrderJournal.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!entry) {
+            return res.status(404).json({ error: 'Запись не найдена' });
+        }
+
+        // Проверка: в сборке?
+        if (entry.status !== 'forming') {
+            return res.status(400).json({
+                error: 'Запись не находится в сборке',
+                currentStatus: entry.status
+            });
+        }
+
+        // Определяем статус для возврата
+        // Вариант A: возвращаем в preAssemblyStatus
+        // Вариант B (fallback): возвращаем в 'draft'
+        const returnToStatus = entry.preAssemblyStatus || 'draft';
+
+        // Транзакция: обновление записи + создание события
+        const result = await prisma.$transaction(async (tx) => {
+            // Обновляем запись
+            const updated = await tx.summaryOrderJournal.update({
+                where: { id: Number(id) },
+                data: {
+                    status: returnToStatus,
+                    assemblyReturnedAt: new Date(),
+                    assemblyReturnedBy: username,
+                    assemblyReturnReason: reason || null,
+                    assemblyReturnComment: comment || null,
+                    // Не сбрасываем preAssemblyStatus - может пригодиться для истории
+                }
+            });
+
+            // Создаём событие в истории
+            await tx.summaryOrderEvent.create({
+                data: {
+                    summaryOrderId: Number(id),
+                    eventType: 'ASSEMBLY_RETURN',
+                    fromStatus: 'forming',
+                    toStatus: returnToStatus,
+                    reason: reason || null,
+                    comment: comment || null,
+                    createdBy: username,
+                    payload: {
+                        assemblyStartedAt: entry.assemblyStartedAt,
+                        assemblyStartedBy: entry.assemblyStartedBy,
+                        returnedAt: new Date().toISOString()
+                    }
+                }
+            });
+
+            return updated;
+        });
+
+        res.json({
+            message: 'Возвращено со сборки',
+            previousStatus: 'forming',
+            newStatus: returnToStatus,
+            entry: result
+        });
+    } catch (error) {
+        console.error('Return from assembly error:', error);
+        res.status(500).json({ error: 'Ошибка возврата со сборки' });
+    }
+};
+
+// Массовый возврат со сборки - POST /api/summary-orders/assembly/return-batch
+export const returnFromAssemblyBatch = async (req: Request, res: Response) => {
+    try {
+        const { ids, reason, comment } = req.body;
+        const username = (req as any).user?.username || 'system';
+
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'IDs обязательны' });
+        }
+
+        const results = {
+            success: 0,
+            failed: 0,
+            errors: [] as string[]
+        };
+
+        for (const id of ids) {
+            try {
+                const entry = await prisma.summaryOrderJournal.findUnique({
+                    where: { id: Number(id) }
+                });
+
+                if (!entry) {
+                    results.failed++;
+                    results.errors.push(`ID ${id}: не найден`);
+                    continue;
+                }
+
+                if (entry.status !== 'forming') {
+                    results.failed++;
+                    results.errors.push(`ID ${id}: не в сборке (статус: ${entry.status})`);
+                    continue;
+                }
+
+                const returnToStatus = entry.preAssemblyStatus || 'draft';
+
+                await prisma.$transaction(async (tx) => {
+                    await tx.summaryOrderJournal.update({
+                        where: { id: Number(id) },
+                        data: {
+                            status: returnToStatus,
+                            assemblyReturnedAt: new Date(),
+                            assemblyReturnedBy: username,
+                            assemblyReturnReason: reason || null,
+                            assemblyReturnComment: comment || null
+                        }
+                    });
+
+                    await tx.summaryOrderEvent.create({
+                        data: {
+                            summaryOrderId: Number(id),
+                            eventType: 'ASSEMBLY_RETURN',
+                            fromStatus: 'forming',
+                            toStatus: returnToStatus,
+                            reason: reason || null,
+                            comment: comment || null,
+                            createdBy: username
+                        }
+                    });
+                });
+
+                results.success++;
+            } catch (err) {
+                results.failed++;
+                results.errors.push(`ID ${id}: ошибка обработки`);
+            }
+        }
+
+        res.json({
+            message: `Обработано: ${results.success} успешно, ${results.failed} ошибок`,
+            ...results
+        });
+    } catch (error) {
+        console.error('Batch return from assembly error:', error);
+        res.status(500).json({ error: 'Ошибка массового возврата' });
+    }
+};
+
+// Получить историю событий записи - GET /api/summary-orders/:id/events
+export const getOrderEvents = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+        const events = await prisma.summaryOrderEvent.findMany({
+            where: { summaryOrderId: Number(id) },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(events);
+    } catch (error) {
+        console.error('Get order events error:', error);
+        res.status(500).json({ error: 'Ошибка получения истории' });
     }
 };

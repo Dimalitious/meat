@@ -41,6 +41,9 @@ import PurchasesPage from './pages/PurchasesPage';
 import PurchaseFormPage from './pages/PurchaseFormPage';
 import TelegramOrdersPage from './pages/TelegramOrdersPage';
 import WarehousesPage from './pages/WarehousesPage';
+import DispatchPage from './pages/DispatchPage';
+import ProductionDocPage from './pages/ProductionDocPage';
+import MmlReferencePage from './pages/MmlReferencePage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -103,6 +106,7 @@ function App() {
             <Route path="/assembly/:id" element={<ProtectedRoute><AssemblyOrderPage /></ProtectedRoute>} />
             <Route path="/summary-orders" element={<ProtectedRoute><SummaryOrdersPage /></ProtectedRoute>} />
             <Route path="/assembly-orders" element={<ProtectedRoute><AssemblyOrdersPage /></ProtectedRoute>} />
+            <Route path="/dispatch" element={<ProtectedRoute><DispatchPage /></ProtectedRoute>} />
             <Route path="/journals/summary" element={<ProtectedRoute><SummaryJournalPage /></ProtectedRoute>} />
             <Route path="/journals/assembly" element={<ProtectedRoute><AssemblyJournalPage /></ProtectedRoute>} />
             {/* Expedition routes */}
@@ -130,6 +134,10 @@ function App() {
             <Route path="/telegram-orders" element={<ProtectedRoute><TelegramOrdersPage /></ProtectedRoute>} />
             {/* Warehouses Module (Справочник складов) */}
             <Route path="/warehouses" element={<ProtectedRoute><WarehousesPage /></ProtectedRoute>} />
+            {/* Production-Purchase Integration (Производство из закупа) */}
+            <Route path="/production-docs" element={<ProtectedRoute><ProductionDocPage /></ProtectedRoute>} />
+            {/* MML Reference (Справочник техкарт) */}
+            <Route path="/mmls" element={<ProtectedRoute><MmlReferencePage /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </SocketProvider>

@@ -54,8 +54,10 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Главная', path: '/', icon: <LayoutDashboard size={20} /> },
         { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
         { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} /> },
+        { label: 'Распределение', path: '/dispatch', icon: <Truck size={20} /> },
         { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} /> },
         { label: 'Производство', path: '/production', icon: <Warehouse size={20} /> },
+        { label: 'Производство (закуп)', path: '/production-docs', icon: <Package size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
         { label: 'Telegram заказы', path: '/telegram-orders', icon: <MessageCircle size={20} /> },
         {
@@ -86,18 +88,13 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Клиенты', path: '/customers', icon: <Users size={18} /> },
                 { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} /> },
                 { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} /> },
+                { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} /> },
                 { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
                 { label: 'Производственный персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
                 { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} /> },
             ]
         },
-        {
-            label: 'Закупки',
-            icon: <ShoppingCart size={20} />,
-            children: [
-                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },
-            ]
-        },
+
         { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
     ];
 

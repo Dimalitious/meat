@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { Button } from "../components/ui/Button";
 import {
     Plus, Printer, X, FileCheck, Download, Loader2,
-    UserPlus, Filter, RefreshCw, Calendar, Check, Power, Edit, Eye
+    UserPlus, Filter, RefreshCw, Calendar, Check, Power, RotateCcw, Eye
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import {
@@ -96,6 +96,11 @@ const OrdersPage = () => {
     const [downloading, setDownloading] = useState(false);
 
     const invoiceRef = useRef<HTMLDivElement>(null);
+
+    // Rework modal state
+    const [showReworkModal, setShowReworkModal] = useState(false);
+    const [reworkOrderId, setReworkOrderId] = useState<number | null>(null);
+    const [reworking, setReworking] = useState(false);
 
     useEffect(() => {
         fetchExpeditors();
@@ -205,6 +210,36 @@ const OrdersPage = () => {
         } catch (err) {
             console.error('Failed to assign expeditor:', err);
             alert('Ошибка назначения экспедитора');
+        }
+    };
+
+    // Send order to rework
+    const openReworkModal = (orderId: number) => {
+        setReworkOrderId(orderId);
+        setShowReworkModal(true);
+    };
+
+    const sendToRework = async () => {
+        if (!reworkOrderId) return;
+
+        setReworking(true);
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.post(
+                `${API_URL}/api/orders/${reworkOrderId}/rework`,
+                {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            alert(`✅ ${res.data.message}\nСоздано записей в сводке: ${res.data.entriesCreated}\n\nЗаписи доступны в форме "Сводка заказов" со статусом "Начать сборку"`);
+            setShowReworkModal(false);
+            setReworkOrderId(null);
+            fetchOrders();
+        } catch (err: any) {
+            console.error('Send to rework error:', err);
+            alert(err.response?.data?.error || 'Ошибка отправки на доработку');
+        } finally {
+            setReworking(false);
         }
     };
 
@@ -454,11 +489,15 @@ const OrdersPage = () => {
                                                     <Eye size={14} />
                                                 </Button>
                                             </Link>
-                                            <Link to={`/orders/${o.id}/edit`}>
-                                                <Button variant="outline" size="sm" title="Редактировать">
-                                                    <Edit size={14} />
-                                                </Button>
-                                            </Link>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                title="Отправить на доработку"
+                                                onClick={() => openReworkModal(o.id)}
+                                                className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                                            >
+                                                <RotateCcw size={14} />
+                                            </Button>
                                             <Link to={`/orders/${o.id}/print`}>
                                                 <Button variant="outline" size="sm" title="Печать накладной">
                                                     <Printer size={14} />
@@ -722,8 +761,62 @@ const OrdersPage = () => {
                     </div>
                 </div>
             )}
+
+            {/* Rework Confirmation Modal */}
+            {showReworkModal && reworkOrderId && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[450px] p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="bg-orange-100 p-2 rounded-full">
+                                <RotateCcw size={24} className="text-orange-600" />
+                            </div>
+                            <h3 className="text-lg font-semibold">Отправить на доработку?</h3>
+                        </div>
+
+                        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+                            <p className="text-sm text-gray-700 mb-2">
+                                <strong>Заказ #{reworkOrderId}</strong>
+                            </p>
+                            <p className="text-sm text-gray-600">
+                                Заказ будет возвращён в форму <strong>"Сводка заказов"</strong> со статусом <strong>"Начать сборку"</strong>.
+                            </p>
+                        </div>
+
+                        <p className="text-sm text-gray-500 mb-6">
+                            После возврата вы сможете отредактировать записи и повторно пройти процесс сборки.
+                        </p>
+
+                        <div className="flex justify-end gap-3">
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    setShowReworkModal(false);
+                                    setReworkOrderId(null);
+                                }}
+                                disabled={reworking}
+                            >
+                                Отмена
+                            </Button>
+                            <Button
+                                onClick={sendToRework}
+                                disabled={reworking}
+                                className="bg-orange-600 hover:bg-orange-700 text-white flex items-center gap-2"
+                            >
+                                {reworking ? (
+                                    <>Отправка...</>
+                                ) : (
+                                    <>
+                                        <RotateCcw size={16} /> Отправить
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
 export default OrdersPage;
+
