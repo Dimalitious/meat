@@ -44,6 +44,7 @@ import WarehousesPage from './pages/WarehousesPage';
 import DispatchPage from './pages/DispatchPage';
 import ProductionDocPage from './pages/ProductionDocPage';
 import MmlReferencePage from './pages/MmlReferencePage';
+import MaterialReportPage from './pages/MaterialReportPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -138,6 +139,8 @@ function App() {
             <Route path="/production-docs" element={<ProtectedRoute><ProductionDocPage /></ProtectedRoute>} />
             {/* MML Reference (Справочник техкарт) */}
             <Route path="/mmls" element={<ProtectedRoute><MmlReferencePage /></ProtectedRoute>} />
+            {/* Reports (Отчеты) */}
+            <Route path="/reports/material" element={<ProtectedRoute><MaterialReportPage /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </SocketProvider>

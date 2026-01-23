@@ -21,6 +21,7 @@ import {
     FolderOpen,
     DollarSign,
     MessageCircle,
+    FileText,
 } from 'lucide-react';
 
 interface NavItem {
@@ -92,6 +93,14 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
                 { label: 'Производственный персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
                 { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} /> },
+            ]
+        },
+        {
+            label: 'Отчеты',
+            icon: <FileText size={20} />,
+            children: [
+                { label: 'Материальный отчет', path: '/reports/material', icon: <FileText size={18} /> },
+                { label: 'Отчет PL', path: '/reports/pl', icon: <FileText size={18} /> },
             ]
         },
 
