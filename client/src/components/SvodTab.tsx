@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { useAuth } from '../context/AuthContext';
-import { RefreshCw, Save, Edit3, Search, Filter, ChevronDown, ChevronRight, Layers } from 'lucide-react';
+import { RefreshCw, Save, Edit3, Search, ChevronDown, ChevronRight, Layers, X, Package } from 'lucide-react';
 
 // ============================================
 // ИНТЕРФЕЙСЫ
@@ -11,6 +11,7 @@ import { RefreshCw, Save, Edit3, Search, Filter, ChevronDown, ChevronRight, Laye
 interface Product {
     id: number;
     name: string;
+    code: string | null;
     priceListName: string | null;
     category: string | null;
     coefficient: number;
@@ -27,12 +28,16 @@ interface SvodLine {
     openingStock: number;
     openingStockIsManual: boolean;
     afterPurchaseStock: number | null;
-    afterShipmentStock: number | null;
+    availableQty?: number;
     qtyToShip: number | null;
     factMinusWaste: number | null;
     weightToShip: number | null;
     planFactDiff: number | null;
     underOver: number | null;
+    // Маркировка распределения
+    isDistributionSource?: boolean;
+    distributedFromLineId?: number | null;
+    distributedFromName?: string | null;
     product?: Product;
 }
 
@@ -65,6 +70,23 @@ interface SvodTabProps {
     selectedDate: string;
 }
 
+// Интерфейсы для распределения веса
+interface DistributionItem {
+    productId: number;
+    productName: string;
+    productCode: string | null;
+    qty: number;
+}
+
+interface DistributionModalData {
+    lineId: number;
+    productId: number;
+    productName: string;
+    category: string | null;
+    factMinusWaste: number;
+    weightToShip: number | null;
+    selectedItems: DistributionItem[];
+}
 // Фиксированный порядок категорий
 const CATEGORY_ORDER = ['Баранина', 'Говядина', 'Курица'];
 
@@ -81,11 +103,17 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
 
     // Фильтры
     const [searchTerm, setSearchTerm] = useState('');
-    const [showFilters, setShowFilters] = useState(false);
 
     // НОВОЕ: Активный таб категории (null = все категории "СВОД")
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
     const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+
+    // Состояния модального окна распределения
+    const [showDistributionModal, setShowDistributionModal] = useState(false);
+    const [distributionData, setDistributionData] = useState<DistributionModalData | null>(null);
+    const [distributionLoading, setDistributionLoading] = useState(false);
+    const [plannedWeight, setPlannedWeight] = useState<string>('');
+    const [showProductSelector, setShowProductSelector] = useState(false);
 
     // Загрузка данных
     const fetchSvod = useCallback(async () => {
@@ -222,12 +250,35 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
     };
 
     // Получить значение числового поля с учётом редактирования
-    const getNumericLineValue = (line: SvodLine, field: 'openingStock' | 'afterPurchaseStock' | 'afterShipmentStock'): number | null => {
+    const getNumericLineValue = (line: SvodLine, field: 'openingStock' | 'afterPurchaseStock'): number | null => {
         const edits = editedLines.get(line.productId);
         if (edits && field in edits) {
             return edits[field] as number | null ?? null;
         }
         return line[field];
+    };
+
+    // Получить сумму закупок по всем поставщикам для товара
+    const getTotalPurchaseForProduct = (productId: number): number => {
+        if (!svod?.supplierValues) return 0;
+        return svod.supplierValues
+            .filter(v => v.productId === productId)
+            .reduce((sum, v) => sum + (Number(v.purchaseQty) || 0), 0);
+    };
+
+    // Расчёт "Имеется в наличии" = Остаток на начало + Закупки + Приход с производства
+    const calculateAvailableQty = (line: SvodLine): number => {
+        const openingStock = Number(getNumericLineValue(line, 'openingStock')) || 0;
+        const productionInQty = Number(line.productionInQty) || 0;
+        const totalPurchases = getTotalPurchaseForProduct(line.productId);
+        return openingStock + totalPurchases + productionInQty;
+    };
+
+    // Расчёт "Факт (− отходы)" = Имеется в наличии × Коэффициент
+    const calculateFactMinusWaste = (line: SvodLine): number => {
+        const availableQty = calculateAvailableQty(line);
+        const coefficient = Number(line.coefficient) || 1;
+        return availableQty * coefficient;
     };
 
     // Переключение категории (для группировки в режиме "СВОД")
@@ -247,6 +298,179 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
     const getSupplierValue = (productId: number, supplierId: number) => {
         const value = svod?.supplierValues.find(v => v.productId === productId && v.supplierId === supplierId);
         return value?.purchaseQty || 0;
+    };
+
+    // ============================================
+    // ФУНКЦИИ РАСПРЕДЕЛЕНИЯ ВЕСА
+    // ============================================
+
+    // Открыть модальное окно распределения
+    const openDistributionModal = (line: SvodLine) => {
+        if (!line.id) {
+            alert('Сначала сохраните свод');
+            return;
+        }
+
+        setDistributionData({
+            lineId: line.id,
+            productId: line.productId,
+            productName: line.product?.name || line.shortName || 'Товар',
+            category: line.category,
+            factMinusWaste: calculateFactMinusWaste(line),
+            weightToShip: line.weightToShip,
+            selectedItems: []
+        });
+
+        setPlannedWeight(line.weightToShip?.toString() || '');
+        setShowDistributionModal(true);
+    };
+
+    // Закрыть модальное окно
+    const closeDistributionModal = () => {
+        setShowDistributionModal(false);
+        setDistributionData(null);
+        setShowProductSelector(false);
+        setPlannedWeight('');
+    };
+
+    // Добавить товар в список распределения
+    const addProductToDistribution = (product: SvodLine) => {
+        if (!distributionData) return;
+        if (distributionData.selectedItems.some(item => item.productId === product.productId)) {
+            alert('Этот товар уже добавлен');
+            return;
+        }
+        setDistributionData({
+            ...distributionData,
+            selectedItems: [...distributionData.selectedItems, {
+                productId: product.productId,
+                productName: product.product?.name || product.shortName || 'Товар',
+                productCode: product.product?.code || null,
+                qty: 0
+            }]
+        });
+        setShowProductSelector(false);
+    };
+
+    // Удалить товар из списка распределения
+    const removeProductFromDistribution = (productId: number) => {
+        if (!distributionData) return;
+        setDistributionData({
+            ...distributionData,
+            selectedItems: distributionData.selectedItems.filter(item => item.productId !== productId)
+        });
+    };
+
+    // Обновить количество для товара
+    const updateDistributionQty = (productId: number, value: string) => {
+        if (!distributionData) return;
+        const numValue = value === '' ? 0 : parseFloat(value);
+        setDistributionData({
+            ...distributionData,
+            selectedItems: distributionData.selectedItems.map(item =>
+                item.productId === productId ? { ...item, qty: numValue } : item
+            )
+        });
+    };
+
+    // Рассчитать сумму распределённых значений
+    const getTotalDistributed = (): number => {
+        if (!distributionData) return 0;
+        return distributionData.selectedItems.reduce((sum, item) => sum + (item.qty || 0), 0);
+    };
+
+    // Получить товары той же категории для выбора
+    const getCategoryProducts = (): SvodLine[] => {
+        if (!distributionData || !svod) return [];
+        return svod.lines.filter(line => line.category === distributionData.category);
+    };
+
+    // Сохранить распределение
+    const saveDistribution = async () => {
+        if (!distributionData || !svod) return;
+
+        const distributions = distributionData.selectedItems
+            .filter(item => item.qty > 0)
+            .map(item => ({
+                productId: item.productId,
+                productName: item.productName,
+                qty: item.qty
+            }));
+
+        if (distributions.length === 0) {
+            alert('Добавьте товары для распределения');
+            return;
+        }
+
+        // Проверяем, есть ли позиции не в своде
+        const missingProducts: { productId: number; productName: string; qty: number }[] = [];
+        for (const dist of distributions) {
+            const existsInSvod = svod.lines.some(line => line.productId === dist.productId);
+            if (!existsInSvod) {
+                missingProducts.push({
+                    productId: dist.productId,
+                    productName: dist.productName,
+                    qty: dist.qty
+                });
+            }
+        }
+
+        setDistributionLoading(true);
+        try {
+            const response = await axios.post(`${API_URL}/api/svod/lines/${distributionData.lineId}/distribution`, {
+                plannedWeight: plannedWeight ? parseFloat(plannedWeight) : null,
+                distributions,
+                addMissingProducts: missingProducts.length > 0,
+                sourceProductId: distributionData.productId,
+                sourceProductName: distributionData.productName
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            // Обновляем локальный state свода
+            let updatedLines = [...svod.lines];
+            const sourceName = distributionData.productName;
+
+            // 1. Помечаем родительскую позицию как источник
+            updatedLines = updatedLines.map(line => {
+                if (line.id === distributionData.lineId) {
+                    return { ...line, weightToShip: null, isDistributionSource: true };
+                }
+                return line;
+            });
+
+            // 2. Обновляем дочерние позиции
+            for (const dist of distributions) {
+                const existingIndex = updatedLines.findIndex(l => l.productId === dist.productId);
+                if (existingIndex >= 0) {
+                    updatedLines[existingIndex] = {
+                        ...updatedLines[existingIndex],
+                        weightToShip: (updatedLines[existingIndex].weightToShip || 0) + dist.qty,
+                        distributedFromLineId: distributionData.lineId,
+                        distributedFromName: sourceName
+                    };
+                } else if (response.data.addedLines) {
+                    const addedLine = response.data.addedLines.find((l: any) => l.productId === dist.productId);
+                    if (addedLine) {
+                        updatedLines.push({
+                            ...addedLine,
+                            weightToShip: dist.qty,
+                            distributedFromLineId: distributionData.lineId,
+                            distributedFromName: sourceName
+                        });
+                    }
+                }
+            }
+
+            setSvod({ ...svod, lines: updatedLines });
+            alert('Распределение сохранено!');
+            closeDistributionModal();
+        } catch (error: any) {
+            console.error('Save distribution error:', error);
+            alert(error.response?.data?.error || 'Ошибка сохранения');
+        } finally {
+            setDistributionLoading(false);
+        }
     };
 
     // ============================================
@@ -550,13 +774,12 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                     }}>
                         <thead style={{ position: 'sticky', top: 0, backgroundColor: '#f5f5f5', zIndex: 10 }}>
                             <tr>
-                                <th style={thStyle}>Короткое название</th>
+                                <th style={thStyle}>Название товара</th>
+                                <th style={{ ...thStyle, width: '80px' }}>Код</th>
                                 <th style={thStyle}>Категория</th>
                                 <th style={{ ...thStyle, backgroundColor: '#e3f2fd' }}>Заказ</th>
                                 <th style={{ ...thStyle, backgroundColor: '#fff3e0' }}>Остаток на начало</th>
                                 <th style={{ ...thStyle, backgroundColor: '#e8f5e9' }}>Приход с произв.</th>
-                                <th style={{ ...thStyle, backgroundColor: '#fce4ec' }}>После закупки</th>
-                                <th style={{ ...thStyle, backgroundColor: '#f3e5f5' }}>После отгрузки</th>
 
                                 {/* Динамические колонки поставщиков */}
                                 {svod.supplierCols.map(col => (
@@ -565,11 +788,12 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                     </th>
                                 ))}
 
+                                {/* Имеется в наличии = Остаток + Закупки + Производство */}
+                                <th style={{ ...thStyle, backgroundColor: '#c8e6c9' }}>Имеется в наличии</th>
+                                {/* Факт (− отходы) = Имеется в наличии × Коэффициент - КЛИКАБЕЛЬНЫЙ */}
+                                <th style={{ ...thStyle, backgroundColor: '#ff9800', color: 'white' }}>Факт (− отходы) ➡</th>
                                 {/* Расчётные колонки */}
-                                <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>К отгрузке</th>
-                                <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>Факт (-отх)</th>
                                 <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>Вес к отгр.</th>
-                                <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>План-Факт</th>
                                 <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>Недоб/Переб</th>
                                 <th style={thStyle}>Коэф.</th>
                             </tr>
@@ -578,9 +802,48 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                             {/* РЕЖИМ: Если выбрана конкретная категория - показываем без группировки */}
                             {activeCategory !== null ? (
                                 filteredLines.map(line => (
-                                    <tr key={line.productId} style={{ borderBottom: '1px solid #eee' }}>
-                                        <td style={tdStyle}>{line.shortName || line.product?.name}</td>
-                                        {/* ИСПРАВЛЕНО: Колонка категории - показываем название категории из справочника */}
+                                    <tr
+                                        key={line.productId}
+                                        style={{
+                                            borderBottom: '1px solid #eee',
+                                            backgroundColor: line.distributedFromLineId ? '#f0fff4' : undefined,
+                                            borderLeft: line.isDistributionSource ? '4px solid #1976d2' :
+                                                line.distributedFromLineId ? '4px solid #4caf50' : undefined
+                                        }}
+                                    >
+                                        <td style={tdStyle}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {line.isDistributionSource && (
+                                                    <span style={{
+                                                        backgroundColor: '#1976d2',
+                                                        color: 'white',
+                                                        fontSize: '10px',
+                                                        padding: '2px 6px',
+                                                        borderRadius: '4px',
+                                                        fontWeight: 600
+                                                    }}>Источник</span>
+                                                )}
+                                                {line.distributedFromLineId && (
+                                                    <span style={{ color: '#4caf50', fontSize: '14px' }}>↳</span>
+                                                )}
+                                                <span>{line.product?.name || line.shortName}</span>
+                                                {line.distributedFromName && (
+                                                    <span style={{
+                                                        backgroundColor: '#e8f5e9',
+                                                        color: '#2e7d32',
+                                                        fontSize: '10px',
+                                                        padding: '2px 6px',
+                                                        borderRadius: '4px',
+                                                        marginLeft: '4px'
+                                                    }}>← из: {line.distributedFromName}</span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        {/* Код товара */}
+                                        <td style={{ ...tdStyle, fontSize: '11px', color: '#666' }}>
+                                            {line.product?.code || '—'}
+                                        </td>
+                                        {/* Категория */}
                                         <td style={{ ...tdStyle, color: getCategoryColor(line.category || 'Без категории'), fontWeight: 500 }}>
                                             {line.category || 'Без категории'}
                                         </td>
@@ -603,32 +866,6 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                         <td style={{ ...tdStyle, backgroundColor: '#e8f5e9' }}>
                                             {formatNumber(line.productionInQty)}
                                         </td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#fce4ec' }}>
-                                            {(mode === 'editing' || mode === 'preview') ? (
-                                                <input
-                                                    type="number"
-                                                    step="0.001"
-                                                    value={getNumericLineValue(line, 'afterPurchaseStock') ?? ''}
-                                                    onChange={(e) => handleLineEdit(line.productId, 'afterPurchaseStock', e.target.value)}
-                                                    style={inputStyle}
-                                                />
-                                            ) : (
-                                                formatNumber(line.afterPurchaseStock)
-                                            )}
-                                        </td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#f3e5f5' }}>
-                                            {(mode === 'editing' || mode === 'preview') ? (
-                                                <input
-                                                    type="number"
-                                                    step="0.001"
-                                                    value={getNumericLineValue(line, 'afterShipmentStock') ?? ''}
-                                                    onChange={(e) => handleLineEdit(line.productId, 'afterShipmentStock', e.target.value)}
-                                                    style={inputStyle}
-                                                />
-                                            ) : (
-                                                formatNumber(line.afterShipmentStock)
-                                            )}
-                                        </td>
 
                                         {/* Значения по поставщикам */}
                                         {svod.supplierCols.map(col => (
@@ -637,11 +874,48 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                             </td>
                                         ))}
 
-                                        {/* Расчётные колонки */}
-                                        <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
+                                        {/* Имеется в наличии */}
+                                        <td style={{ ...tdStyle, backgroundColor: '#c8e6c9', fontWeight: 600, textAlign: 'right' }}>
+                                            {formatNumber(calculateAvailableQty(line))}
+                                        </td>
+                                        {/* Факт (− отходы) - КЛИКАБЕЛЬНАЯ ячейка */}
+                                        <td
+                                            style={{
+                                                ...tdStyle,
+                                                backgroundColor: '#ff9800',
+                                                color: 'white',
+                                                fontWeight: 600,
+                                                textAlign: 'right',
+                                                cursor: 'pointer',
+                                                transition: 'all 0.2s',
+                                                borderRadius: '4px',
+                                                boxShadow: '0 2px 4px rgba(255,152,0,0.3)'
+                                            }}
+                                            onClick={() => openDistributionModal(line)}
+                                            title="Нажмите для распределения веса"
+                                            onMouseEnter={(e) => {
+                                                e.currentTarget.style.backgroundColor = '#f57c00';
+                                                e.currentTarget.style.transform = 'scale(1.02)';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                                e.currentTarget.style.backgroundColor = '#ff9800';
+                                                e.currentTarget.style.transform = 'scale(1)';
+                                            }}
+                                        >
+                                            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                                                {formatNumber(calculateFactMinusWaste(line))}
+                                                <span style={{ fontSize: '12px' }}>➡</span>
+                                            </span>
+                                        </td>
+                                        {/* Вес к отгрузке */}
+                                        <td style={{
+                                            ...tdStyle,
+                                            backgroundColor: line.weightToShip ? '#c8e6c9' : '#eeeeee',
+                                            textAlign: 'right',
+                                            fontWeight: line.weightToShip ? 600 : 400
+                                        }}>
+                                            {line.weightToShip ? formatNumber(line.weightToShip) : '—'}
+                                        </td>
                                         <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
                                         <td style={tdStyle}>{line.coefficient ?? 1}</td>
                                     </tr>
@@ -659,7 +933,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                 backgroundColor: getCategoryBgColor(category)
                                             }}
                                         >
-                                            <td colSpan={7 + svod.supplierCols.length + 6} style={{ padding: '10px 16px', fontWeight: 600 }}>
+                                            <td colSpan={6 + svod.supplierCols.length + 5} style={{ padding: '10px 16px', fontWeight: 600 }}>
                                                 {expandedCategories.has(category) ? <ChevronDown size={16} style={{ marginRight: '8px' }} /> : <ChevronRight size={16} style={{ marginRight: '8px' }} />}
                                                 {getCategoryEmoji(category)} {category} ({groupedLines[category]?.length || 0})
                                             </td>
@@ -667,9 +941,48 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
 
                                         {/* Строки товаров */}
                                         {expandedCategories.has(category) && groupedLines[category]?.map(line => (
-                                            <tr key={line.productId} style={{ borderBottom: '1px solid #eee' }}>
-                                                <td style={tdStyle}>{line.shortName || line.product?.name}</td>
-                                                {/* ИСПРАВЛЕНО: Колонка категории - показываем название категории */}
+                                            <tr
+                                                key={line.productId}
+                                                style={{
+                                                    borderBottom: '1px solid #eee',
+                                                    backgroundColor: line.distributedFromLineId ? '#f0fff4' : undefined,
+                                                    borderLeft: line.isDistributionSource ? '4px solid #1976d2' :
+                                                        line.distributedFromLineId ? '4px solid #4caf50' : undefined
+                                                }}
+                                            >
+                                                <td style={tdStyle}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                        {line.isDistributionSource && (
+                                                            <span style={{
+                                                                backgroundColor: '#1976d2',
+                                                                color: 'white',
+                                                                fontSize: '10px',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                fontWeight: 600
+                                                            }}>Источник</span>
+                                                        )}
+                                                        {line.distributedFromLineId && (
+                                                            <span style={{ color: '#4caf50', fontSize: '14px' }}>↳</span>
+                                                        )}
+                                                        <span>{line.product?.name || line.shortName}</span>
+                                                        {line.distributedFromName && (
+                                                            <span style={{
+                                                                backgroundColor: '#e8f5e9',
+                                                                color: '#2e7d32',
+                                                                fontSize: '10px',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                marginLeft: '4px'
+                                                            }}>← из: {line.distributedFromName}</span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                {/* Код товара */}
+                                                <td style={{ ...tdStyle, fontSize: '11px', color: '#666' }}>
+                                                    {line.product?.code || '—'}
+                                                </td>
+                                                {/* Категория */}
                                                 <td style={{ ...tdStyle, color: getCategoryColor(category), fontWeight: 500 }}>
                                                     {category}
                                                 </td>
@@ -692,32 +1005,6 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                 <td style={{ ...tdStyle, backgroundColor: '#e8f5e9' }}>
                                                     {formatNumber(line.productionInQty)}
                                                 </td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#fce4ec' }}>
-                                                    {(mode === 'editing' || mode === 'preview') ? (
-                                                        <input
-                                                            type="number"
-                                                            step="0.001"
-                                                            value={getNumericLineValue(line, 'afterPurchaseStock') ?? ''}
-                                                            onChange={(e) => handleLineEdit(line.productId, 'afterPurchaseStock', e.target.value)}
-                                                            style={inputStyle}
-                                                        />
-                                                    ) : (
-                                                        formatNumber(line.afterPurchaseStock)
-                                                    )}
-                                                </td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#f3e5f5' }}>
-                                                    {(mode === 'editing' || mode === 'preview') ? (
-                                                        <input
-                                                            type="number"
-                                                            step="0.001"
-                                                            value={getNumericLineValue(line, 'afterShipmentStock') ?? ''}
-                                                            onChange={(e) => handleLineEdit(line.productId, 'afterShipmentStock', e.target.value)}
-                                                            style={inputStyle}
-                                                        />
-                                                    ) : (
-                                                        formatNumber(line.afterShipmentStock)
-                                                    )}
-                                                </td>
 
                                                 {/* Значения по поставщикам */}
                                                 {svod.supplierCols.map(col => (
@@ -726,11 +1013,48 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                     </td>
                                                 ))}
 
-                                                {/* Расчётные колонки */}
-                                                <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
+                                                {/* Имеется в наличии */}
+                                                <td style={{ ...tdStyle, backgroundColor: '#c8e6c9', fontWeight: 600, textAlign: 'right' }}>
+                                                    {formatNumber(calculateAvailableQty(line))}
+                                                </td>
+                                                {/* Факт (− отходы) - КЛИКАБЕЛЬНАЯ ячейка */}
+                                                <td
+                                                    style={{
+                                                        ...tdStyle,
+                                                        backgroundColor: '#ff9800',
+                                                        color: 'white',
+                                                        fontWeight: 600,
+                                                        textAlign: 'right',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.2s',
+                                                        borderRadius: '4px',
+                                                        boxShadow: '0 2px 4px rgba(255,152,0,0.3)'
+                                                    }}
+                                                    onClick={() => openDistributionModal(line)}
+                                                    title="Нажмите для распределения веса"
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.backgroundColor = '#f57c00';
+                                                        e.currentTarget.style.transform = 'scale(1.02)';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.backgroundColor = '#ff9800';
+                                                        e.currentTarget.style.transform = 'scale(1)';
+                                                    }}
+                                                >
+                                                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
+                                                        {formatNumber(calculateFactMinusWaste(line))}
+                                                        <span style={{ fontSize: '12px' }}>➡</span>
+                                                    </span>
+                                                </td>
+                                                {/* Вес к отгрузке */}
+                                                <td style={{
+                                                    ...tdStyle,
+                                                    backgroundColor: line.weightToShip ? '#c8e6c9' : '#eeeeee',
+                                                    textAlign: 'right',
+                                                    fontWeight: line.weightToShip ? 600 : 400
+                                                }}>
+                                                    {line.weightToShip ? formatNumber(line.weightToShip) : '—'}
+                                                </td>
                                                 <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
                                                 <td style={tdStyle}>{line.coefficient ?? 1}</td>
                                             </tr>
@@ -748,6 +1072,298 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                 <div style={{ padding: '60px', textAlign: 'center', color: '#999' }}>
                     <p style={{ fontSize: '18px', marginBottom: '12px' }}>Нет данных для формирования свода</p>
                     <p>Убедитесь, что на выбранную дату есть заказы, закупки или остатки</p>
+                </div>
+            )}
+
+            {/* ============================================ */}
+            {/* МОДАЛЬНОЕ ОКНО РАСПРЕДЕЛЕНИЯ ВЕСА */}
+            {/* ============================================ */}
+            {showDistributionModal && distributionData && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0,0,0,0.5)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 1000
+                    }}
+                    onClick={closeDistributionModal}
+                >
+                    <div
+                        style={{
+                            backgroundColor: 'white',
+                            borderRadius: '12px',
+                            width: '600px',
+                            maxHeight: '80vh',
+                            overflow: 'hidden',
+                            boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {/* Заголовок */}
+                        <div style={{
+                            padding: '20px 24px',
+                            borderBottom: '1px solid #eee',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            backgroundColor: '#ff9800',
+                            color: 'white'
+                        }}>
+                            <div>
+                                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>
+                                    Распределение веса
+                                </h3>
+                                <p style={{ margin: '4px 0 0', fontSize: '14px', opacity: 0.9 }}>
+                                    {distributionData.productName}
+                                </p>
+                            </div>
+                            <button
+                                onClick={closeDistributionModal}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: 'white',
+                                    cursor: 'pointer',
+                                    padding: '8px'
+                                }}
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        {/* Информация источника */}
+                        <div style={{ padding: '16px 24px', backgroundColor: '#fff8e1', borderBottom: '1px solid #eee' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                <span>Факт (− отходы):</span>
+                                <strong>{formatNumber(distributionData.factMinusWaste)} кг</strong>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <span>Вес для распределения:</span>
+                                <input
+                                    type="number"
+                                    step="0.001"
+                                    value={plannedWeight}
+                                    onChange={(e) => setPlannedWeight(e.target.value)}
+                                    placeholder="Введите вес"
+                                    style={{
+                                        padding: '8px 12px',
+                                        border: '1px solid #ddd',
+                                        borderRadius: '6px',
+                                        fontSize: '14px',
+                                        width: '120px'
+                                    }}
+                                />
+                                <span>кг</span>
+                            </div>
+                        </div>
+
+                        {/* Кнопка добавить товар */}
+                        <div style={{ padding: '12px 24px', borderBottom: '1px solid #eee' }}>
+                            <button
+                                onClick={() => setShowProductSelector(!showProductSelector)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '10px 16px',
+                                    border: '1px dashed #1976d2',
+                                    borderRadius: '8px',
+                                    backgroundColor: showProductSelector ? '#e3f2fd' : 'white',
+                                    color: '#1976d2',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    fontWeight: 500,
+                                    width: '100%',
+                                    justifyContent: 'center'
+                                }}
+                            >
+                                <Package size={18} />
+                                {showProductSelector ? 'Скрыть список' : `➕ Добавить товар из категории "${distributionData.category || 'Все'}"`}
+                            </button>
+                        </div>
+
+                        {/* Список товаров для выбора */}
+                        {showProductSelector && (
+                            <div style={{
+                                maxHeight: '200px',
+                                overflowY: 'auto',
+                                padding: '0 24px',
+                                backgroundColor: '#f8f9fa',
+                                borderBottom: '1px solid #eee'
+                            }}>
+                                {getCategoryProducts().length > 0 ? (
+                                    getCategoryProducts().map(product => (
+                                        <div
+                                            key={product.productId}
+                                            onClick={() => addProductToDistribution(product)}
+                                            style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                padding: '10px 12px',
+                                                margin: '4px 0',
+                                                backgroundColor: 'white',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer',
+                                                transition: 'background-color 0.2s',
+                                                border: '1px solid #eee'
+                                            }}
+                                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e3f2fd'}
+                                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                                        >
+                                            <div>
+                                                <div style={{ fontWeight: 500 }}>{product.product?.name || product.shortName}</div>
+                                                <div style={{ fontSize: '12px', color: '#666' }}>
+                                                    Код: {product.product?.code || '—'}
+                                                </div>
+                                            </div>
+                                            <span style={{ color: '#1976d2', fontSize: '20px' }}>+</span>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div style={{ padding: '20px', textAlign: 'center', color: '#999' }}>
+                                        Нет других товаров в этой категории
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Выбранные товары */}
+                        <div style={{ maxHeight: '250px', overflowY: 'auto', padding: '0 24px' }}>
+                            {distributionData.selectedItems.length > 0 ? (
+                                <>
+                                    <div style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        borderBottom: '2px solid #e0e0e0',
+                                        fontWeight: 600,
+                                        backgroundColor: '#e8f5e9',
+                                        margin: '0 -24px',
+                                        padding: '12px 24px'
+                                    }}>
+                                        <span>Распределить на</span>
+                                        <span>Количество, кг</span>
+                                    </div>
+                                    {distributionData.selectedItems.map(item => (
+                                        <div
+                                            key={item.productId}
+                                            style={{
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                padding: '12px 0',
+                                                borderBottom: '1px solid #f0f0f0'
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+                                                <button
+                                                    onClick={() => removeProductFromDistribution(item.productId)}
+                                                    style={{
+                                                        border: 'none',
+                                                        background: 'none',
+                                                        color: '#dc3545',
+                                                        cursor: 'pointer',
+                                                        padding: '4px',
+                                                        fontSize: '16px'
+                                                    }}
+                                                    title="Удалить"
+                                                >
+                                                    ✕
+                                                </button>
+                                                <div>
+                                                    <div>{item.productName}</div>
+                                                    <div style={{ fontSize: '11px', color: '#888' }}>
+                                                        {item.productCode || '—'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                step="0.001"
+                                                value={item.qty || ''}
+                                                onChange={(e) => updateDistributionQty(item.productId, e.target.value)}
+                                                placeholder="0"
+                                                style={{
+                                                    width: '100px',
+                                                    padding: '8px',
+                                                    border: '1px solid #ddd',
+                                                    borderRadius: '6px',
+                                                    textAlign: 'right'
+                                                }}
+                                            />
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
+                                    Нажмите кнопку выше, чтобы добавить товары для распределения
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Итого и кнопки */}
+                        <div style={{
+                            padding: '16px 24px',
+                            borderTop: '1px solid #eee',
+                            backgroundColor: '#f5f5f5'
+                        }}>
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                marginBottom: '16px',
+                                fontSize: '15px'
+                            }}>
+                                <span>Распределено:</span>
+                                <strong style={{ color: getTotalDistributed() > 0 ? '#2e7d32' : '#999' }}>
+                                    {formatNumber(getTotalDistributed())} кг
+                                    {plannedWeight && parseFloat(plannedWeight) > 0 && (
+                                        <span style={{ marginLeft: '8px', color: '#666', fontWeight: 400 }}>
+                                            / {plannedWeight} кг
+                                        </span>
+                                    )}
+                                </strong>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button
+                                    onClick={closeDistributionModal}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        border: '1px solid #ddd',
+                                        borderRadius: '8px',
+                                        backgroundColor: 'white',
+                                        cursor: 'pointer',
+                                        fontSize: '14px'
+                                    }}
+                                >
+                                    Отмена
+                                </button>
+                                <button
+                                    onClick={saveDistribution}
+                                    disabled={distributionLoading || distributionData.selectedItems.length === 0}
+                                    style={{
+                                        flex: 1,
+                                        padding: '12px',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        backgroundColor: distributionData.selectedItems.length === 0 ? '#ccc' : '#4caf50',
+                                        color: 'white',
+                                        cursor: distributionData.selectedItems.length === 0 ? 'not-allowed' : 'pointer',
+                                        fontSize: '14px',
+                                        fontWeight: 600
+                                    }}
+                                >
+                                    {distributionLoading ? 'Сохранение...' : '✓ Сохранить распределение'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 

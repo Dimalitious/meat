@@ -556,6 +556,7 @@ model ProductionMmlNode {
   children      ProductionMmlNode[] @relation("NodeChildren")
   product       Product   @relation("MmlNodeProduct", fields: [productId], references: [id])
   runValues     ProductionRunValue[]  // Значения в выработках
+  shipmentDistributions SvodShipmentDistribution[]  // Распределения в своде
   
   @@index([mmlId])
   @@index([parentNodeId])
@@ -845,6 +846,11 @@ model SvodLine {
   planFactDiff          Decimal?  @db.Decimal(14, 3)  // Разница план-факт
   underOver             Decimal?  @db.Decimal(14, 3)  // Недобор-перебор
   
+  // Маркировка распределения
+  isDistributionSource  Boolean   @default(false)  // Позиция-источник распределения
+  distributedFromLineId Int?      // FK -> SvodLine (родительская позиция)
+  distributedFromName   String?   // Краткое название родительской позиции (для отображения)
+  
   sortOrder             Int       @default(0)  // Порядок в блоке категории
   
   createdAt             DateTime  @default(now())
@@ -852,11 +858,13 @@ model SvodLine {
   
   svod                  SvodHeader @relation(fields: [svodId], references: [id], onDelete: Cascade)
   product               Product    @relation(fields: [productId], references: [id])
+  shipmentDistributions SvodShipmentDistribution[]  // Распределение по MML
   
   @@unique([svodId, productId])  // Один товар = одна строка в своде
   @@index([svodId])
   @@index([productId])
   @@index([category])
+  @@index([distributedFromLineId])
 }
 
 // Колонки поставщиков в своде (до 10 штук)
@@ -897,6 +905,23 @@ model SvodSupplierValue {
   @@index([svodId])
   @@index([productId])
   @@index([supplierId])
+}
+
+// Распределение веса отгрузки по позициям техкарты (MML)
+model SvodShipmentDistribution {
+  id              Int       @id @default(autoincrement())
+  svodLineId      Int       // FK → SvodLine
+  mmlNodeId       Int       // FK → ProductionMmlNode (позиция из техкарты)
+  distributedQty  Decimal   @db.Decimal(14, 3)  // Распределённое количество
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  svodLine        SvodLine          @relation(fields: [svodLineId], references: [id], onDelete: Cascade)
+  mmlNode         ProductionMmlNode @relation(fields: [mmlNodeId], references: [id])
+  
+  @@unique([svodLineId, mmlNodeId])  // Один узел = одно распределение на строку
+  @@index([svodLineId])
+  @@index([mmlNodeId])
 }
 
 // ============================================

@@ -203,19 +203,39 @@ async function buildSvodPreview(svodDate: Date) {
         // Категория из справочника товаров
         const categoryFromProduct = product.category || 'Без категории';
 
+        // Получаем значения для расчётов
+        const openingStock = stockByProduct.get(productId) || 0;
+        const productionInQty = productionByProduct.get(productId) || 0;
+        const coefficient = product.coefficient ?? 1;
+
+        // Сумма закупок по всем поставщикам для данного товара
+        let totalPurchasesForProduct = 0;
+        const supplierMap = purchasesByProduct.get(productId);
+        if (supplierMap) {
+            for (const qty of supplierMap.values()) {
+                totalPurchasesForProduct += qty;
+            }
+        }
+
+        // Расчёт "Имеется в наличии" = Остаток на начало + Закупки + Производство
+        const availableQty = openingStock + totalPurchasesForProduct + productionInQty;
+
+        // Расчёт "Факт (− отходы)" = Имеется в наличии × Коэффициент
+        const factMinusWaste = availableQty * coefficient;
+
         lines.push({
             productId,
             shortName: product.priceListName || product.name,
             category: categoryFromProduct,
             coefficient: product.coefficient,
             orderQty: ordersByProduct.get(productId) || 0,
-            openingStock: stockByProduct.get(productId) || 0,
+            openingStock,
             openingStockIsManual: false,
-            productionInQty: productionByProduct.get(productId) || 0,
+            productionInQty,
             afterPurchaseStock: null as number | null,
-            afterShipmentStock: null as number | null,
+            availableQty,  // Имеется в наличии
             qtyToShip: null,
-            factMinusWaste: null,
+            factMinusWaste,  // Факт (− отходы)
             weightToShip: null,
             planFactDiff: null,
             underOver: null,
@@ -333,7 +353,7 @@ export const saveSvod = async (req: Request, res: Response) => {
                         openingStock: line.openingStock || 0,
                         openingStockIsManual: line.openingStockIsManual || false,
                         afterPurchaseStock: line.afterPurchaseStock,
-                        afterShipmentStock: line.afterShipmentStock,
+                        // availableQty и factMinusWaste рассчитываются динамически на клиенте
                         qtyToShip: line.qtyToShip,
                         factMinusWaste: line.factMinusWaste,
                         weightToShip: line.weightToShip,
@@ -427,7 +447,7 @@ async function updateExistingSvod(
                         openingStock: line.openingStock || 0,
                         openingStockIsManual: line.openingStockIsManual || false,
                         afterPurchaseStock: line.afterPurchaseStock,
-                        afterShipmentStock: line.afterShipmentStock,
+                        // availableQty и factMinusWaste рассчитываются динамически на клиенте
                         qtyToShip: line.qtyToShip,
                         factMinusWaste: line.factMinusWaste,
                         weightToShip: line.weightToShip,
@@ -499,13 +519,12 @@ export const refreshSvod = async (req: Request, res: Response) => {
         }
 
         // Сохраняем ручные правки
-        const manualEdits = new Map<number, { openingStock: number; afterPurchaseStock: number | null; afterShipmentStock: number | null }>();
+        const manualEdits = new Map<number, { openingStock: number; afterPurchaseStock: number | null }>();
         for (const line of svod.lines) {
-            if (line.openingStockIsManual || line.afterPurchaseStock || line.afterShipmentStock) {
+            if (line.openingStockIsManual || line.afterPurchaseStock) {
                 manualEdits.set(line.productId, {
                     openingStock: line.openingStockIsManual ? Number(line.openingStock) : 0,
-                    afterPurchaseStock: line.afterPurchaseStock ? Number(line.afterPurchaseStock) : null,
-                    afterShipmentStock: line.afterShipmentStock ? Number(line.afterShipmentStock) : null
+                    afterPurchaseStock: line.afterPurchaseStock ? Number(line.afterPurchaseStock) : null
                 });
             }
         }
@@ -523,9 +542,6 @@ export const refreshSvod = async (req: Request, res: Response) => {
                 }
                 if (manual.afterPurchaseStock !== null) {
                     line.afterPurchaseStock = manual.afterPurchaseStock;
-                }
-                if (manual.afterShipmentStock !== null) {
-                    line.afterShipmentStock = manual.afterShipmentStock;
                 }
             }
         }
@@ -548,7 +564,7 @@ export const updateSvodLine = async (req: Request, res: Response) => {
         const updates = req.body;
 
         // Определяем, какие поля можно редактировать
-        const allowedFields = ['openingStock', 'afterPurchaseStock', 'afterShipmentStock'];
+        const allowedFields = ['openingStock', 'afterPurchaseStock'];
         const data: any = {};
 
         for (const field of allowedFields) {
@@ -591,5 +607,306 @@ export const deleteSvod = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('deleteSvod error:', error);
         res.status(500).json({ error: 'Failed to delete svod' });
+    }
+};
+
+// ============================================
+// РАСПРЕДЕЛЕНИЕ ВЕСА ОТГРУЗКИ ПО MML
+// ============================================
+
+/**
+ * Получить MML (техкарту) по productId
+ * GET /api/svod/mml/:productId
+ */
+export const getMmlForDistribution = async (req: Request, res: Response) => {
+    try {
+        const productId = Number(req.params.productId);
+
+        // Ищем MML для этого товара
+        const mml = await prisma.productionMml.findUnique({
+            where: { productId },
+            include: {
+                product: {
+                    select: { id: true, name: true, code: true, category: true }
+                },
+                nodes: {
+                    where: { parentNodeId: null },  // Только корневые узлы
+                    orderBy: { sortOrder: 'asc' },
+                    include: {
+                        product: {
+                            select: { id: true, name: true, code: true }
+                        },
+                        children: {
+                            orderBy: { sortOrder: 'asc' },
+                            include: {
+                                product: {
+                                    select: { id: true, name: true, code: true }
+                                },
+                                children: {
+                                    orderBy: { sortOrder: 'asc' },
+                                    include: {
+                                        product: {
+                                            select: { id: true, name: true, code: true }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!mml) {
+            return res.status(404).json({ error: 'MML not found for this product' });
+        }
+
+        // Рекурсивно собираем все узлы в плоский список для удобства
+        const flattenNodes = (nodes: any[]): any[] => {
+            const result: any[] = [];
+            for (const node of nodes) {
+                result.push({
+                    id: node.id,
+                    productId: node.productId,
+                    productName: node.product?.name || 'Unknown',
+                    productCode: node.product?.code || '',
+                    parentNodeId: node.parentNodeId,
+                    sortOrder: node.sortOrder
+                });
+                if (node.children && node.children.length > 0) {
+                    result.push(...flattenNodes(node.children));
+                }
+            }
+            return result;
+        };
+
+        res.json({
+            mml: {
+                id: mml.id,
+                productId: mml.productId,
+                productName: mml.product?.name,
+                isLocked: mml.isLocked
+            },
+            nodes: flattenNodes(mml.nodes)
+        });
+    } catch (error) {
+        console.error('getMmlForDistribution error:', error);
+        res.status(500).json({ error: 'Failed to get MML' });
+    }
+};
+
+/**
+ * Получить распределение веса для строки свода
+ * GET /api/svod/lines/:lineId/distribution
+ */
+export const getShipmentDistribution = async (req: Request, res: Response) => {
+    try {
+        const lineId = Number(req.params.lineId);
+
+        const line = await prisma.svodLine.findUnique({
+            where: { id: lineId },
+            include: {
+                product: {
+                    select: { id: true, name: true, code: true, category: true }
+                },
+                shipmentDistributions: {
+                    include: {
+                        mmlNode: {
+                            include: {
+                                product: {
+                                    select: { id: true, name: true, code: true }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!line) {
+            return res.status(404).json({ error: 'Svod line not found' });
+        }
+
+        res.json({
+            lineId: line.id,
+            productId: line.productId,
+            productName: line.product?.name,
+            weightToShip: line.weightToShip,
+            factMinusWaste: line.factMinusWaste,
+            distributions: line.shipmentDistributions.map(d => ({
+                id: d.id,
+                mmlNodeId: d.mmlNodeId,
+                distributedQty: Number(d.distributedQty),
+                productName: d.mmlNode?.product?.name,
+                productCode: d.mmlNode?.product?.code
+            }))
+        });
+    } catch (error) {
+        console.error('getShipmentDistribution error:', error);
+        res.status(500).json({ error: 'Failed to get shipment distribution' });
+    }
+};
+
+/**
+ * Сохранить распределение веса для строки свода
+ * POST /api/svod/lines/:lineId/distribution
+ * Body: { 
+ *   plannedWeight: number, 
+ *   distributions: [{ productId: number, productName: string, qty: number }],
+ *   addMissingProducts: boolean,
+ *   sourceProductId: number,
+ *   sourceProductName: string
+ * }
+ */
+export const saveShipmentDistribution = async (req: Request, res: Response) => {
+    try {
+        const lineId = Number(req.params.lineId);
+        const { plannedWeight, distributions, addMissingProducts, sourceProductId, sourceProductName } = req.body;
+
+        if (!distributions || !Array.isArray(distributions)) {
+            return res.status(400).json({ error: 'distributions array is required' });
+        }
+
+        // Проверяем существование строки и получаем svodId
+        const line = await prisma.svodLine.findUnique({
+            where: { id: lineId },
+            include: { svod: true }
+        });
+
+        if (!line) {
+            return res.status(404).json({ error: 'Svod line not found' });
+        }
+
+        const svodId = line.svodId;
+        const addedLines: any[] = [];
+
+        await prisma.$transaction(async (tx) => {
+            // Фильтруем валидные распределения
+            const validDistributions = distributions.filter((d: any) => d.qty > 0 && d.productId);
+
+            // *** ОЧИСТКА СТАРЫХ РАСПРЕДЕЛЕНИЙ ***
+            // Находим все строки которые ранее были распределены от этого источника
+            const oldDistributedLines = await tx.svodLine.findMany({
+                where: {
+                    svodId,
+                    distributedFromLineId: lineId
+                }
+            });
+
+            // Обнуляем у них weightToShip и снимаем маркировку
+            for (const oldLine of oldDistributedLines) {
+                await tx.svodLine.update({
+                    where: { id: oldLine.id },
+                    data: {
+                        weightToShip: null,
+                        distributedFromLineId: null,
+                        distributedFromName: null
+                    }
+                });
+            }
+
+            // Обнуляем weightToShip у родительской позиции и помечаем как источник
+            await tx.svodLine.update({
+                where: { id: lineId },
+                data: {
+                    weightToShip: null,
+                    isDistributionSource: true  // Маркируем как источник
+                }
+            });
+
+            // Получаем короткое название родительской позиции
+            const sourceName = line.shortName || 'Источник';
+
+            // Обрабатываем каждую позицию распределения
+            for (const dist of validDistributions) {
+                if (!dist.productId) continue;
+
+                // Ищем существующую строку в своде
+                let targetLine = await tx.svodLine.findUnique({
+                    where: {
+                        svodId_productId: { svodId, productId: dist.productId }
+                    }
+                });
+
+                if (targetLine) {
+                    // Обновляем weightToShip у существующей строки + маркировка
+                    await tx.svodLine.update({
+                        where: { id: targetLine.id },
+                        data: {
+                            weightToShip: {
+                                increment: dist.qty
+                            },
+                            distributedFromLineId: lineId,
+                            distributedFromName: sourceName
+                        }
+                    });
+                } else if (addMissingProducts) {
+                    // Добавляем новую строку в свод с маркировкой
+                    const product = await tx.product.findUnique({
+                        where: { id: dist.productId },
+                        select: { id: true, name: true, priceListName: true, category: true, coefficient: true }
+                    });
+
+                    if (product) {
+                        const newLine = await tx.svodLine.create({
+                            data: {
+                                svodId,
+                                productId: dist.productId,
+                                shortName: product.priceListName || product.name,
+                                category: product.category,
+                                coefficient: product.coefficient,
+                                orderQty: 0,
+                                productionInQty: 0,
+                                openingStock: 0,
+                                openingStockIsManual: false,
+                                weightToShip: dist.qty,
+                                distributedFromLineId: lineId,
+                                distributedFromName: sourceName,
+                                sortOrder: 999  // В конец списка
+                            }
+                        });
+                        addedLines.push({
+                            ...newLine,
+                            product,
+                            isNew: true
+                        });
+                    }
+                }
+            }
+        });
+
+        // Возвращаем обновлённые данные
+        const updatedLine = await prisma.svodLine.findUnique({
+            where: { id: lineId },
+            include: {
+                product: true,
+                shipmentDistributions: {
+                    include: {
+                        mmlNode: {
+                            include: {
+                                product: {
+                                    select: { id: true, name: true, code: true }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        res.json({
+            success: true,
+            line: updatedLine,
+            addedLines,
+            distributions: updatedLine?.shipmentDistributions.map(d => ({
+                id: d.id,
+                mmlNodeId: d.mmlNodeId,
+                distributedQty: Number(d.distributedQty),
+                productName: d.mmlNode?.product?.name
+            }))
+        });
+    } catch (error) {
+        console.error('saveShipmentDistribution error:', error);
+        res.status(500).json({ error: 'Failed to save shipment distribution' });
     }
 };

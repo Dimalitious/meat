@@ -5,7 +5,10 @@ import {
     saveSvod,
     refreshSvod,
     updateSvodLine,
-    deleteSvod
+    deleteSvod,
+    getMmlForDistribution,
+    getShipmentDistribution,
+    saveShipmentDistribution
 } from '../controllers/svod.controller';
 
 const router = Router();
@@ -27,5 +30,18 @@ router.patch('/lines/:lineId', updateSvodLine);
 
 // Удалить СВОД
 router.delete('/:id', deleteSvod);
+
+// ============================================
+// РАСПРЕДЕЛЕНИЕ ВЕСА ОТГРУЗКИ
+// ============================================
+
+// Получить MML (техкарту) по productId для распределения
+router.get('/mml/:productId', getMmlForDistribution);
+
+// Получить распределение веса для строки свода
+router.get('/lines/:lineId/distribution', getShipmentDistribution);
+
+// Сохранить распределение веса для строки свода
+router.post('/lines/:lineId/distribution', saveShipmentDistribution);
 
 export default router;
