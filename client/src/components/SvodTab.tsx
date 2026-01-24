@@ -38,6 +38,8 @@ interface SvodLine {
     isDistributionSource?: boolean;
     distributedFromLineId?: number | null;
     distributedFromName?: string | null;
+    // Маркировка позиций только из закупок (нет заказов)
+    isPurchaseOnly?: boolean;
     product?: Product;
 }
 
@@ -445,7 +447,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                 if (existingIndex >= 0) {
                     updatedLines[existingIndex] = {
                         ...updatedLines[existingIndex],
-                        weightToShip: (updatedLines[existingIndex].weightToShip || 0) + dist.qty,
+                        weightToShip: dist.qty,  // Заменяем значение, а не прибавляем
                         distributedFromLineId: distributionData.lineId,
                         distributedFromName: sourceName
                     };
@@ -807,9 +809,11 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                         key={line.productId}
                                         style={{
                                             borderBottom: '1px solid #eee',
-                                            backgroundColor: line.distributedFromLineId ? '#f0fff4' : undefined,
+                                            backgroundColor: line.distributedFromLineId ? '#f0fff4' :
+                                                (line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) ? '#f3e5f5' : undefined,
                                             borderLeft: line.isDistributionSource ? '4px solid #1976d2' :
-                                                line.distributedFromLineId ? '4px solid #4caf50' : undefined
+                                                line.distributedFromLineId ? '4px solid #4caf50' :
+                                                    (line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) ? '4px solid #9c27b0' : undefined
                                         }}
                                     >
                                         <td style={tdStyle}>
@@ -826,6 +830,17 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                 )}
                                                 {line.distributedFromLineId && (
                                                     <span style={{ color: '#4caf50', fontSize: '14px' }}>↳</span>
+                                                )}
+                                                {/* Бейдж "Закупка" для позиций только из закупок */}
+                                                {(line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) && !line.distributedFromLineId && (
+                                                    <span style={{
+                                                        backgroundColor: '#9c27b0',
+                                                        color: 'white',
+                                                        fontSize: '10px',
+                                                        padding: '2px 6px',
+                                                        borderRadius: '4px',
+                                                        fontWeight: 600
+                                                    }}>Закупка</span>
                                                 )}
                                                 <span>{line.product?.name || line.shortName}</span>
                                                 {line.distributedFromName && (
@@ -971,9 +986,11 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                 key={line.productId}
                                                 style={{
                                                     borderBottom: '1px solid #eee',
-                                                    backgroundColor: line.distributedFromLineId ? '#f0fff4' : undefined,
+                                                    backgroundColor: line.distributedFromLineId ? '#f0fff4' :
+                                                        (line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) ? '#f3e5f5' : undefined,
                                                     borderLeft: line.isDistributionSource ? '4px solid #1976d2' :
-                                                        line.distributedFromLineId ? '4px solid #4caf50' : undefined
+                                                        line.distributedFromLineId ? '4px solid #4caf50' :
+                                                            (line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) ? '4px solid #9c27b0' : undefined
                                                 }}
                                             >
                                                 <td style={tdStyle}>
@@ -990,6 +1007,17 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                         )}
                                                         {line.distributedFromLineId && (
                                                             <span style={{ color: '#4caf50', fontSize: '14px' }}>↳</span>
+                                                        )}
+                                                        {/* Бейдж "Закупка" для позиций только из закупок */}
+                                                        {(line.isPurchaseOnly || (line.orderQty === 0 && getTotalPurchaseForProduct(line.productId) > 0)) && !line.distributedFromLineId && (
+                                                            <span style={{
+                                                                backgroundColor: '#9c27b0',
+                                                                color: 'white',
+                                                                fontSize: '10px',
+                                                                padding: '2px 6px',
+                                                                borderRadius: '4px',
+                                                                fontWeight: 600
+                                                            }}>Закупка</span>
                                                         )}
                                                         <span>{line.product?.name || line.shortName}</span>
                                                         {line.distributedFromName && (

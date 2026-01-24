@@ -520,10 +520,11 @@ const PurchaseFormPage: React.FC = () => {
                                                 <input
                                                     type="number"
                                                     className="w-full px-2 py-1 border border-slate-300 rounded text-sm"
-                                                    value={item.qty || ''}
+                                                    value={item.qty > 0 ? item.qty : ''}
                                                     onChange={(e) => updateItem(item.supplierId, item.productId, 'qty', Number(e.target.value))}
                                                     step="0.001"
                                                     min="0"
+                                                    placeholder="—"
                                                 />
                                             </td>
                                             <td className="px-3 py-2 font-semibold text-blue-600">

@@ -179,9 +179,13 @@ export const createPurchase = async (req: Request, res: Response) => {
         // Создание закупки в транзакции
         const purchase = await prisma.$transaction(async (tx) => {
             // 1. Создать шапку закупки
+            // Нормализуем дату к UTC полночи для корректного сравнения в своде
+            const normalizedDate = new Date(purchaseDate);
+            normalizedDate.setUTCHours(0, 0, 0, 0);
+
             const newPurchase = await tx.purchase.create({
                 data: {
-                    purchaseDate: new Date(purchaseDate),
+                    purchaseDate: normalizedDate,
                     totalAmount,
                     createdByUserId: userId
                 }
@@ -259,10 +263,17 @@ export const updatePurchase = async (req: Request, res: Response) => {
         // Обновление в транзакции
         await prisma.$transaction(async (tx) => {
             // 1. Обновить шапку
+            // Нормализуем дату к UTC полночи для корректного сравнения в своде
+            let normalizedDate: Date | undefined;
+            if (purchaseDate) {
+                normalizedDate = new Date(purchaseDate);
+                normalizedDate.setUTCHours(0, 0, 0, 0);
+            }
+
             await tx.purchase.update({
                 where: { id },
                 data: {
-                    purchaseDate: purchaseDate ? new Date(purchaseDate) : undefined,
+                    purchaseDate: normalizedDate,
                     totalAmount
                 }
             });

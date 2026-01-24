@@ -138,6 +138,13 @@ export default function SummaryOrdersPage() {
     // K распределения из Svod (productId -> коэффициент в %)
     const [svodCoefficients, setSvodCoefficients] = useState<Map<number, number>>(new Map());
 
+    // НОВОЕ: Обновляем коэффициенты при переключении на вкладку "Заказы"
+    useEffect(() => {
+        if (activeTab === 'orders') {
+            fetchSvodCoefficients();
+        }
+    }, [activeTab, filterDate]);
+
     // Track dirty entries for batch save
     const dirtyEntryIds = useMemo(() => {
         return new Set(entries.filter(e => e._dirty).map(e => e.id));

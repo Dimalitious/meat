@@ -22,8 +22,10 @@ export const getSvodByDate = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'date parameter is required' });
         }
 
+        // Парсим дату как UTC полночь для корректного сравнения
+        // Дата приходит как "2026-01-22", парсим её как UTC
         const svodDate = new Date(String(date));
-        svodDate.setHours(0, 0, 0, 0);
+        svodDate.setUTCHours(0, 0, 0, 0);
 
         // Проверяем, есть ли сохранённый свод
         const existingSvod = await prisma.svodHeader.findUnique({
@@ -64,10 +66,13 @@ export const getSvodByDate = async (req: Request, res: Response) => {
  * Сформировать данные для предпросмотра СВОД (без сохранения)
  */
 async function buildSvodPreview(svodDate: Date) {
+    // Используем только дату (без времени) для корректной работы с часовыми поясами
+    // svodDate приходит как Date с временем 00:00:00 UTC (из @db.Date)
     const dateStart = new Date(svodDate);
-    dateStart.setHours(0, 0, 0, 0);
+    dateStart.setUTCHours(0, 0, 0, 0);
     const dateEnd = new Date(svodDate);
-    dateEnd.setHours(23, 59, 59, 999);
+    dateEnd.setUTCHours(23, 59, 59, 999);
+
 
 
     // ============================================
@@ -137,7 +142,6 @@ async function buildSvodPreview(svodDate: Date) {
             }
         }
     });
-
 
     // Агрегируем закупки по товарам и поставщикам
     const purchasesByProduct = new Map<number, Map<number, number>>();
@@ -223,12 +227,16 @@ async function buildSvodPreview(svodDate: Date) {
         // Расчёт "Факт (− отходы)" = Имеется в наличии × Коэффициент
         const factMinusWaste = availableQty * coefficient;
 
+        // Определяем, является ли позиция "только закупка" (есть закупки, но нет заказов)
+        const orderQty = ordersByProduct.get(productId) || 0;
+        const isPurchaseOnly = totalPurchasesForProduct > 0 && orderQty === 0;
+
         lines.push({
             productId,
             shortName: product.priceListName || product.name,
             category: categoryFromProduct,
             coefficient: product.coefficient,
-            orderQty: ordersByProduct.get(productId) || 0,
+            orderQty,
             openingStock,
             openingStockIsManual: false,
             productionInQty,
@@ -239,6 +247,7 @@ async function buildSvodPreview(svodDate: Date) {
             weightToShip: null,
             planFactDiff: null,
             underOver: null,
+            isPurchaseOnly,  // Маркировка позиций только из закупок
             product
         });
     }
@@ -315,8 +324,9 @@ export const saveSvod = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'svodDate and lines are required' });
         }
 
+        // Парсим дату как UTC полночь
         const date = new Date(svodDate);
-        date.setHours(0, 0, 0, 0);
+        date.setUTCHours(0, 0, 0, 0);
 
         // Проверяем, есть ли уже свод на эту дату
         const existing = await prisma.svodHeader.findUnique({
