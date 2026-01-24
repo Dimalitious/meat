@@ -4,6 +4,7 @@ import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
 import { useAuth } from '../context/AuthContext';
 import { useSocket, useProductionRun, useProductionList } from '../context/SocketContext';
+import { formatNumber } from '../utils/formatters';
 import {
     Search, Plus, Trash2, Save, Check, Edit2, Copy, X, User, Calendar,
     Package, FileText, AlertCircle, ChevronRight, ChevronDown, FolderTree, Wifi, WifiOff, Users
@@ -869,7 +870,7 @@ export default function ProductionV2Page() {
                                             </div>
                                         </div>
                                         <div className="w-16 text-right text-sm text-gray-600" onClick={() => loadRunDetails(run.id)}>
-                                            {run.actualWeight !== null ? Number(run.actualWeight).toFixed(2) : '-'}
+                                            {formatNumber(run.actualWeight !== null ? Number(run.actualWeight) : null, 2)}
                                         </div>
                                         <div className="w-20 text-right text-xs text-gray-500" onClick={() => loadRunDetails(run.id)}>
                                             {run.productionDate ? new Date(run.productionDate).toLocaleDateString('ru-RU') : '-'}
@@ -986,7 +987,7 @@ export default function ProductionV2Page() {
                                         <div>
                                             <label className="text-xs text-gray-500 block mb-1">Фактический вес (кг)</label>
                                             <div className="w-full border rounded px-3 py-2 text-sm bg-gray-50 font-semibold text-indigo-700">
-                                                {calculateActualWeight().toFixed(3)}
+                                                {formatNumber(calculateActualWeight(), 3)}
                                             </div>
                                         </div>
                                     </div>

@@ -359,6 +359,10 @@ export const saveSvod = async (req: Request, res: Response) => {
                         weightToShip: line.weightToShip,
                         planFactDiff: line.planFactDiff,
                         underOver: line.underOver,
+                        // Поля распределения
+                        isDistributionSource: line.isDistributionSource || false,
+                        distributedFromLineId: line.distributedFromLineId || null,
+                        distributedFromName: line.distributedFromName || null,
                         sortOrder: index
                     }))
                 });
@@ -428,12 +432,38 @@ async function updateExistingSvod(
                 data: { status: 'saved', updatedBy: username }
             });
 
-            // Удаляем старые данные и создаём новые
+            // *** СОХРАНЯЕМ СВЯЗИ РАСПРЕДЕЛЕНИЯ ПО PRODUCTID ***
+            // Читаем старые строки и запоминаем связи: targetProductId -> sourceProductId
+            const oldLines = await tx.svodLine.findMany({ where: { svodId } });
+            const oldLineIdToProductId = new Map<number, number>();
+            for (const ol of oldLines) {
+                oldLineIdToProductId.set(ol.id, ol.productId);
+            }
+
+            // Создаём карту: targetProductId -> { sourceProductId, sourceName, isSource }
+            const distributionLinks = new Map<number, { sourceProductId: number | null; sourceName: string | null }>();
+            const sourceProductIds = new Set<number>();
+
+            for (const line of lines) {
+                if (line.distributedFromLineId && oldLineIdToProductId.has(line.distributedFromLineId)) {
+                    // Связь есть - сохраняем по productId источника
+                    const sourceProductId = oldLineIdToProductId.get(line.distributedFromLineId)!;
+                    distributionLinks.set(line.productId, {
+                        sourceProductId,
+                        sourceName: line.distributedFromName || null
+                    });
+                }
+                if (line.isDistributionSource) {
+                    sourceProductIds.add(line.productId);
+                }
+            }
+
+            // Удаляем старые данные
             await tx.svodLine.deleteMany({ where: { svodId } });
             await tx.svodSupplierCol.deleteMany({ where: { svodId } });
             await tx.svodSupplierValue.deleteMany({ where: { svodId } });
 
-            // Создаём строки
+            // Создаём строки БЕЗ distributedFromLineId (пока ID неизвестны)
             if (lines.length > 0) {
                 await tx.svodLine.createMany({
                     data: lines.map((line: any, index: number) => ({
@@ -447,15 +477,38 @@ async function updateExistingSvod(
                         openingStock: line.openingStock || 0,
                         openingStockIsManual: line.openingStockIsManual || false,
                         afterPurchaseStock: line.afterPurchaseStock,
-                        // availableQty и factMinusWaste рассчитываются динамически на клиенте
                         qtyToShip: line.qtyToShip,
                         factMinusWaste: line.factMinusWaste,
                         weightToShip: line.weightToShip,
                         planFactDiff: line.planFactDiff,
                         underOver: line.underOver,
+                        isDistributionSource: sourceProductIds.has(line.productId),
+                        distributedFromLineId: null,  // Заполним позже
+                        distributedFromName: distributionLinks.get(line.productId)?.sourceName || null,
                         sortOrder: index
                     }))
                 });
+            }
+
+            // *** ВОССТАНАВЛИВАЕМ СВЯЗИ ПО НОВЫМ ID ***
+            const newLines = await tx.svodLine.findMany({ where: { svodId } });
+            const productIdToNewLineId = new Map<number, number>();
+            for (const nl of newLines) {
+                productIdToNewLineId.set(nl.productId, nl.id);
+            }
+
+            // Обновляем distributedFromLineId для строк со связями
+            for (const [targetProductId, link] of distributionLinks.entries()) {
+                if (link.sourceProductId && productIdToNewLineId.has(link.sourceProductId)) {
+                    const targetLineId = productIdToNewLineId.get(targetProductId);
+                    const sourceLineId = productIdToNewLineId.get(link.sourceProductId);
+                    if (targetLineId && sourceLineId) {
+                        await tx.svodLine.update({
+                            where: { id: targetLineId },
+                            data: { distributedFromLineId: sourceLineId }
+                        });
+                    }
+                }
             }
 
             // Создаём колонки поставщиков

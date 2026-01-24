@@ -359,6 +359,7 @@ const PurchaseFormPage: React.FC = () => {
     // ============================================
 
     const formatCurrency = (amount: number) => {
+        if (amount === 0 || amount === null || amount === undefined) return '—';
         return new Intl.NumberFormat('ru-RU', {
             style: 'currency',
             currency: 'KZT',

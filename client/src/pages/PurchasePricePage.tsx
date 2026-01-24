@@ -338,11 +338,12 @@ export default function PurchasePricePage() {
                                                     <td className="px-4 py-2">
                                                         <input
                                                             type="number"
-                                                            value={item.purchasePrice}
+                                                            value={item.purchasePrice || ''}
                                                             onChange={e => updateItemPrice(item.productId, Number(e.target.value))}
                                                             className="w-full text-right border rounded px-2 py-1"
                                                             min="0"
                                                             step="0.01"
+                                                            placeholder="—"
                                                         />
                                                     </td>
                                                     <td className="px-4 py-2 text-center">

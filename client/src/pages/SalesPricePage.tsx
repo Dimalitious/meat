@@ -848,7 +848,7 @@ export default function SalesPricePage() {
                                                                     className={`px-1.5 py-2 text-right text-sm bg-green-50/30 whitespace-nowrap ${idx > 0 ? 'border-l border-green-100' : ''}`}
                                                                     style={{ minWidth: '90px', maxWidth: '150px' }}
                                                                 >
-                                                                    {price !== undefined ? (
+                                                                    {price !== undefined && price !== 0 ? (
                                                                         <span className="text-green-700 font-medium">
                                                                             {price.toLocaleString('ru-RU', { minimumFractionDigits: 2 })}
                                                                         </span>

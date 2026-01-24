@@ -55,15 +55,22 @@ interface FilterOptions {
     managers: { id: string; name: string }[];
 }
 
+// Интерфейс для данных Svod (K распределения)
+interface SvodLineCoef {
+    productId: number;
+    orderQty: number;
+    weightToShip: number | null;
+}
 const PAYMENT_TYPES = [
     { value: 'bank', label: 'Перечисление' },
     { value: 'cash', label: 'Наличка' },
     { value: 'terminal', label: 'Терминал' }
 ];
 
-// Форматирование чисел с разделителями
+// Форматирование чисел с разделителями (0 показываем как "—")
 const formatNumber = (value: number | null | undefined, decimals = 2): string => {
-    if (value === null || value === undefined) return '-';
+    if (value === null || value === undefined) return '—';
+    if (value === 0) return '—';
     return value.toLocaleString('ru-RU', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals
@@ -128,6 +135,9 @@ export default function SummaryOrdersPage() {
     const debouncedCustomerSearch = useDebounce(searchCustomer, 300);
     const debouncedProductSearch = useDebounce(searchProduct, 300);
 
+    // K распределения из Svod (productId -> коэффициент в %)
+    const [svodCoefficients, setSvodCoefficients] = useState<Map<number, number>>(new Map());
+
     // Track dirty entries for batch save
     const dirtyEntryIds = useMemo(() => {
         return new Set(entries.filter(e => e._dirty).map(e => e.id));
@@ -142,6 +152,7 @@ export default function SummaryOrdersPage() {
         setPage(1);
         setEntries([]);
         fetchData(1, true);
+        fetchSvodCoefficients(); // Загружаем K распределения из Svod
     }, [filterDate, filterCustomerId, filterProductId, filterCategory, filterDistrict, filterManagerId]);
 
     // Lazy load customers/products only when modal opens
@@ -166,6 +177,32 @@ export default function SummaryOrdersPage() {
             setFilterOptions(res.data);
         } catch (err) {
             console.error('Failed to fetch filter options:', err);
+        }
+    };
+
+    // Загрузка K распределения из Svod
+    const fetchSvodCoefficients = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.get(`${API_URL}/api/svod`, {
+                params: { date: filterDate },
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const svod = res.data.svod;
+            if (svod?.lines) {
+                const coeffMap = new Map<number, number>();
+                for (const line of svod.lines as SvodLineCoef[]) {
+                    if (line.productId && line.orderQty && line.orderQty > 0 && line.weightToShip) {
+                        // K = (weightToShip / orderQty) * 100 - в процентах
+                        const coef = (line.weightToShip / line.orderQty) * 100;
+                        coeffMap.set(line.productId, coef);
+                    }
+                }
+                setSvodCoefficients(coeffMap);
+            }
+        } catch (err) {
+            console.error('Failed to fetch svod coefficients:', err);
         }
     };
 
@@ -710,22 +747,38 @@ export default function SummaryOrdersPage() {
                                             </td>
                                             <td className="border px-1 py-1 text-xs text-gray-600">{entry.category || '-'}</td>
                                             <td className="border px-1 py-1">
-                                                <input type="number" step="0.01" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.price} onChange={e => updateEntryLocal(entry.id, { price: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} />
+                                                <input type="number" step="0.01" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.price || ''} onChange={e => updateEntryLocal(entry.id, { price: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} placeholder="—" />
                                             </td>
                                             <td className="border px-1 py-1">
-                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.shippedQty} onChange={e => updateEntryLocal(entry.id, { shippedQty: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} />
+                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.shippedQty || ''} onChange={e => updateEntryLocal(entry.id, { shippedQty: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} placeholder="—" />
                                             </td>
                                             <td className="border px-1 py-1 text-right font-medium text-xs bg-yellow-50" title={formatNumber(entry.price * entry.shippedQty, 2)}>
                                                 {formatNumber(entry.price * entry.shippedQty, 0)}
                                             </td>
                                             <td className="border px-1 py-1">
-                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.orderQty} onChange={e => updateEntryLocal(entry.id, { orderQty: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} />
+                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.orderQty || ''} onChange={e => updateEntryLocal(entry.id, { orderQty: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} placeholder="—" />
                                             </td>
-                                            <td className="border px-1 py-1">
-                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.distributionCoef || 0} onChange={e => updateEntryLocal(entry.id, { distributionCoef: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} />
+                                            <td className="border px-1 py-1 text-center" style={{ minWidth: 60 }}>
+                                                {/* K распределения из Svod (в процентах) */}
+                                                {entry.productId && svodCoefficients.has(entry.productId) ? (
+                                                    <span className={`font-medium text-xs ${svodCoefficients.get(entry.productId)! > 100 ? 'text-green-600' :
+                                                        svodCoefficients.get(entry.productId)! < 100 ? 'text-red-600' : 'text-gray-700'
+                                                        }`}>
+                                                        {svodCoefficients.get(entry.productId)!.toFixed(1)}%
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-gray-400 text-xs">—</span>
+                                                )}
                                             </td>
-                                            <td className="border px-1 py-1">
-                                                <input type="number" step="0.1" className="w-full border rounded px-1 py-1 text-xs text-right" value={entry.weightToDistribute || 0} onChange={e => updateEntryLocal(entry.id, { weightToDistribute: parseFloat(e.target.value) || 0 })} disabled={entry.status === 'synced'} />
+                                            <td className="border px-1 py-1 text-center" style={{ minWidth: 60 }}>
+                                                {/* Вес = (Коэф% / 100) × Заказ */}
+                                                {entry.productId && svodCoefficients.has(entry.productId) && entry.orderQty ? (
+                                                    <span className="font-medium text-xs text-blue-600">
+                                                        {((svodCoefficients.get(entry.productId)! / 100) * entry.orderQty).toFixed(2)}
+                                                    </span>
+                                                ) : (
+                                                    <span className="text-gray-400 text-xs">—</span>
+                                                )}
                                             </td>
                                             <td className="border px-1 py-1 text-xs text-gray-600 truncate" title={entry.managerName || ''}>{entry.managerName || '-'}</td>
                                             <td className="border px-1 py-1 text-xs text-gray-600 truncate" title={entry.district || ''}>{entry.district || '-'}</td>

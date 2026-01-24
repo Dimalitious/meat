@@ -795,6 +795,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                 {/* Расчётные колонки */}
                                 <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>Вес к отгр.</th>
                                 <th style={{ ...thStyle, backgroundColor: '#eeeeee' }}>Недоб/Переб</th>
+                                <th style={{ ...thStyle, backgroundColor: '#fff9c4' }}>K распр.</th>
                                 <th style={thStyle}>Коэф.</th>
                             </tr>
                         </thead>
@@ -858,6 +859,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                     value={getNumericLineValue(line, 'openingStock') ?? ''}
                                                     onChange={(e) => handleLineEdit(line.productId, 'openingStock', e.target.value)}
                                                     style={inputStyle}
+                                                    placeholder="—"
                                                 />
                                             ) : (
                                                 formatNumber(line.openingStock)
@@ -916,7 +918,31 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                         }}>
                                             {line.weightToShip ? formatNumber(line.weightToShip) : '—'}
                                         </td>
-                                        <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
+                                        {/* Перебор/Недобор = Вес к отгрузке - Заказ */}
+                                        <td style={{
+                                            ...tdStyle,
+                                            backgroundColor: '#eeeeee',
+                                            textAlign: 'right',
+                                            color: line.weightToShip && line.orderQty
+                                                ? (line.weightToShip - line.orderQty) > 0 ? '#4caf50' : (line.weightToShip - line.orderQty) < 0 ? '#f44336' : '#666'
+                                                : '#999',
+                                            fontWeight: line.weightToShip && line.orderQty ? 500 : 400
+                                        }}>
+                                            {line.weightToShip && line.orderQty
+                                                ? formatNumber(line.weightToShip - line.orderQty)
+                                                : '—'}
+                                        </td>
+                                        {/* K распределения = Вес к отгрузке / Заказ */}
+                                        <td style={{
+                                            ...tdStyle,
+                                            backgroundColor: '#fff9c4',
+                                            textAlign: 'right',
+                                            fontWeight: 500
+                                        }}>
+                                            {line.weightToShip && line.orderQty && line.orderQty !== 0
+                                                ? formatNumber(line.weightToShip / line.orderQty)
+                                                : '—'}
+                                        </td>
                                         <td style={tdStyle}>{line.coefficient ?? 1}</td>
                                     </tr>
                                 ))
@@ -997,6 +1023,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                             value={getNumericLineValue(line, 'openingStock') ?? ''}
                                                             onChange={(e) => handleLineEdit(line.productId, 'openingStock', e.target.value)}
                                                             style={inputStyle}
+                                                            placeholder="—"
                                                         />
                                                     ) : (
                                                         formatNumber(line.openingStock)
@@ -1055,7 +1082,31 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                                                 }}>
                                                     {line.weightToShip ? formatNumber(line.weightToShip) : '—'}
                                                 </td>
-                                                <td style={{ ...tdStyle, backgroundColor: '#eeeeee', color: '#999' }}>—</td>
+                                                {/* Перебор/Недобор = Вес к отгрузке - Заказ */}
+                                                <td style={{
+                                                    ...tdStyle,
+                                                    backgroundColor: '#eeeeee',
+                                                    textAlign: 'right',
+                                                    color: line.weightToShip && line.orderQty
+                                                        ? (line.weightToShip - line.orderQty) > 0 ? '#4caf50' : (line.weightToShip - line.orderQty) < 0 ? '#f44336' : '#666'
+                                                        : '#999',
+                                                    fontWeight: line.weightToShip && line.orderQty ? 500 : 400
+                                                }}>
+                                                    {line.weightToShip && line.orderQty
+                                                        ? formatNumber(line.weightToShip - line.orderQty)
+                                                        : '—'}
+                                                </td>
+                                                {/* K распределения = Вес к отгрузке / Заказ */}
+                                                <td style={{
+                                                    ...tdStyle,
+                                                    backgroundColor: '#fff9c4',
+                                                    textAlign: 'right',
+                                                    fontWeight: 500
+                                                }}>
+                                                    {line.weightToShip && line.orderQty && line.orderQty !== 0
+                                                        ? formatNumber(line.weightToShip / line.orderQty)
+                                                        : '—'}
+                                                </td>
                                                 <td style={tdStyle}>{line.coefficient ?? 1}</td>
                                             </tr>
                                         ))}
@@ -1406,10 +1457,10 @@ const inputStyle: React.CSSProperties = {
     fontSize: '13px'
 };
 
-// Форматирование чисел
+// Форматирование чисел (0 показываем как "—" для читаемости)
 function formatNumber(value: number | null | undefined): string {
-    if (value === null || value === undefined) return '';
-    if (value === 0) return '0';
+    if (value === null || value === undefined) return '—';
+    if (value === 0) return '—';
     return value.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
 }
 
