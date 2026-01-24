@@ -165,19 +165,44 @@ async function buildSvodPreview(svodDate: Date) {
 
     // ============================================
     // D: Товары из производства на дату
+    // Берём значения из ProductionRunValue (узлы MML) по snapshotProductId
     // ============================================
-    const productionRuns = await prisma.productionRun.findMany({
+    const productionValues = await prisma.productionRunValue.findMany({
         where: {
-            productionDate: { gte: dateStart, lte: dateEnd },
-            isHidden: false
+            run: {
+                productionDate: { gte: dateStart, lte: dateEnd },
+                isHidden: false
+            },
+            value: { not: null }
         },
-        select: { productId: true, actualWeight: true }
+        select: {
+            snapshotProductId: true,
+            value: true,
+            node: {
+                select: { productId: true }
+            }
+        }
     });
+
+    // DEBUG: Проверяем данные производства
+    console.log('[SVOD DEBUG] Production values:', {
+        dateStart: dateStart.toISOString(),
+        dateEnd: dateEnd.toISOString(),
+        count: productionValues.length,
+        values: productionValues.slice(0, 5)
+    });
+
     const productionByProduct = new Map<number, number>();
-    for (const run of productionRuns) {
-        const current = productionByProduct.get(run.productId) || 0;
-        productionByProduct.set(run.productId, current + Number(run.actualWeight || 0));
+    for (const pv of productionValues) {
+        // Используем snapshotProductId или productId узла
+        const productId = pv.snapshotProductId || pv.node?.productId;
+        if (productId) {
+            const current = productionByProduct.get(productId) || 0;
+            productionByProduct.set(productId, current + Number(pv.value || 0));
+        }
     }
+
+    console.log('[SVOD DEBUG] Production by product:', Object.fromEntries(productionByProduct));
 
     // ============================================
     // Объединяем все товары (A ∪ B ∪ C ∪ D)
@@ -229,7 +254,10 @@ async function buildSvodPreview(svodDate: Date) {
 
         // Определяем, является ли позиция "только закупка" (есть закупки, но нет заказов)
         const orderQty = ordersByProduct.get(productId) || 0;
-        const isPurchaseOnly = totalPurchasesForProduct > 0 && orderQty === 0;
+        const isPurchaseOnly = totalPurchasesForProduct > 0 && orderQty === 0 && productionInQty === 0;
+
+        // Определяем, является ли позиция "только производство" (есть производство, но нет заказов и закупок)
+        const isProductionOnly = productionInQty > 0 && orderQty === 0 && totalPurchasesForProduct === 0;
 
         lines.push({
             productId,
@@ -248,6 +276,7 @@ async function buildSvodPreview(svodDate: Date) {
             planFactDiff: null,
             underOver: null,
             isPurchaseOnly,  // Маркировка позиций только из закупок
+            isProductionOnly,  // Маркировка позиций только из производства
             product
         });
     }

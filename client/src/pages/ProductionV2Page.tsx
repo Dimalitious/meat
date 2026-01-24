@@ -519,57 +519,28 @@ export default function ProductionV2Page() {
     };
 
     // Расчёт фактического веса в реальном времени
-    // Логика:
-    // - Если есть иерархия (корневые узлы имеют детей) -> считаем только не-корневые
-    // - Если структура плоская (все узлы корневые без детей) -> считаем все узлы
+    // Логика: суммируем ВСЕ узлы - и корневые, и дочерние
     const calculateActualWeight = (): number => {
         if (!selectedRun?.mml?.rootNodes) return 0;
 
-        // Проверяем, есть ли у любого корневого узла дети
-        const hasHierarchy = selectedRun.mml.rootNodes.some(
-            node => node.children && node.children.length > 0
-        );
-
-        // DEBUG: Выводим информацию в консоль
-        console.log('[DEBUG calculateActualWeight]', {
-            hasHierarchy,
-            rootNodesCount: selectedRun.mml.rootNodes.length,
-            runValuesSize: runValues.size,
-            runValuesEntries: Array.from(runValues.entries()),
-            firstRootNode: selectedRun.mml.rootNodes[0],
-            firstRootChildren: selectedRun.mml.rootNodes[0]?.children
-        });
-
         let total = 0;
 
-        if (hasHierarchy) {
-            // Иерархическая структура: считаем только не-корневые узлы
-            const sumNonRootValues = (nodes: MmlNode[], isRoot: boolean) => {
-                for (const node of nodes) {
-                    // Если это НЕ корневой узел - добавляем его значение
-                    if (!isRoot) {
-                        const val = runValues.get(node.id);
-                        if (val !== undefined && !isNaN(val)) {
-                            total += val;
-                        }
-                    }
-                    // Рекурсивно обходим детей (они все не-корневые)
-                    if (node.children && node.children.length > 0) {
-                        sumNonRootValues(node.children, false);
-                    }
-                }
-            };
-            sumNonRootValues(selectedRun.mml.rootNodes, true);
-        } else {
-            // Плоская структура: считаем все узлы
-            for (const node of selectedRun.mml.rootNodes) {
+        // Рекурсивная функция для суммирования всех узлов
+        const sumAllNodes = (nodes: MmlNode[]) => {
+            for (const node of nodes) {
+                // Добавляем значение узла
                 const val = runValues.get(node.id);
                 if (val !== undefined && !isNaN(val)) {
                     total += val;
                 }
+                // Рекурсивно обходим детей
+                if (node.children && node.children.length > 0) {
+                    sumAllNodes(node.children);
+                }
             }
-        }
+        };
 
+        sumAllNodes(selectedRun.mml.rootNodes);
         return total;
     };
 
@@ -663,9 +634,12 @@ export default function ProductionV2Page() {
 
     // Рендер дерева MML с полями ввода (для выработки)
     const renderRunNode = (node: MmlNode, level: number = 0, isEditable: boolean = true) => {
-        const value = runValues.get(node.id) ?? '';
         const indent = level * 24;
         const editingUser = editingFields.get(node.id);
+
+        // Значение из state (все поля редактируемые)
+        const val = runValues.get(node.id);
+        const displayValue = val === 0 || val === undefined ? '' : val;
 
         return (
             <div key={node.id}>
@@ -689,13 +663,13 @@ export default function ProductionV2Page() {
                     </span>
                     <input
                         type="number"
-                        value={value}
+                        value={displayValue}
                         onChange={(e) => updateRunValue(node.id, parseFloat(e.target.value) || 0)}
                         onFocus={() => handleFieldFocusLocal(node.id)}
                         onBlur={() => handleFieldBlurLocal(node.id)}
                         disabled={!isEditable}
-                        className={`w-24 text-right border rounded px-2 py-1 text-sm disabled:bg-gray-100 ${editingUser ? 'border-yellow-400 ring-1 ring-yellow-300' : ''}`}
-                        placeholder="0"
+                        className={`w-24 text-right border rounded px-2 py-1 text-sm disabled:bg-gray-100 ${level === 0 ? 'font-medium' : ''} ${editingUser ? 'border-yellow-400 ring-1 ring-yellow-300' : ''}`}
+                        placeholder="—"
                         step="0.001"
                     />
                 </div>
@@ -703,6 +677,7 @@ export default function ProductionV2Page() {
             </div>
         );
     };
+
 
     // ============================================
     // РЕНДЕР
