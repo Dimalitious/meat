@@ -62,14 +62,14 @@ export default function AssemblyOrdersPage() {
 
     useEffect(() => {
         loadAssemblyData();
-    }, []);
+    }, [assemblyDate]);
 
     const loadAssemblyData = async () => {
         try {
             const token = localStorage.getItem('token');
 
-            // Load from summary orders with status 'forming' or 'synced'
-            const res = await axios.get(`${API_URL}/api/summary-orders?status=forming,synced&limit=500`, {
+            // ОПТИМИЗАЦИЯ: фильтр по дате + статус (меньше данных с сервера)
+            const res = await axios.get(`${API_URL}/api/summary-orders?status=forming,synced&date=${assemblyDate}&limit=200`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
 

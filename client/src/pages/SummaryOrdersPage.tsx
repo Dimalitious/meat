@@ -103,7 +103,7 @@ export default function SummaryOrdersPage() {
     const [products, setProducts] = useState<Product[]>([]);
     const [filterOptions, setFilterOptions] = useState<FilterOptions>({ categories: [], districts: [], managers: [] });
     const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
+
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -137,6 +137,10 @@ export default function SummaryOrdersPage() {
 
     // K распределения из Svod (productId -> коэффициент в %)
     const [svodCoefficients, setSvodCoefficients] = useState<Map<number, number>>(new Map());
+
+    // Статус сохранения в журнал
+    const [savedToJournal, setSavedToJournal] = useState(false);
+    const [savingToJournal, setSavingToJournal] = useState(false);
 
     // НОВОЕ: Обновляем коэффициенты при переключении на вкладку "Заказы"
     useEffect(() => {
@@ -348,44 +352,7 @@ export default function SummaryOrdersPage() {
         }));
     }, []);
 
-    // ============================================
-    // BATCH SAVE - saves all dirty entries at once
-    // ============================================
-    const saveAllChanges = async () => {
-        const dirtyEntries = entries.filter(e => e._dirty);
-        if (dirtyEntries.length === 0) {
-            alert('Нет изменений для сохранения');
-            return;
-        }
 
-        setSaving(true);
-        try {
-            const token = localStorage.getItem('token');
-
-            // Batch update via Promise.all with chunking
-            const chunkSize = 10;
-            for (let i = 0; i < dirtyEntries.length; i += chunkSize) {
-                const chunk = dirtyEntries.slice(i, i + chunkSize);
-                await Promise.all(
-                    chunk.map(entry => {
-                        const { _dirty, ...data } = entry;
-                        return axios.put(`${API_URL}/api/summary-orders/${entry.id}`, data, {
-                            headers: { Authorization: `Bearer ${token}` }
-                        });
-                    })
-                );
-            }
-
-            // Clear dirty flags
-            setEntries(prev => prev.map(e => ({ ...e, _dirty: false })));
-            alert(`Сохранено ${dirtyEntries.length} записей!`);
-        } catch (err) {
-            console.error('Save error:', err);
-            alert('Ошибка сохранения');
-        } finally {
-            setSaving(false);
-        }
-    };
 
     const toggleSelect = (id: number) => {
         const newSelected = new Set(selectedIds);
@@ -487,17 +454,38 @@ export default function SummaryOrdersPage() {
     };
 
     const saveToJournal = async () => {
+        setSavingToJournal(true);
         try {
             const token = localStorage.getItem('token');
+
+            // Оптимизация: отправляем только нужные поля (без _dirty и прочего)
+            const optimizedData = entries.map(e => ({
+                id: e.id,
+                customerName: e.customerName,
+                productFullName: e.productFullName,
+                orderQty: e.orderQty,
+                shippedQty: e.shippedQty,
+                price: e.price,
+                category: e.category,
+                status: e.status
+            }));
+
             await axios.post(`${API_URL}/api/journals/summary`, {
                 summaryDate: filterDate,
                 createdBy: user?.username || 'Unknown',
-                data: entries
+                data: optimizedData
             }, { headers: { Authorization: `Bearer ${token}` } });
-            alert('Сводка сохранена!');
+            setSavedToJournal(true);
         } catch (err) {
             alert('Ошибка сохранения');
+        } finally {
+            setSavingToJournal(false);
         }
+    };
+
+    // Редактировать журнал (сброс статуса)
+    const editJournal = () => {
+        setSavedToJournal(false);
     };
 
     // Excel import - OPTIMIZED BULK VERSION
@@ -623,19 +611,30 @@ export default function SummaryOrdersPage() {
                             <button onClick={() => fileInputRef.current?.click()} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
                                 📥 Excel
                             </button>
-                            <button
-                                onClick={saveAllChanges}
-                                disabled={dirtyEntryIds.size === 0 || saving}
-                                className={`px-4 py-2 rounded flex items-center gap-1 ${dirtyEntryIds.size > 0
-                                    ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                                    }`}
-                            >
-                                <Save size={16} /> {saving ? 'Сохранение...' : `Сохранить (${dirtyEntryIds.size})`}
-                            </button>
-                            <button onClick={saveToJournal} className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 flex items-center gap-1">
-                                <Save size={16} /> В журнал
-                            </button>
+                            {/* Кнопка В журнал / Сохранен в журнале + Редактировать */}
+                            {savedToJournal ? (
+                                <>
+                                    <span className="bg-green-100 text-green-700 px-4 py-2 rounded flex items-center gap-1 font-medium">
+                                        ✓ Сохранен в журнале
+                                    </span>
+                                    <button
+                                        onClick={editJournal}
+                                        className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 flex items-center gap-1"
+                                    >
+                                        ✏️ Редактировать
+                                    </button>
+                                </>
+                            ) : (
+                                <button
+                                    onClick={saveToJournal}
+                                    disabled={savingToJournal}
+                                    className={`px-4 py-2 rounded flex items-center gap-1 ${savingToJournal
+                                        ? 'bg-gray-400 cursor-not-allowed'
+                                        : 'bg-purple-600 hover:bg-purple-700'} text-white`}
+                                >
+                                    <Save size={16} /> {savingToJournal ? 'Сохранение...' : 'В журнал'}
+                                </button>
+                            )}
                             {selectedIds.size > 0 && (
                                 <button onClick={deleteSelected} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 flex items-center gap-1">
                                     <Trash2 size={16} /> ({selectedIds.size})

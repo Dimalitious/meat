@@ -27,16 +27,19 @@ export const getSvodByDate = async (req: Request, res: Response) => {
         const svodDate = new Date(String(date));
         svodDate.setUTCHours(0, 0, 0, 0);
 
-        // Проверяем, есть ли сохранённый свод
+        // Проверяем, есть ли сохранённый свод (оптимизированный запрос)
         const existingSvod = await prisma.svodHeader.findUnique({
             where: { svodDate },
             include: {
                 lines: {
-                    include: { product: true },
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true }
+                        }
+                    },
                     orderBy: [{ category: 'asc' }, { shortName: 'asc' }]
                 },
                 supplierCols: {
-                    include: { supplier: true },
                     orderBy: { colIndex: 'asc' }
                 },
                 supplierValues: true
@@ -64,33 +67,77 @@ export const getSvodByDate = async (req: Request, res: Response) => {
 
 /**
  * Сформировать данные для предпросмотра СВОД (без сохранения)
+ * ОПТИМИЗИРОВАНО: параллельные запросы к БД
  */
 async function buildSvodPreview(svodDate: Date) {
     // Используем только дату (без времени) для корректной работы с часовыми поясами
-    // svodDate приходит как Date с временем 00:00:00 UTC (из @db.Date)
     const dateStart = new Date(svodDate);
     dateStart.setUTCHours(0, 0, 0, 0);
     const dateEnd = new Date(svodDate);
     dateEnd.setUTCHours(23, 59, 59, 999);
 
+    // ============================================
+    // ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ВСЕХ ИСТОЧНИКОВ
+    // ============================================
+    const [summaryOrders, stockItems, purchases, productionValues] = await Promise.all([
+        // A: Товары из заказов (SummaryOrderJournal) на дату
+        prisma.summaryOrderJournal.findMany({
+            where: {
+                shipDate: { gte: dateStart, lte: dateEnd },
+                status: { in: ['draft', 'forming', 'synced'] }
+            },
+            select: {
+                idn: true,
+                productId: true,
+                orderQty: true
+            }
+        }),
 
+        // B: Товары с остатком (из Stock)
+        prisma.stock.findMany({
+            where: { quantity: { gt: 0 } },
+            select: { productId: true, quantity: true }
+        }),
+
+        // C: Товары из закупок на дату
+        prisma.purchaseItem.findMany({
+            where: {
+                purchase: {
+                    purchaseDate: { gte: dateStart, lte: dateEnd },
+                    isDisabled: false
+                }
+            },
+            select: {
+                productId: true,
+                supplierId: true,
+                qty: true
+            }
+        }),
+
+        // D: Товары из производства на дату
+        prisma.productionRunValue.findMany({
+            where: {
+                run: {
+                    productionDate: { gte: dateStart, lte: dateEnd },
+                    isHidden: false
+                },
+                value: { not: null }
+            },
+            select: {
+                snapshotProductId: true,
+                value: true,
+                node: {
+                    select: { productId: true }
+                }
+            }
+        })
+    ]);
 
     // ============================================
-    // A: Товары из заказов (SummaryOrderJournal) на дату
+    // АГРЕГАЦИЯ ДАННЫХ
     // ============================================
-    const summaryOrders = await prisma.summaryOrderJournal.findMany({
-        where: {
-            shipDate: { gte: dateStart, lte: dateEnd },
-            status: { in: ['draft', 'forming', 'synced'] }
-        },
-        select: {
-            idn: true,
-            productId: true,
-            orderQty: true
-        }
-    });
 
-    // Агрегируем заказы по товарам
+    // A: Агрегируем заказы по товарам
     const ordersByProduct = new Map<number, number>();
     const uniqueOrderIdns = new Set<string>();
     let totalOrderKg = 0;
@@ -105,51 +152,19 @@ async function buildSvodPreview(svodDate: Date) {
             uniqueOrderIdns.add(order.idn);
         }
     }
-
-    // KPI: Количество уникальных заказов и общий вес
     const ordersCount = uniqueOrderIdns.size;
 
-    // ============================================
-    // B: Товары с остатком (из Stock)
-    // ============================================
-    const stockItems = await prisma.stock.findMany({
-        where: { quantity: { gt: 0 } },
-        select: { productId: true, quantity: true }
-    });
+    // B: Агрегируем остатки
     const stockByProduct = new Map<number, number>();
     for (const stock of stockItems) {
         stockByProduct.set(stock.productId, stock.quantity);
     }
 
-    // ============================================
-    // C: Товары из закупок на дату (ИСПРАВЛЕНО!)
-    // ============================================
-    // Ищем закупки по диапазону даты со статусом isDisabled = false
-    const purchases = await prisma.purchaseItem.findMany({
-        where: {
-            purchase: {
-                purchaseDate: { gte: dateStart, lte: dateEnd },
-                isDisabled: false
-            }
-        },
-        select: {
-            productId: true,
-            supplierId: true,
-            qty: true,
-            amount: true,
-            purchase: {
-                select: { id: true, purchaseDate: true }
-            }
-        }
-    });
-
-    // Агрегируем закупки по товарам и поставщикам
+    // C: Агрегируем закупки по товарам и поставщикам
     const purchasesByProduct = new Map<number, Map<number, number>>();
-    // ИСПРАВЛЕНО: сортируем по SUM(qty) а не SUM(amount)
     const totalQtyBySupplier = new Map<number, number>();
 
     for (const item of purchases) {
-        // По товару
         if (!purchasesByProduct.has(item.productId)) {
             purchasesByProduct.set(item.productId, new Map());
         }
@@ -157,44 +172,13 @@ async function buildSvodPreview(svodDate: Date) {
         const currentQty = supplierMap.get(item.supplierId) || 0;
         supplierMap.set(item.supplierId, currentQty + Number(item.qty));
 
-        // Общий объём по поставщику (для ТОП-10) - теперь по количеству!
         const currentTotal = totalQtyBySupplier.get(item.supplierId) || 0;
         totalQtyBySupplier.set(item.supplierId, currentTotal + Number(item.qty));
     }
 
-
-    // ============================================
-    // D: Товары из производства на дату
-    // Берём значения из ProductionRunValue (узлы MML) по snapshotProductId
-    // ============================================
-    const productionValues = await prisma.productionRunValue.findMany({
-        where: {
-            run: {
-                productionDate: { gte: dateStart, lte: dateEnd },
-                isHidden: false
-            },
-            value: { not: null }
-        },
-        select: {
-            snapshotProductId: true,
-            value: true,
-            node: {
-                select: { productId: true }
-            }
-        }
-    });
-
-    // DEBUG: Проверяем данные производства
-    console.log('[SVOD DEBUG] Production values:', {
-        dateStart: dateStart.toISOString(),
-        dateEnd: dateEnd.toISOString(),
-        count: productionValues.length,
-        values: productionValues.slice(0, 5)
-    });
-
+    // D: Агрегируем производство
     const productionByProduct = new Map<number, number>();
     for (const pv of productionValues) {
-        // Используем snapshotProductId или productId узла
         const productId = pv.snapshotProductId || pv.node?.productId;
         if (productId) {
             const current = productionByProduct.get(productId) || 0;
@@ -202,22 +186,20 @@ async function buildSvodPreview(svodDate: Date) {
         }
     }
 
-    console.log('[SVOD DEBUG] Production by product:', Object.fromEntries(productionByProduct));
-
     // ============================================
     // Объединяем все товары (A ∪ B ∪ C ∪ D)
     // ============================================
     const allProductIds = new Set<number>([
-        ...ordersByProduct.keys(),
-        ...stockByProduct.keys(),
-        ...purchasesByProduct.keys(),
-        ...productionByProduct.keys()
+        ...Array.from(ordersByProduct.keys()),
+        ...Array.from(stockByProduct.keys()),
+        ...Array.from(purchasesByProduct.keys()),
+        ...Array.from(productionByProduct.keys())
     ]);
 
     // Получаем данные товаров из справочника
     const products = await prisma.product.findMany({
         where: { id: { in: Array.from(allProductIds) }, status: 'active' },
-        select: { id: true, name: true, priceListName: true, category: true, coefficient: true }
+        select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true }
     });
     const productsMap = new Map(products.map(p => [p.id, p]));
 
@@ -225,7 +207,7 @@ async function buildSvodPreview(svodDate: Date) {
     // Формируем строки свода
     // ============================================
     const lines = [];
-    for (const productId of allProductIds) {
+    for (const productId of Array.from(allProductIds)) {
         const product = productsMap.get(productId);
         if (!product) continue;
 
@@ -241,7 +223,7 @@ async function buildSvodPreview(svodDate: Date) {
         let totalPurchasesForProduct = 0;
         const supplierMap = purchasesByProduct.get(productId);
         if (supplierMap) {
-            for (const qty of supplierMap.values()) {
+            for (const qty of Array.from(supplierMap.values())) {
                 totalPurchasesForProduct += qty;
             }
         }
@@ -317,8 +299,8 @@ async function buildSvodPreview(svodDate: Date) {
 
     // Значения закупок по поставщикам
     const supplierValues: { productId: number; supplierId: number; purchaseQty: number }[] = [];
-    for (const [productId, supplierMap] of purchasesByProduct.entries()) {
-        for (const [supplierId, qty] of supplierMap.entries()) {
+    for (const [productId, supplierMap] of Array.from(purchasesByProduct.entries())) {
+        for (const [supplierId, qty] of Array.from(supplierMap.entries())) {
             if (supplierIds.includes(supplierId)) {
                 supplierValues.push({ productId, supplierId, purchaseQty: qty });
             }
@@ -436,10 +418,16 @@ export const saveSvod = async (req: Request, res: Response) => {
         });
 
         // Возвращаем полные данные
+        // Оптимизированный запрос - select только нужные поля product
         const savedSvod = await prisma.svodHeader.findUnique({
             where: { id: result.id },
             include: {
-                lines: { include: { product: true }, orderBy: { sortOrder: 'asc' } },
+                lines: {
+                    include: {
+                        product: { select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true } }
+                    },
+                    orderBy: { sortOrder: 'asc' }
+                },
                 supplierCols: { orderBy: { colIndex: 'asc' } },
                 supplierValues: true
             }
@@ -537,7 +525,7 @@ async function updateExistingSvod(
             }
 
             // Обновляем distributedFromLineId для строк со связями
-            for (const [targetProductId, link] of distributionLinks.entries()) {
+            for (const [targetProductId, link] of Array.from(distributionLinks.entries())) {
                 if (link.sourceProductId && productIdToNewLineId.has(link.sourceProductId)) {
                     const targetLineId = productIdToNewLineId.get(targetProductId);
                     const sourceLineId = productIdToNewLineId.get(link.sourceProductId);
@@ -576,10 +564,16 @@ async function updateExistingSvod(
             }
         });
 
+        // Оптимизированный запрос - select только нужные поля product
         const savedSvod = await prisma.svodHeader.findUnique({
             where: { id: svodId },
             include: {
-                lines: { include: { product: true }, orderBy: { sortOrder: 'asc' } },
+                lines: {
+                    include: {
+                        product: { select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true } }
+                    },
+                    orderBy: { sortOrder: 'asc' }
+                },
                 supplierCols: { orderBy: { colIndex: 'asc' } },
                 supplierValues: true
             }
