@@ -81,6 +81,9 @@ model Product {
   cuttingLineOutputs    ProductionCuttingLine[]   @relation("CuttingLineOutput")
   // Customer-specific product catalogs
   customerProducts      CustomerProduct[]
+  // Material Report relations
+  materialReportLines      MaterialReportLine[]
+  materialReportDraftLines MaterialReportDraftLine[]
 }
 
 model Customer {
@@ -791,6 +794,9 @@ model Warehouse {
   // Production-Purchase Integration
   productionDocs      ProductionDoc[]
   productionInputs    ProductionInput[]
+  // Material Report relations
+  materialReports       MaterialReport[]
+  materialReportDrafts  MaterialReportDraft[]
   
   @@index([name])
   @@index([isDisabled])
@@ -813,6 +819,8 @@ model SvodHeader {
   lines           SvodLine[]
   supplierCols    SvodSupplierCol[]
   supplierValues  SvodSupplierValue[]
+  // Material Report Draft relation
+  materialReportDrafts  MaterialReportDraft[]
   
   @@unique([svodDate])  // Один свод на дату
   @@index([status])
@@ -1021,4 +1029,114 @@ model ProductionCuttingLine {
   @@index([productionInputId])
   @@index([mmlId])
   @@index([outProductId])
+}
+
+// ============================================
+// МАТЕРИАЛЬНЫЙ ОТЧЁТ (Material Report)
+// ============================================
+
+// Шапка материального отчёта (один документ на дату + склад)
+model MaterialReport {
+  id              Int       @id @default(autoincrement())
+  reportDate      DateTime  @db.Date  // Дата отчёта (= дата заказов)
+  warehouseId     Int?      // FK → Warehouse (опционально)
+  sourceType      String?   // Тип источника: 'ORDER_SUMMARY', 'MANUAL'
+  sourceId        Int?      // ID источника (order_summary_id или null)
+  status          String    @default("draft")  // draft / saved / closed
+  createdAt       DateTime  @default(now())
+  createdBy       String    // username кто создал
+  updatedAt       DateTime  @updatedAt
+  updatedBy       String?   // username кто обновил
+  
+  lines           MaterialReportLine[]
+  warehouse       Warehouse?  @relation(fields: [warehouseId], references: [id])
+  
+  @@unique([reportDate, warehouseId])  // Один отчёт на дату и склад
+  @@index([reportDate])
+  @@index([status])
+  @@index([warehouseId])
+}
+
+// Строки материального отчёта (по товарам)
+model MaterialReportLine {
+  id                    Int       @id @default(autoincrement())
+  materialReportId      Int       // FK → MaterialReport
+  productId             Int       // FK → Product
+  
+  // Snapshot полей из справочника
+  productCode           String?   // Код товара
+  productName           String?   // Наименование товара
+  
+  // Движения и остатки
+  openingBalance        Decimal   @default(0) @db.Decimal(14, 3)   // Остаток на начало
+  inPurchase            Decimal   @default(0) @db.Decimal(14, 3)   // Купили (закупка)
+  inProduction          Decimal   @default(0) @db.Decimal(14, 3)   // Приход с производства
+  outSale               Decimal   @default(0) @db.Decimal(14, 3)   // Продали (отгрузка)
+  outWaste              Decimal   @default(0) @db.Decimal(14, 3)   // Отход
+  outBundle             Decimal   @default(0) @db.Decimal(14, 3)   // Пучок
+  outDefectWriteoff     Decimal   @default(0) @db.Decimal(14, 3)   // Списали брак
+  outWeightLoss         Decimal   @default(0) @db.Decimal(14, 3)   // Потеря веса
+  outSupplierReturn     Decimal   @default(0) @db.Decimal(14, 3)   // Возврат поставщику
+  closingBalanceCalc    Decimal   @default(0) @db.Decimal(14, 3)   // Остаток на конец (расчётный)
+  closingBalanceFact    Decimal?  @db.Decimal(14, 3)               // Фактический остаток (ручной ввод)
+  
+  sortOrder             Int       @default(0)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  materialReport        MaterialReport @relation(fields: [materialReportId], references: [id], onDelete: Cascade)
+  product               Product   @relation(fields: [productId], references: [id])
+  
+  @@unique([materialReportId, productId])  // Один товар = одна строка в отчёте
+  @@index([materialReportId])
+  @@index([productId])
+}
+
+// Черновик материального отчёта (для вкладки "Отчет" в своде)
+// Хранит введённые пользователем факт остатки до сохранения в основной отчёт
+model MaterialReportDraft {
+  id              Int       @id @default(autoincrement())
+  reportDate      DateTime  @db.Date  // Дата отчёта (= дата заказов)
+  warehouseId     Int?      // FK → Warehouse
+  svodHeaderId    Int?      // FK → SvodHeader (связь со сводом)
+  updatedAt       DateTime  @updatedAt
+  updatedBy       String?   // username
+  
+  lines           MaterialReportDraftLine[]
+  warehouse       Warehouse?  @relation(fields: [warehouseId], references: [id])
+  svodHeader      SvodHeader? @relation(fields: [svodHeaderId], references: [id])
+  
+  @@unique([reportDate, warehouseId])  // Один черновик на дату и склад
+  @@index([reportDate])
+  @@index([svodHeaderId])
+}
+
+// Строки черновика материального отчёта
+model MaterialReportDraftLine {
+  id                    Int       @id @default(autoincrement())
+  draftId               Int       // FK → MaterialReportDraft
+  productId             Int       // FK → Product
+  
+  // Все поля движений (для кэширования расчётных значений)
+  openingBalance        Decimal   @default(0) @db.Decimal(14, 3)
+  inPurchase            Decimal   @default(0) @db.Decimal(14, 3)
+  inProduction          Decimal   @default(0) @db.Decimal(14, 3)
+  outSale               Decimal   @default(0) @db.Decimal(14, 3)
+  outWaste              Decimal   @default(0) @db.Decimal(14, 3)
+  outBundle             Decimal   @default(0) @db.Decimal(14, 3)
+  outDefectWriteoff     Decimal   @default(0) @db.Decimal(14, 3)
+  outWeightLoss         Decimal   @default(0) @db.Decimal(14, 3)
+  outSupplierReturn     Decimal   @default(0) @db.Decimal(14, 3)
+  closingBalanceCalc    Decimal   @default(0) @db.Decimal(14, 3)
+  closingBalanceFact    Decimal?  @db.Decimal(14, 3)  // Введённый пользователем факт
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  draft                 MaterialReportDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  product               Product   @relation(fields: [productId], references: [id])
+  
+  @@unique([draftId, productId])
+  @@index([draftId])
+  @@index([productId])
 }

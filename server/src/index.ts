@@ -85,6 +85,10 @@ app.use('/api/svod', svodRoutes);
 import productionDocRoutes from './routes/productionDoc.routes';
 app.use('/api/production-docs', productionDocRoutes);
 
+// Material Report Module (Материальный отчёт)
+import materialReportRoutes from './routes/materialReport.routes';
+app.use('/api/material-report', materialReportRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // Health check (also for telegram agent)

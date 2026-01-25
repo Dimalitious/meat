@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
 import { Filter, RefreshCw, Plus, Trash2, Save, Search } from 'lucide-react';
 import SvodTab from '../components/SvodTab';
+import MaterialReportTab from '../components/MaterialReportTab';
 
 interface Customer {
     id: number;
@@ -107,8 +108,8 @@ export default function SummaryOrdersPage() {
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Вкладки (Заказы / СВОД)
-    const [activeTab, setActiveTab] = useState<'orders' | 'svod'>('orders');
+    // Вкладки (Заказы / СВОД / Отчет)
+    const [activeTab, setActiveTab] = useState<'orders' | 'svod' | 'report'>('orders');
 
     // Pagination
     const [page, setPage] = useState(1);
@@ -453,6 +454,54 @@ export default function SummaryOrdersPage() {
         }
     };
 
+    // Сохранить все изменённые (dirty) записи на сервер
+    const [savingDirty, setSavingDirty] = useState(false);
+
+    const saveDirtyEntries = async () => {
+        const dirtyEntries = entries.filter(e => e._dirty);
+        if (dirtyEntries.length === 0) return;
+
+        setSavingDirty(true);
+        try {
+            const token = localStorage.getItem('token');
+
+            // Сохраняем параллельно (до 10 одновременно)
+            const results = await Promise.all(
+                dirtyEntries.map(entry =>
+                    axios.put(`${API_URL}/api/summary-orders/${entry.id}`, {
+                        paymentType: entry.paymentType,
+                        customerId: entry.customerId,
+                        customerName: entry.customerName,
+                        productId: entry.productId,
+                        productCode: entry.productCode,
+                        productFullName: entry.productFullName,
+                        category: entry.category,
+                        shortNameMorning: entry.shortNameMorning,
+                        price: entry.price,
+                        shippedQty: entry.shippedQty,
+                        orderQty: entry.orderQty,
+                        distributionCoef: entry.distributionCoef,
+                        weightToDistribute: entry.weightToDistribute,
+                        district: entry.district,
+                        pointAddress: entry.pointAddress
+                    }, { headers: { Authorization: `Bearer ${token}` } })
+                )
+            );
+
+            // Сбрасываем флаг _dirty для всех сохранённых записей
+            setEntries(prev => prev.map(e =>
+                e._dirty ? { ...e, _dirty: false } : e
+            ));
+
+            console.log(`[SAVE] Сохранено ${results.length} записей`);
+        } catch (err: any) {
+            console.error('Save dirty entries error:', err);
+            alert('Ошибка сохранения изменений');
+        } finally {
+            setSavingDirty(false);
+        }
+    };
+
     const saveToJournal = async () => {
         setSavingToJournal(true);
         try {
@@ -577,11 +626,25 @@ export default function SummaryOrdersPage() {
                 >
                     📊 СВОД
                 </button>
+                <button
+                    onClick={() => setActiveTab('report')}
+                    className={`px-6 py-3 font-medium text-sm border-b-2 transition-colors ${activeTab === 'report'
+                        ? 'border-purple-600 text-purple-600 bg-purple-50'
+                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                        }`}
+                >
+                    📝 Отчёт
+                </button>
             </div>
 
             {/* Содержимое вкладки СВОД */}
             {activeTab === 'svod' && (
                 <SvodTab selectedDate={filterDate} />
+            )}
+
+            {/* Содержимое вкладки Отчёт */}
+            {activeTab === 'report' && (
+                <MaterialReportTab selectedDate={filterDate} />
             )}
 
             {/* Содержимое вкладки Заказы */}
@@ -592,9 +655,22 @@ export default function SummaryOrdersPage() {
                         <div className="flex items-center gap-3">
                             <h1 className="text-2xl font-bold">Сводка заказов</h1>
                             {dirtyEntryIds.size > 0 && (
-                                <span className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium animate-pulse">
-                                    {dirtyEntryIds.size} несохранённых
-                                </span>
+                                <>
+                                    <span className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium animate-pulse">
+                                        {dirtyEntryIds.size} несохранённых
+                                    </span>
+                                    <button
+                                        onClick={saveDirtyEntries}
+                                        disabled={savingDirty}
+                                        className={`px-3 py-1 rounded flex items-center gap-1 text-sm ${savingDirty
+                                            ? 'bg-gray-400 cursor-not-allowed'
+                                            : 'bg-orange-500 hover:bg-orange-600'
+                                            } text-white`}
+                                    >
+                                        <Save size={14} />
+                                        {savingDirty ? 'Сохранение...' : 'Сохранить'}
+                                    </button>
+                                </>
                             )}
                         </div>
                         <div className="flex gap-2 items-center">
@@ -776,14 +852,39 @@ export default function SummaryOrdersPage() {
                                                     <span className="text-gray-400 text-xs">—</span>
                                                 )}
                                             </td>
-                                            <td className="border px-1 py-1 text-center" style={{ minWidth: 60 }}>
-                                                {/* Вес = (Коэф% / 100) × Заказ */}
-                                                {entry.productId && svodCoefficients.has(entry.productId) && entry.orderQty ? (
-                                                    <span className="font-medium text-xs text-blue-600">
-                                                        {((svodCoefficients.get(entry.productId)! / 100) * entry.orderQty).toFixed(2)}
-                                                    </span>
+                                            <td className="border px-1 py-1" style={{ minWidth: 70 }}>
+                                                {/* Вес: ручной ввод ИЛИ формула (Коэф% / 100) × Заказ */}
+                                                {entry.status !== 'synced' ? (
+                                                    <input
+                                                        type="number"
+                                                        step="0.01"
+                                                        className="w-full border rounded px-1 py-1 text-xs text-right"
+                                                        value={entry.weightToDistribute ?? ''}
+                                                        onChange={e => updateEntryLocal(entry.id, {
+                                                            weightToDistribute: e.target.value ? parseFloat(e.target.value) : null
+                                                        })}
+                                                        placeholder={
+                                                            entry.productId && svodCoefficients.has(entry.productId) && entry.orderQty
+                                                                ? ((svodCoefficients.get(entry.productId)! / 100) * entry.orderQty).toFixed(2)
+                                                                : '—'
+                                                        }
+                                                        title={
+                                                            entry.productId && svodCoefficients.has(entry.productId) && entry.orderQty
+                                                                ? `Формула: ${svodCoefficients.get(entry.productId)!.toFixed(1)}% × ${entry.orderQty} = ${((svodCoefficients.get(entry.productId)! / 100) * entry.orderQty).toFixed(2)}`
+                                                                : 'Введите вес вручную'
+                                                        }
+                                                    />
                                                 ) : (
-                                                    <span className="text-gray-400 text-xs">—</span>
+                                                    // Для synced записей показываем только значение
+                                                    <span className="font-medium text-xs text-blue-600 block text-right px-1">
+                                                        {entry.weightToDistribute != null
+                                                            ? entry.weightToDistribute.toFixed(2)
+                                                            : (entry.productId && svodCoefficients.has(entry.productId) && entry.orderQty
+                                                                ? ((svodCoefficients.get(entry.productId)! / 100) * entry.orderQty).toFixed(2)
+                                                                : '—'
+                                                            )
+                                                        }
+                                                    </span>
                                                 )}
                                             </td>
                                             <td className="border px-1 py-1 text-xs text-gray-600 truncate" title={entry.managerName || ''}>{entry.managerName || '-'}</td>

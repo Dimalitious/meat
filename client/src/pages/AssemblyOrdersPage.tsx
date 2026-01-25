@@ -17,6 +17,7 @@ interface AssemblyItem {
     customerName: string;
     price: number;
     status: string;  // Added to track forming/synced
+    weightToShip?: number | null; // Необходимо отгрузить - из Свода
 }
 
 interface Customer {
@@ -68,15 +69,33 @@ export default function AssemblyOrdersPage() {
         try {
             const token = localStorage.getItem('token');
 
-            // ОПТИМИЗАЦИЯ: фильтр по дате + статус (меньше данных с сервера)
-            const res = await axios.get(`${API_URL}/api/summary-orders?status=forming,synced&date=${assemblyDate}&limit=200`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            // Параллельная загрузка: заказы + свод
+            const [ordersRes, svodRes] = await Promise.all([
+                // ОПТИМИЗАЦИЯ: фильтр по дате + статус (меньше данных с сервера)
+                axios.get(`${API_URL}/api/summary-orders?status=forming,synced&date=${assemblyDate}&limit=200`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                }),
+                // Загружаем данные свода для получения weightToShip
+                axios.get(`${API_URL}/api/svod?date=${assemblyDate}`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                }).catch(() => ({ data: { svod: null } })) // Если свода нет - не ломаем загрузку
+            ]);
 
-            console.log('[ASSEMBLY] API Response:', res.data);
+            console.log('[ASSEMBLY] Orders Response:', ordersRes.data);
+            console.log('[ASSEMBLY] Svod Response:', svodRes.data);
 
             // Handle both old format (array) and new format ({ data, pagination })
-            const allEntries = Array.isArray(res.data) ? res.data : (res.data.data || []);
+            const allEntries = Array.isArray(ordersRes.data) ? ordersRes.data : (ordersRes.data.data || []);
+
+            // Создаём карту weightToShip по productId из свода
+            const weightToShipMap = new Map<number, number | null>();
+            if (svodRes.data?.svod?.lines) {
+                for (const line of svodRes.data.svod.lines) {
+                    if (line.productId && line.weightToShip != null) {
+                        weightToShipMap.set(line.productId, line.weightToShip);
+                    }
+                }
+            }
 
             // All returned entries should already be filtered by status
             const relevantEntries = allEntries;
@@ -105,7 +124,8 @@ export default function AssemblyOrdersPage() {
                     customerId: entry.customerId,
                     customerName: entry.customerName,
                     price: Number(entry.price) || 0,
-                    status: entry.status
+                    status: entry.status,
+                    weightToShip: weightToShipMap.get(entry.productId) ?? null
                 });
             }
 
@@ -126,6 +146,7 @@ export default function AssemblyOrdersPage() {
             setLoading(false);
         }
     };
+
 
     const updateLoadedQty = (itemId: number, qty: number) => {
         setCustomers(customers.map(c => ({
@@ -344,7 +365,7 @@ export default function AssemblyOrdersPage() {
                                         <div>
                                             <div className="font-medium">{c.name}</div>
                                             <div className="text-sm text-gray-500">
-                                                {c.items.length} позиций ({confirmedCount} ✓)
+                                                {c.items.length} позиций ({confirmedCount || '-'} ✓)
                                             </div>
                                         </div>
                                         {allConfirmed && (
@@ -417,6 +438,13 @@ export default function AssemblyOrdersPage() {
 
                                         {/* Card Body - Quantities */}
                                         <div className={`p-4 space-y-3 ${item.confirmed ? 'bg-green-100/50' : 'bg-gray-50'}`}>
+                                            {/* Необходимо отгрузить - из Свода */}
+                                            {item.weightToShip != null && item.weightToShip > 0 && (
+                                                <div className="flex justify-between items-center bg-blue-50 -mx-4 -mt-4 px-4 py-2 border-b border-blue-100">
+                                                    <span className="text-sm text-blue-700 font-medium">📦 Необходимо отгрузить:</span>
+                                                    <span className="font-bold text-blue-700">{item.weightToShip} кг</span>
+                                                </div>
+                                            )}
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm text-gray-600">Заказано:</span>
                                                 <span className="font-bold">{item.orderedQty} кг</span>
