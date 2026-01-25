@@ -120,7 +120,7 @@ export const createOrder = async (req: Request, res: Response) => {
     }
 };
 
-// Update Order (Full update with items)
+// Update Order (Full update with items + обратная синхронизация в SummaryOrderJournal)
 export const updateOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
@@ -129,12 +129,26 @@ export const updateOrder = async (req: Request, res: Response) => {
         // If items are provided, do a full update with transaction
         if (items && Array.isArray(items)) {
             const result = await prisma.$transaction(async (tx) => {
-                // Delete existing items
+                // 1. Получаем старые OrderItem с их связями на SummaryOrderJournal
+                const oldItems = await tx.orderItem.findMany({
+                    where: { orderId: Number(id) },
+                    include: { summaryEntry: true }
+                });
+
+                // Маппинг: productId -> SummaryOrderJournal id (для восстановления связи)
+                const productToSummaryMap = new Map<number, number>();
+                for (const oldItem of oldItems) {
+                    if (oldItem.summaryEntry) {
+                        productToSummaryMap.set(oldItem.productId, oldItem.summaryEntry.id);
+                    }
+                }
+
+                // 2. Удаляем старые items (связь orderItemId станет null)
                 await tx.orderItem.deleteMany({
                     where: { orderId: Number(id) }
                 });
 
-                // Calculate totals
+                // 3. Calculate totals и создаём новые items
                 let totalAmount = 0;
                 let totalWeight = 0;
                 const validItems = [];
@@ -155,7 +169,7 @@ export const updateOrder = async (req: Request, res: Response) => {
                     });
                 }
 
-                // Update order with new items
+                // 4. Update order with new items
                 const order = await tx.order.update({
                     where: { id: Number(id) },
                     data: {
@@ -175,6 +189,31 @@ export const updateOrder = async (req: Request, res: Response) => {
                         customer: true
                     }
                 });
+
+                // 5. Восстанавливаем связь и обновляем SummaryOrderJournal
+                for (const newItem of order.items) {
+                    const summaryId = productToSummaryMap.get(newItem.productId);
+                    if (summaryId) {
+                        // Обновляем SummaryOrderJournal: восстанавливаем связь + синхронизируем данные
+                        await tx.summaryOrderJournal.update({
+                            where: { id: summaryId },
+                            data: {
+                                orderItemId: newItem.id,
+                                // Синхронизация данных Order -> SummaryEntry
+                                orderQty: newItem.quantity,
+                                shippedQty: newItem.shippedQty,
+                                price: newItem.price,
+                                sumWithRevaluation: newItem.sumWithRevaluation,
+                                productId: newItem.productId,
+                                productFullName: newItem.product?.name || '',
+                                productCode: newItem.product?.code || null,
+                                customerId: order.customerId,
+                                customerName: order.customer?.name || ''
+                            }
+                        });
+                    }
+                }
+
                 return order;
             });
             res.json(result);

@@ -216,6 +216,8 @@ model OrderItem {
   weightToDistribute Float?   @default(0.0)
   order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product            Product  @relation(fields: [productId], references: [id])
+  // Связь с SummaryOrderJournal (обратная синхронизация)
+  summaryEntry       SummaryOrderJournal?
 }
 
 model Expeditor {
@@ -287,6 +289,10 @@ model SummaryOrderJournal {
   customer            Customer? @relation(fields: [customerId], references: [id])
   product             Product?  @relation(fields: [productId], references: [id])
   events              SummaryOrderEvent[]  // История событий
+  
+  // Связь с OrderItem (для обратной синхронизации при редактировании заказа)
+  orderItemId         Int?      @unique  // FK -> OrderItem
+  orderItem           OrderItem? @relation(fields: [orderItemId], references: [id])
   
   @@index([shipDate])
   @@index([customerId])

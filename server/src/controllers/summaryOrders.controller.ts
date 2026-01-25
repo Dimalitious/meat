@@ -376,6 +376,8 @@ export const syncToOrders = async (req: Request, res: Response) => {
                 }
             });
 
+            let orderItemId: number | null = null;
+
             if (order) {
                 const existingItem = await prisma.orderItem.findFirst({
                     where: { orderId: order.id, productId: entry.productId }
@@ -391,9 +393,10 @@ export const syncToOrders = async (req: Request, res: Response) => {
                             amount: Number(entry.price) * entry.orderQty
                         }
                     });
-                    results.push({ action: 'item_updated', orderId: order.id });
+                    orderItemId = existingItem.id;
+                    results.push({ action: 'item_updated', orderId: order.id, orderItemId });
                 } else {
-                    await prisma.orderItem.create({
+                    const newItem = await prisma.orderItem.create({
                         data: {
                             orderId: order.id,
                             productId: entry.productId,
@@ -406,6 +409,7 @@ export const syncToOrders = async (req: Request, res: Response) => {
                             weightToDistribute: entry.weightToDistribute
                         }
                     });
+                    orderItemId = newItem.id;
 
                     await prisma.order.update({
                         where: { id: order.id },
@@ -414,7 +418,7 @@ export const syncToOrders = async (req: Request, res: Response) => {
                             totalWeight: { increment: entry.orderQty }
                         }
                     });
-                    results.push({ action: 'item_added', orderId: order.id });
+                    results.push({ action: 'item_added', orderId: order.id, orderItemId });
                 }
             } else {
                 order = await prisma.order.create({
@@ -440,7 +444,20 @@ export const syncToOrders = async (req: Request, res: Response) => {
                         }
                     }
                 });
-                results.push({ action: 'order_created', orderId: order.id });
+                // Получаем созданный OrderItem отдельно
+                const createdItem = await prisma.orderItem.findFirst({
+                    where: { orderId: order.id, productId: entry.productId }
+                });
+                orderItemId = createdItem?.id || null;
+                results.push({ action: 'order_created', orderId: order.id, orderItemId });
+            }
+
+            // Сохраняем связь orderItemId в SummaryOrderJournal для обратной синхронизации
+            if (orderItemId) {
+                await prisma.summaryOrderJournal.update({
+                    where: { id: entry.id },
+                    data: { orderItemId }
+                });
             }
         }
 
