@@ -484,6 +484,18 @@ async function updateExistingSvod(
             const sourceProductIds = new Set<number>();
 
             for (const line of lines) {
+                // Сначала обрабатываем флаг источника (для всех строк)
+                if (line.isDistributionSource) {
+                    sourceProductIds.add(line.productId);
+                }
+
+                // ВАЖНО: Если клиент явно очистил distributedFromLineId (null), 
+                // не восстанавливаем связь из старых данных БД
+                if (line.distributedFromLineId === null) {
+                    // Связь была удалена клиентом - не добавляем в distributionLinks
+                    continue;
+                }
+
                 if (line.distributedFromLineId && oldLineIdToProductId.has(line.distributedFromLineId)) {
                     // Связь есть - сохраняем по productId источника
                     const sourceProductId = oldLineIdToProductId.get(line.distributedFromLineId)!;
@@ -491,9 +503,6 @@ async function updateExistingSvod(
                         sourceProductId,
                         sourceName: line.distributedFromName || null
                     });
-                }
-                if (line.isDistributionSource) {
-                    sourceProductIds.add(line.productId);
                 }
             }
 

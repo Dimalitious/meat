@@ -18,6 +18,7 @@ interface AssemblyItem {
     price: number;
     status: string;  // Added to track forming/synced
     weightToShip?: number | null; // Необходимо отгрузить - из Свода
+    recommendedQty?: number | null; // Рекомендуемое кол-во - из столбца "Вес" сводки заказов
 }
 
 interface Customer {
@@ -125,7 +126,8 @@ export default function AssemblyOrdersPage() {
                     customerName: entry.customerName,
                     price: Number(entry.price) || 0,
                     status: entry.status,
-                    weightToShip: weightToShipMap.get(entry.productId) ?? null
+                    weightToShip: weightToShipMap.get(entry.productId) ?? null,
+                    recommendedQty: entry.weightToDistribute ?? null
                 });
             }
 
@@ -448,6 +450,15 @@ export default function AssemblyOrdersPage() {
                                             <div className="flex justify-between items-center">
                                                 <span className="text-sm text-gray-600">Заказано:</span>
                                                 <span className="font-bold">{item.orderedQty} кг</span>
+                                            </div>
+                                            {/* Рекомендуемое кол-во - из столбца "Вес" формы Сводки заказов */}
+                                            <div className="flex justify-between items-center bg-purple-50 -mx-4 px-4 py-2">
+                                                <span className="text-sm text-purple-700 font-medium">📊 Рекомендуемое кол-во:</span>
+                                                <span className="font-bold text-purple-700">
+                                                    {item.recommendedQty != null && item.recommendedQty > 0
+                                                        ? `${item.recommendedQty} кг`
+                                                        : '—'}
+                                                </span>
                                             </div>
                                             <div className="flex justify-between items-center gap-2">
                                                 <span className="text-sm text-gray-600">Погрузили:</span>
