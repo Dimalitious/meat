@@ -3,7 +3,7 @@ import axios from 'axios';
 import { API_URL } from '../config/api';
 import { useAuth } from '../context/AuthContext';
 import * as XLSX from 'xlsx';
-import { Filter, RefreshCw, Plus, Trash2, Save, Search } from 'lucide-react';
+import { Filter, RefreshCw, Plus, Trash2, Save, Search, Download } from 'lucide-react';
 import SvodTab from '../components/SvodTab';
 import MaterialReportTab from '../components/MaterialReportTab';
 
@@ -601,6 +601,62 @@ export default function SummaryOrdersPage() {
         return products.slice(0, 100);
     }, [products]);
 
+    // ============================================
+    // ЭКСПОРТ В EXCEL (ЗАКАЗЫ)
+    // ============================================
+    const handleExportToExcel = () => {
+        if (entries.length === 0) {
+            alert('Нет данных для экспорта');
+            return;
+        }
+
+        const exportData = entries.map(e => ({
+            'Дата': new Date(e.shipDate).toLocaleDateString('ru-RU'),
+            '№ Сводки': e.idn || '',
+            'Оплата': PAYMENT_TYPES.find(pt => pt.value === e.paymentType)?.label || e.paymentType,
+            'Клиент': e.customerName || '',
+            'Код товара': e.productCode || '',
+            'Товар': e.productFullName || '',
+            'Категория': e.category || '',
+            'Цена': e.price || 0,
+            'Факт': e.shippedQty || 0,
+            'Сумма': e.price * e.shippedQty || 0,
+            'Заказ': e.orderQty || 0,
+            'Коэф%': e.distributionCoef || '',
+            'Вес': e.weightToDistribute || '',
+            'Менеджер': e.managerName || '',
+            'Район': e.district || '',
+            'Адрес': e.pointAddress || '',
+            'Статус': e.status === 'synced' ? 'В заказах' : e.status === 'forming' ? 'Собирается' : 'Черновик'
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Заказы');
+        XLSX.writeFile(wb, `Заказы_${filterDate}.xlsx`);
+    };
+
+    // ============================================
+    // ДАШБОРД: Компактная статистика заказов
+    // ============================================
+    const dashboardStats = useMemo(() => {
+        // Количество уникальных точек (клиентов)
+        const uniqueCustomers = new Set(entries.map(e => e.customerId).filter(id => id !== null));
+        const pointsCount = uniqueCustomers.size;
+
+        // Общий тоннаж = сумма orderQty
+        const totalTonnage = entries.reduce((sum, e) => sum + (e.orderQty || 0), 0);
+
+        // Общая сумма
+        const totalSum = entries.reduce((sum, e) => sum + (e.sumWithRevaluation || 0), 0);
+
+        return {
+            pointsCount,
+            totalTonnage,
+            totalSum
+        };
+    }, [entries]);
+
     const selectableEntries = entries.filter(e => e.status !== 'synced');
     const allSelected = selectableEntries.length > 0 && selectedIds.size === selectableEntries.length;
 
@@ -654,6 +710,32 @@ export default function SummaryOrdersPage() {
                     <div className="flex justify-between items-center mb-4">
                         <div className="flex items-center gap-3">
                             <h1 className="text-2xl font-bold">Сводка заказов</h1>
+
+                            {/* Компактный дашборд */}
+                            <div className="flex items-center gap-2 ml-4">
+                                {/* Точки */}
+                                <div className="flex items-center gap-1 px-3 py-1 bg-green-100 rounded-lg">
+                                    <span className="text-green-600 text-sm">📍</span>
+                                    <span className="font-semibold text-green-700">{dashboardStats.pointsCount}</span>
+                                    <span className="text-green-600 text-xs">точек</span>
+                                </div>
+                                {/* Тоннаж */}
+                                <div className="flex items-center gap-1 px-3 py-1 bg-orange-100 rounded-lg">
+                                    <span className="text-orange-600 text-sm">⚖️</span>
+                                    <span className="font-semibold text-orange-700">
+                                        {(dashboardStats.totalTonnage / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </span>
+                                    <span className="text-orange-600 text-xs">т</span>
+                                </div>
+                                {/* Сумма */}
+                                <div className="flex items-center gap-1 px-3 py-1 bg-purple-100 rounded-lg">
+                                    <span className="text-purple-600 text-sm">💰</span>
+                                    <span className="font-semibold text-purple-700">
+                                        {(dashboardStats.totalSum / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}K
+                                    </span>
+                                    <span className="text-purple-600 text-xs">₸</span>
+                                </div>
+                            </div>
                             {dirtyEntryIds.size > 0 && (
                                 <>
                                     <span className="bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-sm font-medium animate-pulse">
@@ -685,7 +767,10 @@ export default function SummaryOrdersPage() {
                             </button>
                             <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleExcelImport} className="hidden" />
                             <button onClick={() => fileInputRef.current?.click()} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
-                                📥 Excel
+                                📥 Импорт
+                            </button>
+                            <button onClick={handleExportToExcel} className="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 flex items-center gap-1">
+                                <Download size={16} /> Экспорт
                             </button>
                             {/* Кнопка В журнал / Сохранен в журнале + Редактировать */}
                             {savedToJournal ? (
@@ -718,6 +803,7 @@ export default function SummaryOrdersPage() {
                             )}
                         </div>
                     </div>
+
 
                     {/* Filters Panel */}
                     <div className="bg-white rounded shadow p-4 mb-4">

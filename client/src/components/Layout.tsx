@@ -58,7 +58,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Распределение', path: '/dispatch', icon: <Truck size={20} /> },
         { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} /> },
         { label: 'Производство', path: '/production-v3', icon: <Warehouse size={20} /> },
-        { label: 'Производство (закуп)', path: '/production-docs', icon: <Package size={20} /> },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
         { label: 'Telegram заказы', path: '/telegram-orders', icon: <MessageCircle size={20} /> },
         {
@@ -74,7 +73,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             icon: <FolderOpen size={20} />,
             children: [
                 { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} /> },
-                { label: 'Журнал сводок', path: '/journals/summary', icon: <BookOpen size={18} /> },
                 { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
                 { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
                 { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },

@@ -793,26 +793,61 @@ export const refreshSvod = async (req: Request, res: Response) => {
         });
         console.timeEnd('refreshSvod:transaction');
 
-        console.time('refreshSvod:finalFetch');
-        // Возвращаем обновлённые данные
-        const updatedSvod = await prisma.svodHeader.findUnique({
-            where: { id: svodId },
-            include: {
-                lines: {
-                    include: {
-                        product: { select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true } }
-                    },
-                    orderBy: { sortOrder: 'asc' }
+        // ОПТИМИЗАЦИЯ: Возвращаем только изменённые/добавленные строки вместо полной перезагрузки
+        // Клиент инкрементально обновит state
+
+        console.time('refreshSvod:fetchChanges');
+
+        // Получаем только новые строки (если были добавлены) с product info
+        let addedLinesData: any[] = [];
+        if (addedProducts.length > 0) {
+            addedLinesData = await prisma.svodLine.findMany({
+                where: {
+                    svodId,
+                    productId: { in: addedProducts }
                 },
-                supplierCols: { orderBy: { colIndex: 'asc' } },
-                supplierValues: true
-            }
-        });
-        console.timeEnd('refreshSvod:finalFetch');
+                include: {
+                    product: { select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true } }
+                }
+            });
+        }
+
+        // Получаем обновлённые данные для уже существующих строк (только изменённые поля)
+        let updatedLinesData: any[] = [];
+        if (updatedProducts.length > 0) {
+            updatedLinesData = await prisma.svodLine.findMany({
+                where: {
+                    svodId,
+                    productId: { in: updatedProducts }
+                },
+                select: {
+                    id: true,
+                    productId: true,
+                    orderQty: true,
+                    productionInQty: true,
+                    openingStock: true,
+                    coefficient: true,
+                    category: true,
+                    shortName: true
+                }
+            });
+        }
+
+        console.timeEnd('refreshSvod:fetchChanges');
 
         res.json({
             mode: 'saved',
-            svod: updatedSvod,
+            // Не возвращаем полный svod - клиент обновит инкрементально
+            svodId,
+            svodDate: svod.svodDate,
+            // Новые строки (полные данные с product)
+            addedLines: addedLinesData,
+            // Обновлённые строки (только изменённые поля)
+            updatedLines: updatedLinesData,
+            // Новые данные поставщиков (всегда полностью заменяются)
+            supplierCols: freshData.supplierCols,
+            supplierValues: freshData.supplierValues,
+            // Статистика
             addedProducts: addedProducts.length,
             updatedProducts: updatedProducts.length
         });
@@ -1030,7 +1065,7 @@ export const getShipmentDistribution = async (req: Request, res: Response) => {
 export const saveShipmentDistribution = async (req: Request, res: Response) => {
     try {
         const lineId = Number(req.params.lineId);
-        const { plannedWeight, distributions, addMissingProducts, sourceProductId, sourceProductName } = req.body;
+        const { plannedWeight, distributions, deletedProductIds, addMissingProducts, sourceProductId, sourceProductName } = req.body;
 
         if (!distributions || !Array.isArray(distributions)) {
             return res.status(400).json({ error: 'distributions array is required' });
@@ -1053,7 +1088,26 @@ export const saveShipmentDistribution = async (req: Request, res: Response) => {
             // Фильтруем валидные распределения
             const validDistributions = distributions.filter((d: any) => d.qty > 0 && d.productId);
 
-            // *** ОЧИСТКА СТАРЫХ РАСПРЕДЕЛЕНИЙ ***
+            // *** ОБРАБОТКА УДАЛЁННЫХ СВЯЗЕЙ ***
+            if (deletedProductIds && Array.isArray(deletedProductIds) && deletedProductIds.length > 0) {
+                // Находим строки по productId и снимаем с них маркировку
+                for (const deletedProductId of deletedProductIds) {
+                    await tx.svodLine.updateMany({
+                        where: {
+                            svodId,
+                            productId: deletedProductId,
+                            distributedFromLineId: lineId
+                        },
+                        data: {
+                            weightToShip: null,
+                            distributedFromLineId: null,
+                            distributedFromName: null
+                        }
+                    });
+                }
+            }
+
+            // *** ОЧИСТКА СТАРЫХ РАСПРЕДЕЛЕНИЙ (только для товаров которые НЕ в новом списке) ***
             // Находим все строки которые ранее были распределены от этого источника
             const oldDistributedLines = await tx.svodLine.findMany({
                 where: {
@@ -1062,24 +1116,29 @@ export const saveShipmentDistribution = async (req: Request, res: Response) => {
                 }
             });
 
-            // Обнуляем у них weightToShip и снимаем маркировку
+            // Обнуляем у них weightToShip и снимаем маркировку, ТОЛЬКО если их нет в новых распределениях
+            const newProductIds = new Set(validDistributions.map((d: any) => d.productId));
             for (const oldLine of oldDistributedLines) {
-                await tx.svodLine.update({
-                    where: { id: oldLine.id },
-                    data: {
-                        weightToShip: null,
-                        distributedFromLineId: null,
-                        distributedFromName: null
-                    }
-                });
+                if (!newProductIds.has(oldLine.productId)) {
+                    await tx.svodLine.update({
+                        where: { id: oldLine.id },
+                        data: {
+                            weightToShip: null,
+                            distributedFromLineId: null,
+                            distributedFromName: null
+                        }
+                    });
+                }
             }
 
-            // Обнуляем weightToShip у родительской позиции и помечаем как источник
+            // Обновляем родительскую позицию
+            // Если есть распределения - помечаем как источник, иначе - снимаем метку
+            const isStillSource = validDistributions.length > 0;
             await tx.svodLine.update({
                 where: { id: lineId },
                 data: {
                     weightToShip: null,
-                    isDistributionSource: true  // Маркируем как источник
+                    isDistributionSource: isStillSource
                 }
             });
 

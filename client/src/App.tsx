@@ -22,7 +22,6 @@ import AssemblyPage from './pages/AssemblyPage';
 import AssemblyOrderPage from './pages/AssemblyOrderPage';
 import AssemblyOrdersPage from './pages/AssemblyOrdersPage';
 import SummaryOrdersPage from './pages/SummaryOrdersPage';
-import SummaryJournalPage from './pages/SummaryJournalPage';
 import AssemblyJournalPage from './pages/AssemblyJournalPage';
 import ExpeditionPage from './pages/ExpeditionPage';
 import ExpeditionInvoicePage from './pages/ExpeditionInvoicePage';
@@ -43,7 +42,6 @@ import PurchaseFormPage from './pages/PurchaseFormPage';
 import TelegramOrdersPage from './pages/TelegramOrdersPage';
 import WarehousesPage from './pages/WarehousesPage';
 import DispatchPage from './pages/DispatchPage';
-import ProductionDocPage from './pages/ProductionDocPage';
 import MmlReferencePage from './pages/MmlReferencePage';
 import MaterialReportPage from './pages/MaterialReportPage';
 
@@ -109,7 +107,6 @@ function App() {
             <Route path="/summary-orders" element={<ProtectedRoute><SummaryOrdersPage /></ProtectedRoute>} />
             <Route path="/assembly-orders" element={<ProtectedRoute><AssemblyOrdersPage /></ProtectedRoute>} />
             <Route path="/dispatch" element={<ProtectedRoute><DispatchPage /></ProtectedRoute>} />
-            <Route path="/journals/summary" element={<ProtectedRoute><SummaryJournalPage /></ProtectedRoute>} />
             <Route path="/journals/assembly" element={<ProtectedRoute><AssemblyJournalPage /></ProtectedRoute>} />
             {/* Expedition routes */}
             <Route path="/expedition" element={<ProtectedRoute><ExpeditionPage /></ProtectedRoute>} />
@@ -137,8 +134,6 @@ function App() {
             <Route path="/telegram-orders" element={<ProtectedRoute><TelegramOrdersPage /></ProtectedRoute>} />
             {/* Warehouses Module (Справочник складов) */}
             <Route path="/warehouses" element={<ProtectedRoute><WarehousesPage /></ProtectedRoute>} />
-            {/* Production-Purchase Integration (Производство из закупа) */}
-            <Route path="/production-docs" element={<ProtectedRoute><ProductionDocPage /></ProtectedRoute>} />
             {/* MML Reference (Справочник техкарт) */}
             <Route path="/mmls" element={<ProtectedRoute><MmlReferencePage /></ProtectedRoute>} />
             {/* Reports (Отчеты) */}

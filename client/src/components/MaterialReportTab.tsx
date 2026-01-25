@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
-import { RefreshCw, Save, Search, ExternalLink, AlertCircle } from 'lucide-react';
+import { RefreshCw, Save, Search, ExternalLink, AlertCircle, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 // ============================================
 // ИНТЕРФЕЙСЫ
@@ -211,6 +212,38 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
         return groups;
     }, [filteredLines]);
 
+    // ============================================
+    // ЭКСПОРТ В EXCEL (ОТЧЁТ)
+    // ============================================
+    const handleExportToExcel = () => {
+        if (!report?.lines || report.lines.length === 0) {
+            alert('Нет данных для экспорта');
+            return;
+        }
+
+        const exportData = filteredLines.map(line => ({
+            'Код': line.productCode || '',
+            'Наименование': line.productName || line.product?.name || '',
+            'Категория': line.category || line.product?.category || '',
+            'На начало': line.openingBalance || 0,
+            'Закупка': line.inPurchase || 0,
+            'Производство': line.inProduction || 0,
+            'Продано': line.outSale || 0,
+            'Отход': line.outWaste || 0,
+            'Пучок': line.outBundle || 0,
+            'Брак': line.outDefectWriteoff || 0,
+            'Потеря веса': line.outWeightLoss || 0,
+            'Возврат пост.': line.outSupplierReturn || 0,
+            'Расч. остаток': line.closingBalanceCalc || 0,
+            'Факт. остаток': getFactValue(line) ?? ''
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Отчёт');
+        XLSX.writeFile(wb, `Материальный_отчёт_${selectedDate}.xlsx`);
+    };
+
     // Статус отчёта
     const getStatusBadge = () => {
         if (isPreview) {
@@ -288,6 +321,15 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                         >
                             <Save size={16} />
                             {saving ? 'Сохранение...' : 'Сохранить отчёт'}
+                        </button>
+
+                        {/* Кнопка Экспорт в Excel */}
+                        <button
+                            onClick={handleExportToExcel}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-emerald-600 hover:bg-emerald-700 text-white"
+                        >
+                            <Download size={16} />
+                            Экспорт
                         </button>
                     </div>
                 </div>
