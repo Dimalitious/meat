@@ -26,8 +26,9 @@ export const getOrders = async (req: Request, res: Response) => {
         if (status) where.status = String(status);
 
         // По умолчанию отключенные заказы не показываются
+        // isDisabled: { not: true } покажет записи где isDisabled = false или null
         if (showDisabled !== 'true') {
-            where.isDisabled = false;
+            where.isDisabled = { not: true };
         }
 
         const orders = await prisma.order.findMany({
