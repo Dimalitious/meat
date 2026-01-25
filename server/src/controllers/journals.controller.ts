@@ -421,3 +421,99 @@ export const getAssemblyJournalById = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to get journal' });
     }
 };
+
+// ============ EXPEDITION JOURNAL ============
+
+export const getExpeditionJournals = async (req: Request, res: Response) => {
+    try {
+        const { dateFrom, dateTo, showHidden, expeditorId } = req.query;
+
+        const where: any = {};
+
+        if (dateFrom && dateTo) {
+            where.dateFrom = { gte: new Date(dateFrom as string) };
+            where.dateTo = { lte: new Date(dateTo as string) };
+        }
+
+        if (expeditorId) {
+            where.expeditorId = Number(expeditorId);
+        }
+
+        if (showHidden !== 'true') {
+            where.isHidden = false;
+        }
+
+        const journals = await prisma.expeditionJournal.findMany({
+            where,
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(journals);
+    } catch (error) {
+        console.error('Get expedition journals error:', error);
+        res.status(500).json({ error: 'Failed to get expedition journals' });
+    }
+};
+
+export const createExpeditionJournal = async (req: Request, res: Response) => {
+    try {
+        const { expeditorId, expeditorName, dateFrom, dateTo, savedAt, orders } = req.body;
+
+        const journal = await prisma.expeditionJournal.create({
+            data: {
+                expeditorId: Number(expeditorId),
+                expeditorName: expeditorName || '',
+                dateFrom: new Date(dateFrom),
+                dateTo: new Date(dateTo),
+                ordersCount: orders?.length || 0,
+                totalWeight: orders?.reduce((sum: number, o: any) => sum + (o.totalWeight || 0), 0) || 0,
+                totalAmount: orders?.reduce((sum: number, o: any) => sum + (o.totalAmount || 0), 0) || 0,
+                data: orders || []
+            }
+        });
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Create expedition journal error:', error);
+        res.status(400).json({ error: 'Failed to create expedition journal' });
+    }
+};
+
+export const updateExpeditionJournal = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { isHidden, data } = req.body;
+
+        const journal = await prisma.expeditionJournal.update({
+            where: { id: Number(id) },
+            data: {
+                ...(isHidden !== undefined && { isHidden }),
+                ...(data !== undefined && { data })
+            }
+        });
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Update expedition journal error:', error);
+        res.status(400).json({ error: 'Failed to update expedition journal' });
+    }
+};
+
+export const getExpeditionJournalById = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+        const journal = await prisma.expeditionJournal.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!journal) {
+            return res.status(404).json({ error: 'Journal not found' });
+        }
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Get expedition journal error:', error);
+        res.status(500).json({ error: 'Failed to get journal' });
+    }
+};

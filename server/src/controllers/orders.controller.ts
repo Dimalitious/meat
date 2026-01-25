@@ -334,7 +334,7 @@ export const assignExpeditor = async (req: Request, res: Response) => {
 export const getExpeditorOrders = async (req: Request, res: Response) => {
     try {
         const { expeditorId } = req.params;
-        const { status } = req.query;
+        const { status, dateFrom, dateTo } = req.query;
 
         let where: any = {
             expeditorId: Number(expeditorId)
@@ -343,9 +343,22 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
         // Filter by delivery status if provided
         if (status) {
             where.deliveryStatus = String(status);
-        } else {
-            // By default show only pending and in_delivery
-            where.deliveryStatus = { in: ['pending', 'in_delivery'] };
+        }
+        // Если статус не указан - показываем все статусы (включая delivered)
+
+        // Фильтр по дате
+        if (dateFrom || dateTo) {
+            where.date = {};
+            if (dateFrom) {
+                const start = new Date(String(dateFrom));
+                start.setHours(0, 0, 0, 0);
+                where.date.gte = start;
+            }
+            if (dateTo) {
+                const end = new Date(String(dateTo));
+                end.setHours(23, 59, 59, 999);
+                where.date.lte = end;
+            }
         }
 
         const orders = await prisma.order.findMany({

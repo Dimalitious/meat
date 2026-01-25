@@ -627,7 +627,7 @@ export default function SummaryOrdersPage() {
             'Менеджер': e.managerName || '',
             'Район': e.district || '',
             'Адрес': e.pointAddress || '',
-            'Статус': e.status === 'synced' ? 'В заказах' : e.status === 'forming' ? 'Собирается' : 'Черновик'
+            'Статус': e.status === 'synced' ? 'В заказах' : e.status === 'forming' ? 'Собирается' : e.status === 'rework' ? 'На доработке' : 'Черновик'
         }));
 
         const ws = XLSX.utils.json_to_sheet(exportData);
@@ -981,6 +981,8 @@ export default function SummaryOrdersPage() {
                                                     <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">✓ В заказах</span>
                                                 ) : entry.status === 'forming' ? (
                                                     <span className="bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs">🔄 Собирается</span>
+                                                ) : entry.status === 'rework' ? (
+                                                    <button onClick={() => processEntry(entry.id)} className="bg-orange-500 text-white px-2 py-1 rounded text-xs hover:bg-orange-600">🔁 Начать заново</button>
                                                 ) : (
                                                     <button onClick={() => processEntry(entry.id)} className="bg-green-500 text-white px-2 py-1 rounded text-xs hover:bg-green-600">Начать сборку</button>
                                                 )}

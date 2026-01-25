@@ -10,7 +10,11 @@ import {
     createAssemblyJournal,
     updateAssemblyJournal,
     getAssemblyJournalById,
-    sendAssemblyJournalToRework
+    sendAssemblyJournalToRework,
+    getExpeditionJournals,
+    createExpeditionJournal,
+    updateExpeditionJournal,
+    getExpeditionJournalById
 } from '../controllers/journals.controller';
 
 const router = Router();
@@ -29,5 +33,10 @@ router.post('/assembly', authenticateToken, createAssemblyJournal);
 router.put('/assembly/:id', authenticateToken, updateAssemblyJournal);
 router.post('/assembly/:id/rework', authenticateToken, sendAssemblyJournalToRework);
 
-export default router;
+// Expedition Journal
+router.get('/expedition', authenticateToken, getExpeditionJournals);
+router.get('/expedition/:id', authenticateToken, getExpeditionJournalById);
+router.post('/expedition', authenticateToken, createExpeditionJournal);
+router.put('/expedition/:id', authenticateToken, updateExpeditionJournal);
 
+export default router;
