@@ -423,13 +423,18 @@ export const completeOrder = async (req: Request, res: Response) => {
 // Get orders pending dispatch (ready for expeditor assignment)
 export const getOrdersPendingDispatch = async (req: Request, res: Response) => {
     try {
-        const { date } = req.query;
+        const { date, includeAssigned } = req.query;
 
         const where: Prisma.OrderWhereInput = {
-            expeditorId: null,
             isDisabled: false,
             status: { in: [ORDER_STATUS.NEW, ORDER_STATUS.PROCESSING] }
         };
+
+        // Если includeAssigned=true, возвращаем все заказы (включая назначенные)
+        // Иначе - только без экспедитора
+        if (includeAssigned !== 'true') {
+            where.expeditorId = null;
+        }
 
         if (date) {
             const startDate = new Date(String(date));

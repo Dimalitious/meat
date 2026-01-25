@@ -11,7 +11,8 @@ import {
     Eye,
     RefreshCw,
     CheckCircle2,
-    AlertCircle
+    AlertCircle,
+    Edit2
 } from 'lucide-react';
 
 interface OrderItem {
@@ -61,6 +62,7 @@ export default function DispatchPage() {
     const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedExpeditor, setSelectedExpeditor] = useState<{ [orderId: number]: number }>({});
     const [successMessage, setSuccessMessage] = useState('');
+    const [editingOrderId, setEditingOrderId] = useState<number | null>(null); // Режим редактирования
 
     useEffect(() => {
         fetchData();
@@ -72,17 +74,26 @@ export default function DispatchPage() {
             const token = localStorage.getItem('token');
             const headers = { Authorization: `Bearer ${token}` };
 
-            // Fetch orders ready for dispatch (synced from assembly, no expeditor assigned)
+            // Fetch ALL orders for dispatch (including already assigned ones)
             const [ordersRes, expeditorsRes] = await Promise.all([
                 axios.get(`${API_URL}/api/orders/pending-dispatch`, {
                     headers,
-                    params: { date: filterDate }
+                    params: { date: filterDate, includeAssigned: true }
                 }),
                 axios.get(`${API_URL}/api/expeditors`, { headers })
             ]);
 
             setOrders(ordersRes.data);
             setExpeditors(expeditorsRes.data.filter((e: Expeditor) => e.isActive));
+
+            // Предзаполняем выбранных экспедиторов для уже назначенных заказов
+            const preselected: { [orderId: number]: number } = {};
+            for (const order of ordersRes.data) {
+                if (order.expeditor?.id) {
+                    preselected[order.id] = order.expeditor.id;
+                }
+            }
+            setSelectedExpeditor(preselected);
         } catch (err) {
             console.error('Failed to fetch dispatch data:', err);
         } finally {
@@ -106,11 +117,18 @@ export default function DispatchPage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
 
-            // Remove assigned order from list
-            setOrders(prev => prev.filter(o => o.id !== orderId));
+            // Обновляем заказ в списке (вместо удаления)
+            const expeditor = expeditors.find(e => e.id === expeditorId);
+            setOrders(prev => prev.map(o =>
+                o.id === orderId
+                    ? { ...o, expeditor: expeditor ? { id: expeditor.id, name: expeditor.name } : null }
+                    : o
+            ));
+
+            // Выходим из режима редактирования
+            setEditingOrderId(null);
 
             // Show success message
-            const expeditor = expeditors.find(e => e.id === expeditorId);
             setSuccessMessage(`Заказ #${orderId} назначен экспедитору ${expeditor?.name}`);
             setTimeout(() => setSuccessMessage(''), 3000);
         } catch (err) {
@@ -369,37 +387,77 @@ export default function DispatchPage() {
                                                 </div>
                                             </div>
 
-                                            {/* Expeditor Selection */}
+                                            {/* Expeditor Selection / Display */}
                                             <div className="flex items-center gap-3">
-                                                <select
-                                                    value={selectedExpeditor[order.id] || ''}
-                                                    onChange={e => setSelectedExpeditor(prev => ({
-                                                        ...prev,
-                                                        [order.id]: Number(e.target.value)
-                                                    }))}
-                                                    className="border rounded-lg px-3 py-2 text-sm min-w-[180px]"
-                                                >
-                                                    <option value="">Выберите экспедитора</option>
-                                                    {expeditors.map(exp => (
-                                                        <option key={exp.id} value={exp.id}>
-                                                            {exp.name}
-                                                        </option>
-                                                    ))}
-                                                </select>
+                                                {/* Если экспедитор назначен и не в режиме редактирования */}
+                                                {order.expeditor && editingOrderId !== order.id ? (
+                                                    <>
+                                                        <div className="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-800 rounded-lg min-w-[180px]">
+                                                            <Truck size={16} />
+                                                            <span className="font-medium">{order.expeditor.name}</span>
+                                                        </div>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => {
+                                                                setEditingOrderId(order.id);
+                                                                setSelectedExpeditor(prev => ({
+                                                                    ...prev,
+                                                                    [order.id]: order.expeditor?.id || 0
+                                                                }));
+                                                            }}
+                                                            className="flex items-center gap-2"
+                                                        >
+                                                            <Edit2 size={14} />
+                                                            Изменить
+                                                        </Button>
+                                                    </>
+                                                ) : (
+                                                    /* Режим выбора/редактирования экспедитора */
+                                                    <>
+                                                        <select
+                                                            value={selectedExpeditor[order.id] || ''}
+                                                            onChange={e => setSelectedExpeditor(prev => ({
+                                                                ...prev,
+                                                                [order.id]: Number(e.target.value)
+                                                            }))}
+                                                            className="border rounded-lg px-3 py-2 text-sm min-w-[180px]"
+                                                        >
+                                                            <option value="">Выберите экспедитора</option>
+                                                            {expeditors.map(exp => (
+                                                                <option key={exp.id} value={exp.id}>
+                                                                    {exp.name}
+                                                                </option>
+                                                            ))}
+                                                        </select>
 
-                                                <Button
-                                                    size="sm"
-                                                    onClick={() => assignExpeditor(order.id)}
-                                                    disabled={assigning === order.id || !selectedExpeditor[order.id]}
-                                                    className="flex items-center gap-2 min-w-[120px]"
-                                                >
-                                                    {assigning === order.id ? (
-                                                        <RefreshCw className="animate-spin" size={14} />
-                                                    ) : (
-                                                        <Truck size={14} />
-                                                    )}
-                                                    Назначить
-                                                </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            onClick={() => assignExpeditor(order.id)}
+                                                            disabled={assigning === order.id || !selectedExpeditor[order.id]}
+                                                            className="flex items-center gap-2 min-w-[120px]"
+                                                        >
+                                                            {assigning === order.id ? (
+                                                                <RefreshCw className="animate-spin" size={14} />
+                                                            ) : (
+                                                                <Truck size={14} />
+                                                            )}
+                                                            {order.expeditor ? 'Сохранить' : 'Назначить'}
+                                                        </Button>
+
+                                                        {/* Кнопка отмены редактирования */}
+                                                        {editingOrderId === order.id && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                onClick={() => setEditingOrderId(null)}
+                                                                className="text-gray-500"
+                                                            >
+                                                                Отмена
+                                                            </Button>
+                                                        )}
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
 
