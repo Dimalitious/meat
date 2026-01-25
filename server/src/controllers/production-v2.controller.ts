@@ -970,3 +970,479 @@ export const unhideProductionRuns = async (req: Request, res: Response) => {
     }
 };
 
+// ============================================
+// РАСШИРЕННЫЙ ФУНКЦИОНАЛ ПРОИЗВОДСТВА
+// ============================================
+
+/**
+ * Загрузить позиции закупок в производство за период
+ * Создаёт записи ProductionRun с sourceType = 'PURCHASE'
+ */
+export const loadPurchasesToProduction = async (req: Request, res: Response) => {
+    try {
+        const { dateFrom, dateTo } = req.query;
+        const userId = (req as any).user?.userId;
+
+        if (!dateFrom || !dateTo) {
+            return res.status(400).json({ error: 'dateFrom and dateTo are required' });
+        }
+
+        const fromDate = new Date(String(dateFrom));
+        fromDate.setUTCHours(0, 0, 0, 0);
+        const toDate = new Date(String(dateTo));
+        toDate.setUTCHours(23, 59, 59, 999);
+
+        // Получаем закупки за период с товарами
+        const purchases = await prisma.purchase.findMany({
+            where: {
+                purchaseDate: {
+                    gte: fromDate,
+                    lte: toDate
+                },
+                isDisabled: false
+            },
+            include: {
+                items: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, category: true }
+                        },
+                        supplier: {
+                            select: { id: true, name: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Собираем все позиции товаров из закупок
+        const purchaseItems: Array<{
+            purchaseId: number;
+            purchaseItemId: number;
+            purchaseDate: Date;
+            productId: number;
+            productCode: string;
+            productName: string;
+            category: string | null;
+            qty: number;
+            supplierName: string;
+        }> = [];
+
+        for (const purchase of purchases) {
+            for (const item of purchase.items) {
+                purchaseItems.push({
+                    purchaseId: purchase.id,
+                    purchaseItemId: item.id,
+                    purchaseDate: purchase.purchaseDate,
+                    productId: item.productId,
+                    productCode: item.product.code,
+                    productName: item.product.name,
+                    category: item.product.category,
+                    qty: Number(item.qty),
+                    supplierName: item.supplier.name
+                });
+            }
+        }
+
+        res.json({
+            items: purchaseItems,
+            count: purchaseItems.length,
+            dateRange: { from: fromDate, to: toDate }
+        });
+    } catch (error) {
+        console.error('loadPurchasesToProduction error:', error);
+        res.status(500).json({ error: 'Failed to load purchases' });
+    }
+};
+
+/**
+ * Загрузить остатки на начало из материального отчёта
+ */
+export const loadOpeningBalances = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.query;
+
+        if (!date) {
+            return res.status(400).json({ error: 'date is required' });
+        }
+
+        const reportDate = new Date(String(date));
+        reportDate.setUTCHours(0, 0, 0, 0);
+
+        // Получаем материальный отчёт за эту дату
+        const materialReport = await prisma.materialReport.findFirst({
+            where: {
+                reportDate: reportDate
+            },
+            include: {
+                lines: {
+                    where: {
+                        openingBalance: { gt: 0 }
+                    },
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, category: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        if (!materialReport) {
+            // Если нет сохранённого отчёта, пытаемся получить из черновика/превью
+            // Остаток на начало = закрытие предыдущего дня
+            const previousDate = new Date(reportDate);
+            previousDate.setDate(previousDate.getDate() - 1);
+
+            const prevReport = await prisma.materialReport.findFirst({
+                where: {
+                    reportDate: previousDate
+                },
+                include: {
+                    lines: {
+                        where: {
+                            OR: [
+                                { closingBalanceFact: { gt: 0 } },
+                                { closingBalanceCalc: { gt: 0 } }
+                            ]
+                        },
+                        include: {
+                            product: {
+                                select: { id: true, code: true, name: true, category: true }
+                            }
+                        }
+                    }
+                }
+            });
+
+            if (!prevReport) {
+                return res.json({ items: [], count: 0, message: 'No material report found for this date' });
+            }
+
+            // Используем фактический или расчётный остаток
+            const items = prevReport.lines.map(line => ({
+                productId: line.productId,
+                productCode: line.product.code,
+                productName: line.product.name,
+                category: line.product.category,
+                openingBalance: Number(line.closingBalanceFact ?? line.closingBalanceCalc),
+                sourceDate: previousDate
+            }));
+
+            return res.json({
+                items,
+                count: items.length,
+                date: reportDate,
+                sourceDate: previousDate
+            });
+        }
+
+        const items = materialReport.lines.map(line => ({
+            productId: line.productId,
+            productCode: line.productCode,
+            productName: line.productName,
+            category: line.product?.category,
+            openingBalance: Number(line.openingBalance),
+            sourceDate: reportDate
+        }));
+
+        res.json({
+            items,
+            count: items.length,
+            date: reportDate
+        });
+    } catch (error) {
+        console.error('loadOpeningBalances error:', error);
+        res.status(500).json({ error: 'Failed to load opening balances' });
+    }
+};
+
+/**
+ * Получить производственного сотрудника для текущего пользователя
+ */
+export const getCurrentProductionStaff = async (req: Request, res: Response) => {
+    try {
+        const userId = (req as any).user?.userId;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+
+        const staff = await prisma.productionStaff.findUnique({
+            where: { userId },
+            include: {
+                user: {
+                    select: { id: true, name: true, username: true }
+                }
+            }
+        });
+
+        if (!staff) {
+            // Если нет привязки к производственному персоналу, возвращаем данные пользователя
+            const user = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { id: true, name: true, username: true }
+            });
+            return res.json({
+                id: null,
+                fullName: user?.name || 'Неизвестный пользователь',
+                userId: userId,
+                isActive: true,
+                user
+            });
+        }
+
+        res.json(staff);
+    } catch (error) {
+        console.error('getCurrentProductionStaff error:', error);
+        res.status(500).json({ error: 'Failed to get production staff' });
+    }
+};
+
+/**
+ * Получить значения выработки по узлам с информацией о сотрудниках
+ * Группирует по mmlNodeId и возвращает все записи с датой/временем и ФИО сотрудника
+ */
+export const getRunValuesWithStaff = async (req: Request, res: Response) => {
+    try {
+        const runId = Number(req.params.id);
+
+        const values = await prisma.productionRunValue.findMany({
+            where: { productionRunId: runId },
+            include: {
+                staff: {
+                    select: { id: true, fullName: true }
+                },
+                node: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, category: true }
+                        }
+                    }
+                }
+            },
+            orderBy: [
+                { mmlNodeId: 'asc' },
+                { recordedAt: 'desc' }
+            ]
+        });
+
+        // Группируем по mmlNodeId
+        const grouped = new Map<number, typeof values>();
+        for (const val of values) {
+            if (!grouped.has(val.mmlNodeId)) {
+                grouped.set(val.mmlNodeId, []);
+            }
+            grouped.get(val.mmlNodeId)!.push(val);
+        }
+
+        res.json({
+            values,
+            grouped: Object.fromEntries(grouped)
+        });
+    } catch (error) {
+        console.error('getRunValuesWithStaff error:', error);
+        res.status(500).json({ error: 'Failed to get run values with staff' });
+    }
+};
+
+/**
+ * Добавить новую запись значения в MML-узел с трекингом сотрудника
+ */
+export const addRunValueEntry = async (req: Request, res: Response) => {
+    try {
+        const runId = Number(req.params.id);
+        const { mmlNodeId, value } = req.body;
+        const userId = (req as any).user?.userId;
+
+        if (!mmlNodeId || value === undefined) {
+            return res.status(400).json({ error: 'mmlNodeId and value are required' });
+        }
+
+        // Проверяем что run существует и не заблокирован
+        const run = await prisma.productionRun.findUnique({ where: { id: runId } });
+        if (!run) {
+            return res.status(404).json({ error: 'Production run not found' });
+        }
+        if (run.isLocked) {
+            return res.status(400).json({ error: 'Production run is locked' });
+        }
+
+        // Получаем staff по userId
+        const staff = await prisma.productionStaff.findUnique({
+            where: { userId }
+        });
+
+        // Получаем узел для snapshotProductId
+        const node = await prisma.productionMmlNode.findUnique({
+            where: { id: Number(mmlNodeId) }
+        });
+
+        // Создаём новую запись
+        const newValue = await prisma.productionRunValue.create({
+            data: {
+                productionRunId: runId,
+                mmlNodeId: Number(mmlNodeId),
+                value: value !== null && value !== '' ? Number(value) : null,
+                snapshotProductId: node?.productId || null,
+                staffId: staff?.id || null,
+                recordedAt: new Date()
+            },
+            include: {
+                staff: {
+                    select: { id: true, fullName: true }
+                },
+                node: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Пересчитываем actualWeight
+        const allValues = await prisma.productionRunValue.findMany({
+            where: { productionRunId: runId },
+            include: { node: true }
+        });
+
+        // Проверяем есть ли иерархия
+        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
+        const nodes = await prisma.productionMmlNode.findMany({
+            where: { id: { in: Array.from(nodeIds) } }
+        });
+        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
+
+        let actualWeight = 0;
+        for (const val of allValues) {
+            const n = nodes.find(x => x.id === val.mmlNodeId);
+            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
+            if (shouldSum && val.value !== null) {
+                actualWeight += Number(val.value);
+            }
+        }
+
+        await prisma.productionRun.update({
+            where: { id: runId },
+            data: { actualWeight }
+        });
+
+        res.status(201).json(newValue);
+    } catch (error) {
+        console.error('addRunValueEntry error:', error);
+        res.status(500).json({ error: 'Failed to add run value entry' });
+    }
+};
+
+/**
+ * Обновить запись значения выработки
+ */
+export const updateRunValueEntry = async (req: Request, res: Response) => {
+    try {
+        const valueId = Number(req.params.valueId);
+        const { value } = req.body;
+
+        const existing = await prisma.productionRunValue.findUnique({
+            where: { id: valueId },
+            include: { run: true }
+        });
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Value entry not found' });
+        }
+        if (existing.run.isLocked) {
+            return res.status(400).json({ error: 'Production run is locked' });
+        }
+
+        const updated = await prisma.productionRunValue.update({
+            where: { id: valueId },
+            data: {
+                value: value !== null && value !== '' ? Number(value) : null
+            },
+            include: {
+                staff: {
+                    select: { id: true, fullName: true }
+                },
+                node: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Пересчитываем actualWeight
+        const allValues = await prisma.productionRunValue.findMany({
+            where: { productionRunId: existing.productionRunId },
+            include: { node: true }
+        });
+
+        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
+        const nodes = await prisma.productionMmlNode.findMany({
+            where: { id: { in: Array.from(nodeIds) } }
+        });
+        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
+
+        let actualWeight = 0;
+        for (const val of allValues) {
+            const n = nodes.find(x => x.id === val.mmlNodeId);
+            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
+            if (shouldSum && val.value !== null) {
+                actualWeight += Number(val.value);
+            }
+        }
+
+        await prisma.productionRun.update({
+            where: { id: existing.productionRunId },
+            data: { actualWeight }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        console.error('updateRunValueEntry error:', error);
+        res.status(500).json({ error: 'Failed to update run value entry' });
+    }
+};
+
+/**
+ * Получить категории MML узлов для группировки по вкладкам
+ */
+export const getMmlCategories = async (req: Request, res: Response) => {
+    try {
+        const mmlId = Number(req.params.mmlId);
+
+        const nodes = await prisma.productionMmlNode.findMany({
+            where: { mmlId },
+            include: {
+                product: {
+                    select: { id: true, code: true, name: true, category: true }
+                }
+            }
+        });
+
+        // Группируем по категории
+        const categories = new Map<string, typeof nodes>();
+        for (const node of nodes) {
+            const cat = node.product.category || 'Без категории';
+            if (!categories.has(cat)) {
+                categories.set(cat, []);
+            }
+            categories.get(cat)!.push(node);
+        }
+
+        const result = Array.from(categories.entries()).map(([category, items]) => ({
+            category,
+            nodes: items,
+            count: items.length
+        }));
+
+        res.json(result);
+    } catch (error) {
+        console.error('getMmlCategories error:', error);
+        res.status(500).json({ error: 'Failed to get MML categories' });
+    }
+};

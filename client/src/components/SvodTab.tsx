@@ -220,7 +220,7 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
         }
     };
 
-    // Обновить свод из источников
+    // Обновить свод из источников (добавить новые, сохранить старые)
     const handleRefresh = async () => {
         if (!svod?.id) {
             await fetchSvod();
@@ -232,8 +232,16 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setSvod(res.data.svod);
-            setEditedLines(new Map());
-            alert('Свод обновлён из источников!');
+            // НЕ сбрасываем editedLines - пользовательские правки сохраняются
+
+            const added = res.data.addedProducts || 0;
+            const updated = res.data.updatedProducts || 0;
+
+            if (added > 0) {
+                alert(`Свод обновлён! Добавлено новых позиций: ${added}, обновлено: ${updated}`);
+            } else {
+                alert(`Свод обновлён! Обновлено позиций: ${updated}. Новых товаров не найдено.`);
+            }
         } catch (err) {
             console.error('Failed to refresh svod:', err);
             alert('Ошибка обновления свода');
@@ -262,31 +270,56 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
         return line[field];
     };
 
-    // Получить сумму закупок по всем поставщикам для товара
-    const getTotalPurchaseForProduct = (productId: number): number => {
-        if (!svod?.supplierValues) return 0;
-        return svod.supplierValues
-            .filter(v => v.productId === productId)
-            .reduce((sum, v) => sum + (Number(v.purchaseQty) || 0), 0);
-    };
+    // ============================================
+    // ОПТИМИЗАЦИЯ: Мемоизированные lookup-maps для O(1) доступа
+    // ============================================
+
+    // Предрассчитанная сумма закупок по товарам (Map<productId, totalQty>)
+    const purchaseTotalsByProduct = useMemo(() => {
+        const map = new Map<number, number>();
+        if (!svod?.supplierValues) return map;
+        for (const v of svod.supplierValues) {
+            const current = map.get(v.productId) || 0;
+            map.set(v.productId, current + (Number(v.purchaseQty) || 0));
+        }
+        return map;
+    }, [svod?.supplierValues]);
+
+    // Предрассчитанные значения по поставщикам (Map<"productId_supplierId", qty>)
+    const supplierValuesLookup = useMemo(() => {
+        const map = new Map<string, number>();
+        if (!svod?.supplierValues) return map;
+        for (const v of svod.supplierValues) {
+            map.set(`${v.productId}_${v.supplierId}`, Number(v.purchaseQty) || 0);
+        }
+        return map;
+    }, [svod?.supplierValues]);
+
+    // Получить сумму закупок по всем поставщикам для товара — O(1)
+    const getTotalPurchaseForProduct = useCallback((productId: number): number => {
+        return purchaseTotalsByProduct.get(productId) || 0;
+    }, [purchaseTotalsByProduct]);
 
     // Расчёт "Имеется в наличии" = Остаток на начало + Закупки + Приход с производства
-    const calculateAvailableQty = (line: SvodLine): number => {
+    const calculateAvailableQty = useCallback((line: SvodLine): number => {
         const openingStock = Number(getNumericLineValue(line, 'openingStock')) || 0;
         const productionInQty = Number(line.productionInQty) || 0;
-        const totalPurchases = getTotalPurchaseForProduct(line.productId);
+        const totalPurchases = purchaseTotalsByProduct.get(line.productId) || 0;
         return openingStock + totalPurchases + productionInQty;
-    };
+    }, [purchaseTotalsByProduct, editedLines]);
 
     // Расчёт "Факт (− отходы)" = Имеется в наличии × Коэффициент
-    const calculateFactMinusWaste = (line: SvodLine): number => {
-        const availableQty = calculateAvailableQty(line);
+    const calculateFactMinusWaste = useCallback((line: SvodLine): number => {
+        const openingStock = Number(getNumericLineValue(line, 'openingStock')) || 0;
+        const productionInQty = Number(line.productionInQty) || 0;
+        const totalPurchases = purchaseTotalsByProduct.get(line.productId) || 0;
+        const availableQty = openingStock + totalPurchases + productionInQty;
         const coefficient = Number(line.coefficient) || 1;
         return availableQty * coefficient;
-    };
+    }, [purchaseTotalsByProduct, editedLines]);
 
     // Переключение категории (для группировки в режиме "СВОД")
-    const toggleCategory = (category: string) => {
+    const toggleCategory = useCallback((category: string) => {
         setExpandedCategories(prev => {
             const newSet = new Set(prev);
             if (newSet.has(category)) {
@@ -296,13 +329,12 @@ export default function SvodTab({ selectedDate }: SvodTabProps) {
             }
             return newSet;
         });
-    };
+    }, []);
 
-    // Получение значения закупки по поставщику для товара
-    const getSupplierValue = (productId: number, supplierId: number) => {
-        const value = svod?.supplierValues.find(v => v.productId === productId && v.supplierId === supplierId);
-        return value?.purchaseQty || 0;
-    };
+    // Получение значения закупки по поставщику для товара — O(1)
+    const getSupplierValue = useCallback((productId: number, supplierId: number): number => {
+        return supplierValuesLookup.get(`${productId}_${supplierId}`) || 0;
+    }, [supplierValuesLookup]);
 
     // ============================================
     // ФУНКЦИИ РАСПРЕДЕЛЕНИЯ ВЕСА

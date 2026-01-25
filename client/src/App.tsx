@@ -27,6 +27,7 @@ import AssemblyJournalPage from './pages/AssemblyJournalPage';
 import ExpeditionPage from './pages/ExpeditionPage';
 import ExpeditionInvoicePage from './pages/ExpeditionInvoicePage';
 import ProductionV2Page from './pages/ProductionV2Page';
+import ProductionV3Page from './pages/ProductionV3Page';
 import ProductionJournalPage from './pages/ProductionJournalPage';
 import ProductionStaffPage from './pages/ProductionStaffPage';
 import PurchasePricePage from './pages/PurchasePricePage';
@@ -115,6 +116,7 @@ function App() {
             <Route path="/expedition/:id/invoice" element={<ProtectedRoute><ExpeditionInvoicePage /></ProtectedRoute>} />
             {/* Production routes */}
             <Route path="/production" element={<ProtectedRoute><ProductionV2Page /></ProtectedRoute>} />
+            <Route path="/production-v3" element={<ProtectedRoute><ProductionV3Page /></ProtectedRoute>} />
             <Route path="/production/staff" element={<ProtectedRoute><ProductionStaffPage /></ProtectedRoute>} />
             <Route path="/production/module" element={<ProtectedRoute><ProductionModulePage /></ProtectedRoute>} />
             <Route path="/journals/production" element={<ProtectedRoute><ProductionJournalPage /></ProtectedRoute>} />

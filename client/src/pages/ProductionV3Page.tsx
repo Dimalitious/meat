@@ -1,0 +1,1174 @@
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+import { API_URL } from '../config/api';
+import { Button } from '../components/ui/Button';
+import { useAuth } from '../context/AuthContext';
+import { formatNumber } from '../utils/formatters';
+import {
+    Search, Plus, Save, Check, Edit2, X, User, Calendar,
+    Package, AlertCircle, FolderTree, Download, BarChart3
+} from 'lucide-react';
+
+
+// ============================================
+// ИНТЕРФЕЙСЫ
+// ============================================
+
+interface Product {
+    id: number;
+    code: string;
+    name: string;
+    category: string | null;
+}
+
+interface MmlNode {
+    id: number;
+    mmlId: number;
+    parentNodeId: number | null;
+    productId: number;
+    sortOrder: number;
+    product: Product;
+    children: MmlNode[];
+}
+
+interface Mml {
+    id: number;
+    productId: number;
+    product: Product;
+    creator: { id: number; name: string };
+    isLocked: boolean;
+    createdAt: string;
+    rootNodes: MmlNode[];
+}
+
+interface RunValue {
+    id: number;
+    mmlNodeId: number;
+    value: number | null;
+    staffId?: number | null;
+    recordedAt?: string;
+    staff?: { id: number; fullName: string } | null;
+    node?: MmlNode;
+}
+
+interface ProductionRun {
+    id: number;
+    productId: number;
+    mmlId: number;
+    userId: number;
+    isLocked: boolean;
+    createdAt: string;
+    productionDate: string;
+    plannedWeight: number | null;
+    actualWeight: number | null;
+    isHidden: boolean;
+    sourceType: string;
+    product: Product;
+    mml: Mml;
+    user: { id: number; name: string };
+    values: RunValue[];
+}
+
+interface CategoryGroup {
+    category: string;
+    nodes: MmlNode[];
+    count: number;
+}
+
+interface StaffInfo {
+    id: number | null;
+    fullName: string;
+    userId: number;
+}
+
+interface PurchaseItem {
+    purchaseItemId: number;
+    purchaseId: number;
+    purchaseDate: string;
+    productId: number;
+    productCode: string;
+    productName: string;
+    category: string | null;
+    qty: number;
+    supplierName: string;
+}
+
+interface OpeningBalanceItem {
+    productId: number;
+    productCode: string;
+    productName: string;
+    category: string | null;
+    openingBalance: number;
+    sourceDate: string;
+}
+
+export default function ProductionV3Page() {
+    useAuth();
+    const token = localStorage.getItem('token');
+
+    // Состояния
+    const [products, setProducts] = useState<Product[]>([]);
+    const [runs, setRuns] = useState<ProductionRun[]>([]);
+    const [selectedRun, setSelectedRun] = useState<ProductionRun | null>(null);
+    const [runValues, setRunValues] = useState<Map<number, RunValue[]>>(new Map());
+    const [categories, setCategories] = useState<CategoryGroup[]>([]);
+    const [activeCategory, setActiveCategory] = useState<string | null>(null);
+    const [currentStaff, setCurrentStaff] = useState<StaffInfo | null>(null);
+
+    // Фильтры
+    const [dateFrom, setDateFrom] = useState<string>('');
+    const [dateTo, setDateTo] = useState<string>('');
+    const [productSearch, setProductSearch] = useState('');
+    const [listLoaded, setListLoaded] = useState(false);
+
+    // Вкладки левой панели: 'runs' | 'purchases' | 'balances'
+    const [activeTab, setActiveTab] = useState<'runs' | 'purchases' | 'balances'>('runs');
+
+    // Модальные окна
+    const [showProductModal, setShowProductModal] = useState(false);
+    const [showCategoryModal, setShowCategoryModal] = useState(false);
+    const [showAddValueModal, setShowAddValueModal] = useState(false);
+    const [modalSearch, setModalSearch] = useState('');
+    const [newValueAmount, setNewValueAmount] = useState('');
+    const [selectedNodeForValue, setSelectedNodeForValue] = useState<MmlNode | null>(null);
+    const [editingValueId, setEditingValueId] = useState<number | null>(null);
+
+    // Редактируемые поля
+    const [editPlannedWeight, setEditPlannedWeight] = useState('');
+    const [editProductionDate, setEditProductionDate] = useState('');
+
+    // UI
+    const [loading, setLoading] = useState(false);
+    const [warning, setWarning] = useState<string | null>(null);
+
+    // Данные Закуп/Остатки
+    const [purchaseItems, setPurchaseItems] = useState<PurchaseItem[]>([]);
+    const [balanceItems, setBalanceItems] = useState<OpeningBalanceItem[]>([]);
+    const [selectedPurchaseItems, setSelectedPurchaseItems] = useState<Set<number>>(new Set());
+    const [selectedBalanceItems, setSelectedBalanceItems] = useState<Set<number>>(new Set());
+    const [purchaseLoading, setPurchaseLoading] = useState(false);
+    const [balanceLoading, setBalanceLoading] = useState(false);
+
+    // Выбранная позиция для детального просмотра
+    const [selectedPurchase, setSelectedPurchase] = useState<PurchaseItem | null>(null);
+    const [selectedBalance, setSelectedBalance] = useState<OpeningBalanceItem | null>(null);
+
+    // MML структура для закупки/остатка
+    const [purchaseMmlCategories, setPurchaseMmlCategories] = useState<CategoryGroup[]>([]);
+    const [purchaseMmlActiveCategory, setPurchaseMmlActiveCategory] = useState<string | null>(null);
+    const [purchaseMmlLoading, setPurchaseMmlLoading] = useState(false);
+
+    // ============================================
+    // ЗАГРУЗКА ДАННЫХ
+    // ============================================
+
+    useEffect(() => {
+        fetchProducts();
+        fetchCurrentStaff();
+        // Устанавливаем даты по умолчанию на сегодня
+        const today = new Date().toISOString().slice(0, 10);
+        if (!dateFrom) setDateFrom(today);
+        if (!dateTo) setDateTo(today);
+    }, []);
+
+    // Автозагрузка списка при изменении дат
+    useEffect(() => {
+        if (dateFrom && dateTo) {
+            const timer = setTimeout(() => {
+                // Загружаем в зависимости от активной вкладки
+                if (activeTab === 'runs') {
+                    fetchRunsAuto();
+                } else if (activeTab === 'purchases') {
+                    loadPurchaseItems();
+                } else if (activeTab === 'balances') {
+                    loadBalanceItems();
+                }
+            }, 500); // debounce 500ms
+            return () => clearTimeout(timer);
+        }
+    }, [dateFrom, dateTo, activeTab]);
+
+    const fetchProducts = async () => {
+        try {
+            const res = await axios.get(`${API_URL}/api/products`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setProducts(res.data.filter((p: any) => p.status === 'active'));
+        } catch (err) {
+            console.error('Failed to fetch products:', err);
+        }
+    };
+
+    const fetchCurrentStaff = async () => {
+        try {
+            const res = await axios.get(`${API_URL}/api/production-v2/staff/me`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setCurrentStaff(res.data);
+        } catch (err) {
+            console.error('Failed to fetch current staff:', err);
+        }
+    };
+
+    // Автоматическая загрузка (без предупреждений)
+    const fetchRunsAuto = async () => {
+        if (!dateFrom || !dateTo) return;
+        setLoading(true);
+        try {
+            const params = new URLSearchParams();
+            params.append('dateFrom', dateFrom);
+            params.append('dateTo', dateTo);
+
+            const res = await axios.get(`${API_URL}/api/production-v2/runs?${params.toString()}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setRuns(res.data);
+            setListLoaded(true);
+        } catch (err) {
+            console.error('Failed to fetch runs:', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const loadRunDetails = async (runId: number) => {
+        try {
+            const res = await axios.get(`${API_URL}/api/production-v2/runs/${runId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const run = res.data as ProductionRun;
+            setSelectedRun(run);
+
+            // Загружаем значения с информацией о сотрудниках
+            const valuesRes = await axios.get(`${API_URL}/api/production-v2/runs/${runId}/values-staff`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const grouped = valuesRes.data.grouped as Record<number, RunValue[]>;
+            setRunValues(new Map(Object.entries(grouped).map(([k, v]) => [Number(k), v])));
+
+            // Загружаем категории MML
+            if (run.mmlId) {
+                const catRes = await axios.get(`${API_URL}/api/production-v2/mml/${run.mmlId}/categories`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                setCategories(catRes.data);
+                if (catRes.data.length > 0) {
+                    setActiveCategory(catRes.data[0].category);
+                }
+            }
+
+            setEditPlannedWeight(run.plannedWeight !== null ? String(run.plannedWeight) : '');
+            setEditProductionDate(run.productionDate ? run.productionDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
+        } catch (err) {
+            console.error('Failed to load run details:', err);
+        }
+    };
+
+    // Загрузка позиций закупок
+    const loadPurchaseItems = async () => {
+        if (!dateFrom || !dateTo) {
+            setWarning('Сначала укажите период');
+            setTimeout(() => setWarning(null), 3000);
+            return;
+        }
+        setPurchaseLoading(true);
+        try {
+            const res = await axios.get(`${API_URL}/api/production-v2/purchases`, {
+                params: { dateFrom, dateTo },
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setPurchaseItems(res.data.items || []);
+            setSelectedPurchaseItems(new Set());
+        } catch (err) {
+            console.error('Failed to load purchases:', err);
+        } finally {
+            setPurchaseLoading(false);
+        }
+    };
+
+    // Загрузка остатков на начало
+    const loadBalanceItems = async () => {
+        if (!dateFrom) {
+            setWarning('Укажите дату начала периода');
+            setTimeout(() => setWarning(null), 3000);
+            return;
+        }
+        setBalanceLoading(true);
+        try {
+            const res = await axios.get(`${API_URL}/api/production-v2/opening-balances`, {
+                params: { date: dateFrom },
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setBalanceItems(res.data.items || []);
+            setSelectedBalanceItems(new Set());
+        } catch (err) {
+            console.error('Failed to load balances:', err);
+        } finally {
+            setBalanceLoading(false);
+        }
+    };
+
+    // Загрузка MML структуры по productId (для закупки/остатка)
+    const loadMmlByProductId = async (productId: number) => {
+        setPurchaseMmlLoading(true);
+        setPurchaseMmlCategories([]);
+        setPurchaseMmlActiveCategory(null);
+        try {
+            // Сначала находим MML для этого продукта
+            const mmlRes = await axios.get(`${API_URL}/api/mmls`, {
+                params: { productId },
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const mmls = mmlRes.data;
+            if (mmls && mmls.length > 0) {
+                const mmlId = mmls[0].id;
+                // Загружаем категории MML
+                const catRes = await axios.get(`${API_URL}/api/production-v2/mml/${mmlId}/categories`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                setPurchaseMmlCategories(catRes.data);
+                if (catRes.data.length > 0) {
+                    setPurchaseMmlActiveCategory(catRes.data[0].category);
+                }
+            }
+        } catch (err) {
+            console.error('Failed to load MML by productId:', err);
+        } finally {
+            setPurchaseMmlLoading(false);
+        }
+    };
+
+    // ============================================
+    // ДЕЙСТВИЯ
+    // ============================================
+
+    const createRun = async (productId: number) => {
+        try {
+            const res = await axios.post(`${API_URL}/api/production-v2/runs`,
+                { productId },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const newRun = res.data.run || res.data;
+            setRuns([newRun, ...runs]);
+            await loadRunDetails(newRun.id);
+            setShowProductModal(false);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка создания');
+        }
+    };
+
+    const saveRunValues = async () => {
+        if (!selectedRun) return;
+        try {
+            const allValues: { mmlNodeId: number; value: number }[] = [];
+            runValues.forEach((entries, nodeId) => {
+                const total = entries.reduce((sum, e) => sum + (Number(e.value) || 0), 0);
+                allValues.push({ mmlNodeId: nodeId, value: total });
+            });
+
+            await axios.put(`${API_URL}/api/production-v2/runs/${selectedRun.id}/values`,
+                { values: allValues, productionDate: editProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setWarning('Сохранено!');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err) {
+            console.error('Failed to save:', err);
+            alert('Ошибка сохранения');
+        }
+    };
+
+    const addValueEntry = async () => {
+        if (!selectedRun || !selectedNodeForValue || !newValueAmount) return;
+        try {
+            await axios.post(`${API_URL}/api/production-v2/runs/${selectedRun.id}/values`,
+                { mmlNodeId: selectedNodeForValue.id, value: Number(newValueAmount) },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await loadRunDetails(selectedRun.id);
+            setShowAddValueModal(false);
+            setNewValueAmount('');
+            setSelectedNodeForValue(null);
+        } catch (err) {
+            console.error('Failed to add value:', err);
+        }
+    };
+
+    const updateValueEntry = async () => {
+        if (!editingValueId || !newValueAmount) return;
+        try {
+            await axios.patch(`${API_URL}/api/production-v2/runs/values/${editingValueId}`,
+                { value: Number(newValueAmount) },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (selectedRun) await loadRunDetails(selectedRun.id);
+            setShowAddValueModal(false);
+            setNewValueAmount('');
+            setEditingValueId(null);
+        } catch (err) {
+            console.error('Failed to update value:', err);
+        }
+    };
+
+    const toggleRunLock = async (runId: number) => {
+        try {
+            const res = await axios.patch(`${API_URL}/api/production-v2/runs/${runId}/lock`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setSelectedRun(res.data);
+            setRuns(runs.map(r => r.id === runId ? res.data : r));
+        } catch (err) {
+            console.error('Failed to toggle lock:', err);
+        }
+    };
+
+    // Фильтрация
+    const filteredRuns = runs.filter(r =>
+        r.product.name.toLowerCase().includes(productSearch.toLowerCase()) ||
+        r.product.code.toLowerCase().includes(productSearch.toLowerCase())
+    );
+
+    const filteredModalProducts = products.filter(p =>
+        p.name.toLowerCase().includes(modalSearch.toLowerCase()) ||
+        p.code.toLowerCase().includes(modalSearch.toLowerCase())
+    );
+
+    // Расчёт фактического веса
+    const calculateActualWeight = (): number => {
+        let total = 0;
+        runValues.forEach((entries) => {
+            entries.forEach(e => {
+                if (e.value !== null) total += Number(e.value);
+            });
+        });
+        return total;
+    };
+
+    // Получить узлы активной категории
+    const activeCategoryNodes = categories.find(c => c.category === activeCategory)?.nodes || [];
+
+    // ============================================
+    // РЕНДЕР
+    // ============================================
+
+    return (
+        <div className="flex flex-col h-[calc(100vh-120px)]">
+            {/* Warning Toast */}
+            {warning && (
+                <div className="fixed top-4 right-4 bg-yellow-500/90 text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 z-50 backdrop-blur">
+                    <AlertCircle size={20} />
+                    {warning}
+                </div>
+            )}
+
+            {/* Header - тёмный стиль */}
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-xl shadow-xl p-4 mb-4 border border-slate-700">
+                <h1 className="text-xl font-bold flex items-center gap-2 text-white">
+                    <FolderTree className="text-indigo-400" />
+                    <span className="bg-gradient-to-r from-indigo-400 to-purple-400 text-transparent bg-clip-text">Производство v3</span>
+                </h1>
+            </div>
+
+            <div className="flex gap-4 flex-1 overflow-hidden">
+                {/* Левая панель - тёмная */}
+                <div className="w-96 bg-gradient-to-b from-slate-900 to-slate-800 rounded-xl shadow-xl flex flex-col border border-slate-700">
+                    <div className="p-4 border-b">
+                        <h2 className="font-semibold mb-2 flex items-center justify-between">
+                            Журнал выработки
+                            {loading && <span className="text-xs text-gray-400 animate-pulse">загрузка...</span>}
+                        </h2>
+
+                        {/* Фильтры дат */}
+                        <div className="flex gap-2 mb-3">
+                            <div className="flex-1">
+                                <label className="text-xs text-gray-500 block mb-1">Дата С</label>
+                                <input type="date" className="w-full border rounded px-2 py-1 text-sm"
+                                    value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+                            </div>
+                            <div className="flex-1">
+                                <label className="text-xs text-gray-500 block mb-1">Дата По</label>
+                                <input type="date" className="w-full border rounded px-2 py-1 text-sm"
+                                    value={dateTo} onChange={e => setDateTo(e.target.value)} />
+                            </div>
+                        </div>
+
+                        {/* Счётчик найденных */}
+                        {listLoaded && (
+                            <div className="text-xs text-gray-500 mb-2">
+                                Найдено: <span className="font-medium text-gray-700">{runs.length}</span> выработок
+                            </div>
+                        )}
+
+                        {/* Поиск */}
+                        <div className="relative mb-3">
+                            <Search className="absolute left-2 top-2.5 text-gray-400" size={16} />
+                            <input type="text" placeholder="Поиск..." className="w-full border rounded pl-8 pr-3 py-2 text-sm"
+                                value={productSearch} onChange={e => setProductSearch(e.target.value)} />
+                        </div>
+
+                        {/* Вкладки */}
+                        <div className="flex gap-1 mb-3">
+                            <button
+                                onClick={() => setActiveTab('runs')}
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'runs' ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
+                                <Plus size={14} className="inline mr-1" /> Новая
+                            </button>
+                            <button
+                                onClick={() => { setActiveTab('purchases'); loadPurchaseItems(); }}
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'purchases' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}>
+                                <Download size={14} className="inline mr-1" /> Закуп
+                            </button>
+                            <button
+                                onClick={() => { setActiveTab('balances'); loadBalanceItems(); }}
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'balances' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
+                                <BarChart3 size={14} className="inline mr-1" /> Остатки
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Список — зависит от activeTab */}
+                    <div className="flex-1 overflow-auto">
+                        {activeTab === 'runs' && (
+                            <>
+                                {loading ? (
+                                    <div className="text-center text-gray-400 py-8">
+                                        <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                        Загрузка...
+                                    </div>
+                                ) : !listLoaded ? (
+                                    <div className="text-center text-gray-400 py-8">
+                                        Укажите даты для загрузки
+                                    </div>
+                                ) : filteredRuns.length === 0 ? (
+                                    <div className="text-center text-gray-400 py-8">Нет выработок за этот период</div>
+                                ) : (
+                                    <>
+                                        {/* Кнопка создания */}
+                                        <div className="p-2 border-b">
+                                            <Button onClick={() => { setModalSearch(''); setShowProductModal(true); }} className="w-full">
+                                                <Plus size={16} className="mr-1" /> Создать выработку
+                                            </Button>
+                                        </div>
+                                        {filteredRuns.map(run => (
+                                            <div key={run.id}
+                                                onClick={() => loadRunDetails(run.id)}
+                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedRun?.id === run.id ? 'bg-indigo-50 border-l-4 border-indigo-500' : 'hover:bg-gray-50'}`}>
+                                                {run.sourceType === 'PURCHASE' && <span className="text-xs bg-green-100 text-green-700 px-1 rounded">ЗАКУП</span>}
+                                                {run.sourceType === 'OPENING_BALANCE' && <span className="text-xs bg-blue-100 text-blue-700 px-1 rounded">ОСТАТОК</span>}
+                                                <Package size={14} className="text-indigo-600" />
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-sm truncate">{run.product.name}</div>
+                                                    <div className="text-xs text-gray-500">{run.isLocked ? '🔒' : '✏️'} {run.user?.name}</div>
+                                                </div>
+                                                <div className="text-sm text-gray-600">{formatNumber(run.actualWeight, 2)}</div>
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
+                            </>
+                        )}
+
+                        {activeTab === 'purchases' && (
+                            <>
+                                {purchaseLoading ? (
+                                    <div className="text-center text-gray-400 py-8">
+                                        <div className="animate-spin w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                        Загрузка закупок...
+                                    </div>
+                                ) : purchaseItems.length === 0 ? (
+                                    <div className="text-center text-gray-400 py-8">Нет закупок за этот период</div>
+                                ) : (
+                                    <>
+                                        <div className="p-2 border-b bg-green-50 text-sm text-green-800">
+                                            Найдено: <span className="font-semibold">{purchaseItems.length}</span> закупок
+                                        </div>
+                                        {purchaseItems.map(item => (
+                                            <div key={item.purchaseItemId}
+                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedPurchase?.purchaseItemId === item.purchaseItemId ? 'bg-green-100 border-l-4 border-green-600' : selectedPurchaseItems.has(item.purchaseItemId) ? 'bg-green-50 border-l-4 border-green-500' : 'hover:bg-gray-50'}`}
+                                                onClick={() => {
+                                                    setSelectedPurchase(item);
+                                                    loadMmlByProductId(item.productId);
+                                                    const newSet = new Set(selectedPurchaseItems);
+                                                    if (newSet.has(item.purchaseItemId)) {
+                                                        newSet.delete(item.purchaseItemId);
+                                                    } else {
+                                                        newSet.add(item.purchaseItemId);
+                                                    }
+                                                    setSelectedPurchaseItems(newSet);
+                                                }}>
+                                                <input type="checkbox" checked={selectedPurchaseItems.has(item.purchaseItemId)} readOnly />
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-sm truncate">{item.productName}</div>
+                                                    <div className="text-xs text-gray-500">{item.supplierName} • {item.category || '—'}</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-sm font-medium text-green-700">{formatNumber(item.qty, 2)}</div>
+                                                    <div className="text-xs text-gray-500">{new Date(item.purchaseDate).toLocaleDateString('ru-RU')}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {selectedPurchaseItems.size > 0 && (
+                                            <div className="p-3 border-t bg-green-50 sticky bottom-0">
+                                                <Button className="w-full bg-green-600 hover:bg-green-700" onClick={() => {
+                                                    setWarning(`Импорт ${selectedPurchaseItems.size} позиций (в разработке)`);
+                                                    setTimeout(() => setWarning(null), 3000);
+                                                }}>
+                                                    Загрузить {selectedPurchaseItems.size} позиций в производство
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </>
+                        )}
+
+                        {activeTab === 'balances' && (
+                            <>
+                                {balanceLoading ? (
+                                    <div className="text-center text-gray-400 py-8">
+                                        <div className="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                        Загрузка остатков...
+                                    </div>
+                                ) : balanceItems.length === 0 ? (
+                                    <div className="text-center text-gray-400 py-8">Нет остатков на эту дату</div>
+                                ) : (
+                                    <>
+                                        <div className="p-2 border-b bg-blue-50 text-sm text-blue-800">
+                                            Найдено: <span className="font-semibold">{balanceItems.length}</span> остатков
+                                        </div>
+                                        {balanceItems.map(item => (
+                                            <div key={item.productId}
+                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedBalance?.productId === item.productId ? 'bg-blue-100 border-l-4 border-blue-600' : selectedBalanceItems.has(item.productId) ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}
+                                                onClick={() => {
+                                                    setSelectedBalance(item);
+                                                    const newSet = new Set(selectedBalanceItems);
+                                                    if (newSet.has(item.productId)) {
+                                                        newSet.delete(item.productId);
+                                                    } else {
+                                                        newSet.add(item.productId);
+                                                    }
+                                                    setSelectedBalanceItems(newSet);
+                                                }}>
+                                                <input type="checkbox" checked={selectedBalanceItems.has(item.productId)} readOnly />
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="font-medium text-sm truncate">{item.productName}</div>
+                                                    <div className="text-xs text-gray-500">{item.category || '—'}</div>
+                                                </div>
+                                                <div className="text-sm font-medium text-blue-700">{formatNumber(item.openingBalance, 2)} кг</div>
+                                            </div>
+                                        ))}
+                                        {selectedBalanceItems.size > 0 && (
+                                            <div className="p-3 border-t bg-blue-50 sticky bottom-0">
+                                                <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={() => {
+                                                    setWarning(`Импорт ${selectedBalanceItems.size} остатков (в разработке)`);
+                                                    setTimeout(() => setWarning(null), 3000);
+                                                }}>
+                                                    Загрузить {selectedBalanceItems.size} остатков в производство
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </div>
+
+                {/* Правая панель */}
+                <div className="flex-1 bg-white rounded-lg shadow flex flex-col overflow-hidden">
+                    {/* Контент для вкладки "Новая" (выработки) */}
+                    {activeTab === 'runs' && !selectedRun && (
+                        <div className="flex-1 flex items-center justify-center text-gray-400">
+                            <div className="text-center">
+                                <Package size={48} className="mx-auto mb-4 text-gray-300" />
+                                <p>Выберите карточку выработки</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Контент для вкладки "Закуп" */}
+                    {activeTab === 'purchases' && (
+                        <div className="flex-1 flex flex-col">
+                            {selectedPurchase ? (
+                                <>
+                                    {/* Шапка закупки */}
+                                    <div className="p-4 border-b bg-gradient-to-r from-green-50 to-green-100 flex justify-between items-center">
+                                        <div>
+                                            <h3 className="font-semibold text-lg text-green-800">{selectedPurchase.productName}</h3>
+                                            <div className="text-sm text-green-700 mt-1 flex items-center gap-4">
+                                                <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(selectedPurchase.purchaseDate).toLocaleDateString('ru-RU')}</span>
+                                                <span className="flex items-center gap-1"><User size={14} /> {selectedPurchase.supplierName}</span>
+                                            </div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-2xl font-bold text-green-800">{formatNumber(selectedPurchase.qty, 2)} кг</div>
+                                            <div className="text-xs text-green-600">Количество закупки</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Вкладки категорий MML */}
+                                    {purchaseMmlLoading ? (
+                                        <div className="p-4 text-center text-gray-400">
+                                            <div className="animate-spin w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                            Загрузка MML структуры...
+                                        </div>
+                                    ) : purchaseMmlCategories.length > 0 ? (
+                                        <>
+                                            <div className="p-4 border-b flex gap-2 overflow-x-auto">
+                                                {purchaseMmlCategories.map(cat => (
+                                                    <button key={cat.category}
+                                                        onClick={() => setPurchaseMmlActiveCategory(cat.category)}
+                                                        className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${purchaseMmlActiveCategory === cat.category ? 'bg-green-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
+                                                        {cat.category}
+                                                    </button>
+                                                ))}
+                                            </div>
+
+                                            {/* Таблица MML позиций */}
+                                            <div className="flex-1 overflow-auto">
+                                                <div className="px-4 py-3 bg-green-50 border-b flex justify-between items-center sticky top-0">
+                                                    <span className="font-semibold text-green-800">Структура MML: {purchaseMmlActiveCategory || 'Выберите категорию'}</span>
+                                                    <Button size="sm" className="bg-green-600 hover:bg-green-700">
+                                                        <Plus size={14} className="mr-1" /> Добавить
+                                                    </Button>
+                                                </div>
+
+                                                {purchaseMmlCategories
+                                                    .filter(cat => cat.category === purchaseMmlActiveCategory)
+                                                    .map(cat => (
+                                                        <table key={cat.category} className="w-full text-sm">
+                                                            <thead className="bg-slate-50 sticky top-12">
+                                                                <tr>
+                                                                    <th className="text-left px-4 py-3 font-semibold text-slate-600">Позиция</th>
+                                                                    <th className="text-right px-4 py-3 font-semibold text-slate-600 w-32">Значение (кг)</th>
+                                                                    <th className="text-center px-4 py-3 font-semibold text-slate-600 w-24">Действие</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                {cat.nodes.map(node => (
+                                                                    <tr key={node.id} className="border-b hover:bg-slate-50">
+                                                                        <td className="px-4 py-3 font-medium">{node.product.name}</td>
+                                                                        <td className="px-4 py-3 text-right text-slate-400">—</td>
+                                                                        <td className="px-4 py-3 text-center">
+                                                                            <button className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors">
+                                                                                <Plus size={18} />
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    ))}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <div className="flex-1 flex items-center justify-center text-gray-400">
+                                            <div className="text-center">
+                                                <Package size={48} className="mx-auto mb-4 text-gray-300" />
+                                                <p>Нет MML структуры для этого товара</p>
+                                                <Button className="mt-4 bg-green-600 hover:bg-green-700" onClick={() => {
+                                                    setWarning(`Создание выработки из закупки ${selectedPurchase.productName} (в разработке)`);
+                                                    setTimeout(() => setWarning(null), 3000);
+                                                }}>
+                                                    <Plus size={16} className="mr-1" /> Создать выработку без MML
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center text-gray-400">
+                                    <div className="text-center">
+                                        <Download size={48} className="mx-auto mb-4 text-green-300" />
+                                        <p>Выберите позицию закупки</p>
+                                        <p className="text-sm mt-1">для просмотра MML структуры</p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Контент для вкладки "Остатки" */}
+                    {activeTab === 'balances' && (
+                        <div className="flex-1 flex flex-col">
+                            {selectedBalance ? (
+                                <>
+                                    <div className="p-4 border-b bg-blue-50">
+                                        <h3 className="font-semibold text-lg text-blue-800">{selectedBalance.productName}</h3>
+                                        <div className="text-sm text-blue-700 mt-1">
+                                            Остаток на {dateFrom}
+                                        </div>
+                                    </div>
+                                    <div className="p-4 space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <div className="text-xs text-gray-500 mb-1">Остаток</div>
+                                                <div className="text-2xl font-bold text-blue-700">{formatNumber(selectedBalance.openingBalance, 3)} кг</div>
+                                            </div>
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <div className="text-xs text-gray-500 mb-1">Категория</div>
+                                                <div className="text-lg font-semibold">{selectedBalance.category || 'Не указана'}</div>
+                                            </div>
+                                        </div>
+                                        <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={() => {
+                                            setWarning(`Создание выработки из остатка ${selectedBalance.productName} (в разработке)`);
+                                            setTimeout(() => setWarning(null), 3000);
+                                        }}>
+                                            <Plus size={16} className="mr-1" /> Создать выработку из этого остатка
+                                        </Button>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="flex-1 flex items-center justify-center text-gray-400">
+                                    <div className="text-center">
+                                        <BarChart3 size={48} className="mx-auto mb-4 text-blue-300" />
+                                        <p>Выберите позицию остатка</p>
+                                        <p className="text-sm mt-1">или отметьте несколько для массового импорта</p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Детали выработки (только для вкладки runs когда выбрана выработка) */}
+                    {activeTab === 'runs' && selectedRun && (
+                        <>
+                            {/* Шапка */}
+                            <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                                <div>
+                                    <h3 className="font-semibold text-lg">{selectedRun.product.name}</h3>
+                                    <div className="text-sm text-gray-500 flex items-center gap-4 mt-1">
+                                        <span className="flex items-center gap-1"><User size={14} /> {selectedRun.user?.name}</span>
+                                        <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(selectedRun.createdAt).toLocaleDateString('ru-RU')}</span>
+                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${selectedRun.isLocked ? 'bg-gray-200' : 'bg-yellow-100 text-yellow-800'}`}>
+                                            {selectedRun.isLocked ? 'Зафиксировано' : 'Редактирование'}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2">
+                                    {!selectedRun.isLocked && (
+                                        <Button variant="outline" size="sm" onClick={saveRunValues}>
+                                            <Save size={14} className="mr-1" /> Сохранить
+                                        </Button>
+                                    )}
+                                    <Button size="sm" onClick={() => toggleRunLock(selectedRun.id)}>
+                                        {selectedRun.isLocked ? <Edit2 size={14} className="mr-1" /> : <Check size={14} className="mr-1" />}
+                                        {selectedRun.isLocked ? 'Редактировать' : 'Зафиксировать'}
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {/* Поля */}
+                            <div className="p-4 border-b bg-white">
+                                <div className="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Дата выработки</label>
+                                        <input type="date" className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
+                                            value={editProductionDate} onChange={e => setEditProductionDate(e.target.value)} disabled={selectedRun.isLocked} />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Плановый вес (кг)</label>
+                                        <input type="number" className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
+                                            value={editPlannedWeight} onChange={e => setEditPlannedWeight(e.target.value)} disabled={selectedRun.isLocked} />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-gray-500 block mb-1">Фактический вес (кг)</label>
+                                        <div className="w-full border rounded px-3 py-2 text-sm bg-gray-50 font-semibold text-indigo-700">
+                                            {formatNumber(calculateActualWeight(), 3)}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Вкладки категорий */}
+                            <div className="p-4 border-b flex gap-2 overflow-x-auto">
+                                {categories.map(cat => {
+                                    // Считаем итого по категории
+                                    const catTotal = cat.nodes.reduce((sum, node) => {
+                                        const entries = runValues.get(node.id) || [];
+                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                    }, 0);
+                                    return (
+                                        <button key={cat.category}
+                                            onClick={() => setActiveCategory(cat.category)}
+                                            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex flex-col items-center gap-1 ${activeCategory === cat.category ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
+                                            <span>{cat.category}</span>
+                                            <span className={`text-xs ${activeCategory === cat.category ? 'text-indigo-100' : 'text-gray-500'}`}>
+                                                {formatNumber(catTotal, 1)} кг
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Таблица MML позиций - inline */}
+                            <div className="flex-1 overflow-auto">
+                                {/* Заголовок таблицы */}
+                                <div className="px-4 py-3 bg-slate-100 border-b flex justify-between items-center sticky top-0">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-semibold text-slate-700">Структура MML: {activeCategory || 'Выберите категорию'}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm text-slate-500">Всего: </span>
+                                        <span className="font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 2)} кг</span>
+                                        {!selectedRun.isLocked && (
+                                            <Button size="sm" className="bg-green-600 hover:bg-green-700 ml-2"
+                                                onClick={() => { setSelectedNodeForValue(activeCategoryNodes[0] || null); setShowAddValueModal(true); }}>
+                                                <Plus size={14} className="mr-1" /> Добавить
+                                            </Button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Таблица позиций */}
+                                {activeCategoryNodes.length > 0 && (
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-slate-50 sticky top-12">
+                                            <tr>
+                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Позиция</th>
+                                                <th className="text-right px-4 py-3 font-semibold text-slate-600 w-32">Значение (кг)</th>
+                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Сотрудник</th>
+                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Добавлено</th>
+                                                <th className="text-center px-4 py-3 font-semibold text-slate-600 w-24">Действие</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {activeCategoryNodes.map(node => {
+                                                const entries = runValues.get(node.id) || [];
+                                                if (entries.length === 0) {
+                                                    return (
+                                                        <tr key={node.id} className="border-b hover:bg-slate-50">
+                                                            <td className="px-4 py-3 font-medium">{node.product.name}</td>
+                                                            <td className="px-4 py-3 text-right text-slate-400">—</td>
+                                                            <td className="px-4 py-3 text-slate-400">—</td>
+                                                            <td className="px-4 py-3 text-slate-400">—</td>
+                                                            <td className="px-4 py-3 text-center">
+                                                                <button onClick={() => { setSelectedNodeForValue(node); setShowAddValueModal(true); }}
+                                                                    className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors"
+                                                                    disabled={selectedRun?.isLocked}>
+                                                                    <Plus size={18} />
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                }
+                                                return entries.map((entry, idx) => (
+                                                    <tr key={entry.id} className="border-b hover:bg-slate-50">
+                                                        {idx === 0 && <td className="px-4 py-3 font-medium" rowSpan={entries.length}>{node.product.name}</td>}
+                                                        <td className="px-4 py-3 text-right font-semibold text-indigo-700 tabular-nums">{formatNumber(Number(entry.value), 3)}</td>
+                                                        <td className="px-4 py-3">{entry.staff?.fullName || '—'}</td>
+                                                        <td className="px-4 py-3 text-xs text-slate-500">
+                                                            {entry.recordedAt ? new Date(entry.recordedAt).toLocaleString('ru-RU') : '—'}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-center">
+                                                            <div className="flex justify-center gap-1">
+                                                                <button onClick={() => { setEditingValueId(entry.id); setNewValueAmount(String(entry.value || '')); setShowAddValueModal(true); }}
+                                                                    className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
+                                                                    disabled={selectedRun?.isLocked}>
+                                                                    <Edit2 size={16} />
+                                                                </button>
+                                                                {idx === entries.length - 1 && (
+                                                                    <button onClick={() => { setSelectedNodeForValue(node); setShowAddValueModal(true); }}
+                                                                        className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors"
+                                                                        disabled={selectedRun?.isLocked}>
+                                                                        <Plus size={16} />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ));
+                                            })}
+                                        </tbody>
+                                        {/* Итоговая строка */}
+                                        <tfoot>
+                                            <tr className="bg-indigo-100 font-semibold">
+                                                <td className="px-4 py-3 text-indigo-900">ИТОГО</td>
+                                                <td className="px-4 py-3 text-right text-indigo-800 text-base tabular-nums">
+                                                    {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                                        const entries = runValues.get(node.id) || [];
+                                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                    }, 0), 3)} кг
+                                                </td>
+                                                <td colSpan={3}></td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                )}
+
+                                {activeCategoryNodes.length === 0 && (
+                                    <div className="flex-1 flex items-center justify-center py-12 text-slate-400">
+                                        <div className="text-center">
+                                            <Package size={48} className="mx-auto mb-4 text-slate-300" />
+                                            <p>Нажмите на вкладку для редактирования позиций</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Модальное окно выбора товара */}
+            {showProductModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[500px] max-h-[80vh] flex flex-col">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h3 className="text-lg font-semibold">Создать выработку</h3>
+                            <button onClick={() => setShowProductModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                        </div>
+                        <div className="p-4 border-b">
+                            <div className="relative">
+                                <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
+                                <input type="text" placeholder="Поиск товара..." className="w-full border rounded pl-10 pr-4 py-2"
+                                    value={modalSearch} onChange={e => setModalSearch(e.target.value)} autoFocus />
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-auto p-2">
+                            {filteredModalProducts.map(product => (
+                                <div key={product.id} onClick={() => createRun(product.id)}
+                                    className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 rounded cursor-pointer">
+                                    <Package size={16} className="text-gray-400" />
+                                    <div className="flex-1">
+                                        <div className="font-medium text-sm">{product.name}</div>
+                                        <div className="text-xs text-gray-500">{product.code}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Модальное окно категории MML */}
+            {showCategoryModal && activeCategory && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[700px] max-h-[85vh] flex flex-col">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h3 className="text-lg font-semibold">Структура MML: {activeCategory}</h3>
+                            <button onClick={() => setShowCategoryModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                        </div>
+                        <div className="p-4 border-b">
+                            <Button size="sm" onClick={() => { setShowAddValueModal(true); setSelectedNodeForValue(activeCategoryNodes[0] || null); }}
+                                className="bg-green-600 hover:bg-green-700" disabled={selectedRun?.isLocked}>
+                                <Plus size={14} className="mr-1" /> Добавить строку
+                            </Button>
+                        </div>
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full text-sm">
+                                <thead className="bg-gray-50 sticky top-0">
+                                    <tr>
+                                        <th className="text-left px-4 py-2 font-medium">Позиция</th>
+                                        <th className="text-right px-4 py-2 font-medium">Значение (кг)</th>
+                                        <th className="text-left px-4 py-2 font-medium">Сотрудник</th>
+                                        <th className="text-left px-4 py-2 font-medium">Дата/Время</th>
+                                        <th className="px-4 py-2 font-medium">Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {activeCategoryNodes.map(node => {
+                                        const entries = runValues.get(node.id) || [];
+                                        if (entries.length === 0) {
+                                            return (
+                                                <tr key={node.id} className="border-b hover:bg-gray-50">
+                                                    <td className="px-4 py-2">{node.product.name}</td>
+                                                    <td className="px-4 py-2 text-right text-gray-400">—</td>
+                                                    <td className="px-4 py-2 text-gray-400">—</td>
+                                                    <td className="px-4 py-2 text-gray-400">—</td>
+                                                    <td className="px-4 py-2">
+                                                        <button onClick={() => { setSelectedNodeForValue(node); setShowAddValueModal(true); }}
+                                                            className="text-green-600 hover:text-green-800" disabled={selectedRun?.isLocked}>
+                                                            <Plus size={16} />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        }
+                                        return entries.map((entry, idx) => (
+                                            <tr key={entry.id} className="border-b hover:bg-gray-50">
+                                                {idx === 0 && <td className="px-4 py-2" rowSpan={entries.length}>{node.product.name}</td>}
+                                                <td className="px-4 py-2 text-right font-medium">{formatNumber(Number(entry.value), 3)}</td>
+                                                <td className="px-4 py-2">{entry.staff?.fullName || '—'}</td>
+                                                <td className="px-4 py-2 text-xs text-gray-500">
+                                                    {entry.recordedAt ? new Date(entry.recordedAt).toLocaleString('ru-RU') : '—'}
+                                                </td>
+                                                <td className="px-4 py-2">
+                                                    <button onClick={() => { setEditingValueId(entry.id); setNewValueAmount(String(entry.value || '')); setShowAddValueModal(true); }}
+                                                        className="text-blue-600 hover:text-blue-800" disabled={selectedRun?.isLocked}>
+                                                        <Edit2 size={14} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ));
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="p-4 border-t flex justify-between items-center">
+                            <div className="font-semibold">
+                                Итого: {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                    const entries = runValues.get(node.id) || [];
+                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                }, 0), 3)} кг
+                            </div>
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setShowCategoryModal(false)}>Закрыть</Button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Модальное окно добавления/редактирования записи */}
+            {showAddValueModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
+                    <div className="bg-white rounded-lg shadow-xl w-[400px]">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h3 className="text-lg font-semibold">{editingValueId ? 'Редактировать запись' : 'Добавить запись'}</h3>
+                            <button onClick={() => { setShowAddValueModal(false); setEditingValueId(null); setNewValueAmount(''); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                        </div>
+                        <div className="p-4 space-y-4">
+                            <div>
+                                <label className="text-sm text-gray-500 block mb-1">Сотрудник</label>
+                                <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={currentStaff?.fullName || ''} disabled />
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm text-gray-500 block mb-1">Дата</label>
+                                    <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleDateString('ru-RU')} disabled />
+                                </div>
+                                <div>
+                                    <label className="text-sm text-gray-500 block mb-1">Время</label>
+                                    <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} disabled />
+                                </div>
+                            </div>
+                            {!editingValueId && (
+                                <div>
+                                    <label className="text-sm text-gray-500 block mb-1">Позиция</label>
+                                    <select className="w-full border rounded px-3 py-2" value={selectedNodeForValue?.id || ''}
+                                        onChange={e => setSelectedNodeForValue(activeCategoryNodes.find(n => n.id === Number(e.target.value)) || null)}>
+                                        {activeCategoryNodes.map(node => (
+                                            <option key={node.id} value={node.id}>{node.product.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            <div>
+                                <label className="text-sm text-gray-500 block mb-1">Значение (кг)</label>
+                                <input type="number" className="w-full border rounded px-3 py-2 text-lg font-medium" placeholder="0.000" step="0.001"
+                                    value={newValueAmount} onChange={e => setNewValueAmount(e.target.value)} autoFocus />
+                            </div>
+                        </div>
+                        <div className="p-4 border-t flex justify-end gap-2">
+                            <Button variant="outline" onClick={() => { setShowAddValueModal(false); setEditingValueId(null); setNewValueAmount(''); }}>Отмена</Button>
+                            <Button onClick={editingValueId ? updateValueEntry : addValueEntry} className="bg-green-600 hover:bg-green-700">
+                                {editingValueId ? 'Сохранить' : 'Добавить'}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}

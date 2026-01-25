@@ -20,7 +20,15 @@ import {
     cloneProductionRun,
     deleteProductionRun,
     hideProductionRuns,
-    unhideProductionRuns
+    unhideProductionRuns,
+    // Extended functionality
+    loadPurchasesToProduction,
+    loadOpeningBalances,
+    getCurrentProductionStaff,
+    getRunValuesWithStaff,
+    addRunValueEntry,
+    updateRunValueEntry,
+    getMmlCategories
 } from '../controllers/production-v2.controller';
 
 const router = Router();
@@ -40,6 +48,9 @@ router.get('/mml/:id', getMmlById);
 
 // MML по productId
 router.get('/mml/product/:productId', getMmlByProductId);
+
+// Категории MML (группировка по категориям продуктов)
+router.get('/mml/:mmlId/categories', getMmlCategories);
 
 // Создать MML
 router.post('/mml', createMml);
@@ -69,11 +80,20 @@ router.get('/runs', getProductionRuns);
 // Выработка по ID
 router.get('/runs/:id', getProductionRunById);
 
+// Значения выработки с информацией о сотрудниках
+router.get('/runs/:id/values-staff', getRunValuesWithStaff);
+
 // Создать выработку
 router.post('/runs', createProductionRun);
 
 // Сохранить значения выработки
 router.put('/runs/:id/values', saveProductionRunValues);
+
+// Добавить запись значения (с трекингом сотрудника)
+router.post('/runs/:id/values', addRunValueEntry);
+
+// Обновить запись значения
+router.patch('/runs/values/:valueId', updateRunValueEntry);
 
 // Зафиксировать/разблокировать
 router.patch('/runs/:id/lock', toggleProductionRunLock);
@@ -89,6 +109,19 @@ router.post('/runs/hide', hideProductionRuns);
 
 // Отмена массового скрытия выработок
 router.post('/runs/unhide', unhideProductionRuns);
+
+// ============================================
+// Расширенный функционал
+// ============================================
+
+// Загрузить позиции закупок в производство
+router.get('/purchases', loadPurchasesToProduction);
+
+// Загрузить остатки на начало
+router.get('/opening-balances', loadOpeningBalances);
+
+// Получить производственного сотрудника для текущего пользователя
+router.get('/staff/me', getCurrentProductionStaff);
 
 export default router;
 

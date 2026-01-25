@@ -14,20 +14,24 @@ const prisma = new PrismaClient();
  * Возвращает:
  * - Если есть сохранённый свод на дату → возвращаем его
  * - Если нет → формируем предпросмотр (не сохраняем)
+ * 
+ * ОПТИМИЗИРОВАНО: минимальный набор полей, сортировка на клиенте
  */
 export const getSvodByDate = async (req: Request, res: Response) => {
     try {
+        console.time('getSvodByDate:total');
         const { date } = req.query;
         if (!date) {
             return res.status(400).json({ error: 'date parameter is required' });
         }
 
         // Парсим дату как UTC полночь для корректного сравнения
-        // Дата приходит как "2026-01-22", парсим её как UTC
         const svodDate = new Date(String(date));
         svodDate.setUTCHours(0, 0, 0, 0);
 
+        console.time('getSvodByDate:findExisting');
         // Проверяем, есть ли сохранённый свод (оптимизированный запрос)
+        // ОПТИМИЗАЦИЯ: убрана сортировка - делается на клиенте, минимум полей product
         const existingSvod = await prisma.svodHeader.findUnique({
             where: { svodDate },
             include: {
@@ -36,8 +40,8 @@ export const getSvodByDate = async (req: Request, res: Response) => {
                         product: {
                             select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true }
                         }
-                    },
-                    orderBy: [{ category: 'asc' }, { shortName: 'asc' }]
+                    }
+                    // Сортировка убрана - делается на клиенте через useMemo
                 },
                 supplierCols: {
                     orderBy: { colIndex: 'asc' }
@@ -45,8 +49,10 @@ export const getSvodByDate = async (req: Request, res: Response) => {
                 supplierValues: true
             }
         });
+        console.timeEnd('getSvodByDate:findExisting');
 
         if (existingSvod) {
+            console.timeEnd('getSvodByDate:total');
             return res.json({
                 mode: existingSvod.status === 'draft' ? 'preview' : 'saved',
                 svod: existingSvod
@@ -54,7 +60,11 @@ export const getSvodByDate = async (req: Request, res: Response) => {
         }
 
         // Если нет сохранённого свода - формируем предпросмотр
+        console.time('getSvodByDate:buildPreview');
         const previewData = await buildSvodPreview(svodDate);
+        console.timeEnd('getSvodByDate:buildPreview');
+
+        console.timeEnd('getSvodByDate:total');
         return res.json({
             mode: 'preview',
             svod: previewData
@@ -67,9 +77,14 @@ export const getSvodByDate = async (req: Request, res: Response) => {
 
 /**
  * Сформировать данные для предпросмотра СВОД (без сохранения)
- * ОПТИМИЗИРОВАНО: параллельные запросы к БД
+ * ОПТИМИЗИРОВАНО: 
+ * - SQL агрегация для заказов (вместо загрузки всех записей)
+ * - Параллельные запросы к БД
+ * - Сортировка убрана (делается на клиенте)
  */
 async function buildSvodPreview(svodDate: Date) {
+    console.time('buildSvodPreview:total');
+
     // Используем только дату (без времени) для корректной работы с часовыми поясами
     const dateStart = new Date(svodDate);
     dateStart.setUTCHours(0, 0, 0, 0);
@@ -79,19 +94,29 @@ async function buildSvodPreview(svodDate: Date) {
     // ============================================
     // ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ВСЕХ ИСТОЧНИКОВ
     // ============================================
-    const [summaryOrders, stockItems, purchases, productionValues] = await Promise.all([
-        // A: Товары из заказов (SummaryOrderJournal) на дату
-        prisma.summaryOrderJournal.findMany({
-            where: {
-                shipDate: { gte: dateStart, lte: dateEnd },
-                status: { in: ['draft', 'forming', 'synced'] }
-            },
-            select: {
-                idn: true,
-                productId: true,
-                orderQty: true
-            }
-        }),
+    console.time('buildSvodPreview:fetchSources');
+
+    // ОПТИМИЗАЦИЯ: Используем SQL агрегацию для заказов вместо загрузки всех записей
+    const [orderAggregates, ordersCountResult, stockItems, purchases, productionValues] = await Promise.all([
+        // A1: Агрегация заказов по товарам через SQL
+        prisma.$queryRaw<{ productId: number; totalQty: number }[]>`
+            SELECT "productId", SUM("orderQty") as "totalQty"
+            FROM "SummaryOrderJournal"
+            WHERE "shipDate" >= ${dateStart} AND "shipDate" <= ${dateEnd}
+              AND "status" IN ('draft', 'forming', 'synced')
+              AND "productId" IS NOT NULL
+            GROUP BY "productId"
+        `,
+
+        // A2: Подсчёт уникальных заказов и общего веса через SQL
+        prisma.$queryRaw<{ ordersCount: bigint; totalKg: number }[]>`
+            SELECT 
+                COUNT(DISTINCT "idn") as "ordersCount",
+                COALESCE(SUM("orderQty"), 0) as "totalKg"
+            FROM "SummaryOrderJournal"
+            WHERE "shipDate" >= ${dateStart} AND "shipDate" <= ${dateEnd}
+              AND "status" IN ('draft', 'forming', 'synced')
+        `,
 
         // B: Товары с остатком (из Stock)
         prisma.stock.findMany({
@@ -132,32 +157,25 @@ async function buildSvodPreview(svodDate: Date) {
             }
         })
     ]);
+    console.timeEnd('buildSvodPreview:fetchSources');
 
     // ============================================
     // АГРЕГАЦИЯ ДАННЫХ
     // ============================================
+    console.time('buildSvodPreview:aggregate');
 
-    // A: Агрегируем заказы по товарам
+    // A: Заказы уже агрегированы через SQL
     const ordersByProduct = new Map<number, number>();
-    const uniqueOrderIdns = new Set<string>();
-    let totalOrderKg = 0;
-
-    for (const order of summaryOrders) {
-        if (order.productId) {
-            const current = ordersByProduct.get(order.productId) || 0;
-            ordersByProduct.set(order.productId, current + order.orderQty);
-            totalOrderKg += order.orderQty;
-        }
-        if (order.idn) {
-            uniqueOrderIdns.add(order.idn);
-        }
+    for (const row of orderAggregates) {
+        ordersByProduct.set(row.productId, Number(row.totalQty));
     }
-    const ordersCount = uniqueOrderIdns.size;
+    const ordersCount = Number(ordersCountResult[0]?.ordersCount || 0);
+    const totalOrderKg = Number(ordersCountResult[0]?.totalKg || 0);
 
     // B: Агрегируем остатки
     const stockByProduct = new Map<number, number>();
     for (const stock of stockItems) {
-        stockByProduct.set(stock.productId, stock.quantity);
+        stockByProduct.set(stock.productId, Number(stock.quantity));
     }
 
     // C: Агрегируем закупки по товарам и поставщикам
@@ -185,6 +203,7 @@ async function buildSvodPreview(svodDate: Date) {
             productionByProduct.set(productId, current + Number(pv.value || 0));
         }
     }
+    console.timeEnd('buildSvodPreview:aggregate');
 
     // ============================================
     // Объединяем все товары (A ∪ B ∪ C ∪ D)
@@ -196,25 +215,47 @@ async function buildSvodPreview(svodDate: Date) {
         ...Array.from(productionByProduct.keys())
     ]);
 
-    // Получаем данные товаров из справочника
-    const products = await prisma.product.findMany({
-        where: { id: { in: Array.from(allProductIds) }, status: 'active' },
-        select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true }
-    });
+    // ============================================
+    // ТОП-10 поставщиков по сумме закупленного количества
+    // ============================================
+    const sortedSuppliers = Array.from(totalQtyBySupplier.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+    const supplierIds = sortedSuppliers.map(s => s[0]);
+    const supplierIdsSet = new Set(supplierIds);
+
+    // ОПТИМИЗАЦИЯ: Параллельный запрос товаров и поставщиков
+    console.time('buildSvodPreview:fetchProducts');
+    const productIdsArray = Array.from(allProductIds);
+    const [products, suppliersData] = await Promise.all([
+        productIdsArray.length > 0
+            ? prisma.product.findMany({
+                where: { id: { in: productIdsArray }, status: 'active' },
+                select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true }
+            })
+            : Promise.resolve([]),
+        supplierIds.length > 0
+            ? prisma.supplier.findMany({
+                where: { id: { in: supplierIds } },
+                select: { id: true, name: true }
+            })
+            : Promise.resolve([])
+    ]);
+    console.timeEnd('buildSvodPreview:fetchProducts');
+
     const productsMap = new Map(products.map(p => [p.id, p]));
+    const suppliersMap = new Map(suppliersData.map(s => [s.id, s]));
 
     // ============================================
     // Формируем строки свода
     // ============================================
+    console.time('buildSvodPreview:buildLines');
     const lines = [];
     for (const productId of Array.from(allProductIds)) {
         const product = productsMap.get(productId);
         if (!product) continue;
 
-        // Категория из справочника товаров
         const categoryFromProduct = product.category || 'Без категории';
-
-        // Получаем значения для расчётов
         const openingStock = stockByProduct.get(productId) || 0;
         const productionInQty = productionByProduct.get(productId) || 0;
         const coefficient = product.coefficient ?? 1;
@@ -228,17 +269,10 @@ async function buildSvodPreview(svodDate: Date) {
             }
         }
 
-        // Расчёт "Имеется в наличии" = Остаток на начало + Закупки + Производство
         const availableQty = openingStock + totalPurchasesForProduct + productionInQty;
-
-        // Расчёт "Факт (− отходы)" = Имеется в наличии × Коэффициент
         const factMinusWaste = availableQty * coefficient;
-
-        // Определяем, является ли позиция "только закупка" (есть закупки, но нет заказов)
         const orderQty = ordersByProduct.get(productId) || 0;
         const isPurchaseOnly = totalPurchasesForProduct > 0 && orderQty === 0 && productionInQty === 0;
-
-        // Определяем, является ли позиция "только производство" (есть производство, но нет заказов и закупок)
         const isProductionOnly = productionInQty > 0 && orderQty === 0 && totalPurchasesForProduct === 0;
 
         lines.push({
@@ -251,71 +285,46 @@ async function buildSvodPreview(svodDate: Date) {
             openingStockIsManual: false,
             productionInQty,
             afterPurchaseStock: null as number | null,
-            availableQty,  // Имеется в наличии
+            availableQty,
             qtyToShip: null,
-            factMinusWaste,  // Факт (− отходы)
+            factMinusWaste,
             weightToShip: null,
             planFactDiff: null,
             underOver: null,
-            isPurchaseOnly,  // Маркировка позиций только из закупок
-            isProductionOnly,  // Маркировка позиций только из производства
+            isPurchaseOnly,
+            isProductionOnly,
             product
         });
     }
+    console.timeEnd('buildSvodPreview:buildLines');
 
-    // Сортировка: по категориям, затем по короткому названию
-    const categoryOrder = ['Баранина', 'Говядина', 'Курица'];
-    lines.sort((a, b) => {
-        const catA = categoryOrder.indexOf(a.category);
-        const catB = categoryOrder.indexOf(b.category);
-        const orderA = catA >= 0 ? catA : 999;
-        const orderB = catB >= 0 ? catB : 999;
-        if (orderA !== orderB) return orderA - orderB;
-        if (a.category !== b.category) return a.category.localeCompare(b.category, 'ru');
-        return (a.shortName || '').localeCompare(b.shortName || '', 'ru');
-    });
+    // ОПТИМИЗАЦИЯ: Сортировка убрана - делается на клиенте через useMemo
 
-    // ============================================
-    // ТОП-10 поставщиков по сумме закупленного количества
-    // ============================================
-    const sortedSuppliers = Array.from(totalQtyBySupplier.entries())
-        .sort((a, b) => b[1] - a[1])  // Сортировка по убыванию qty
-        .slice(0, 10);
-
-
-    const supplierIds = sortedSuppliers.map(s => s[0]);
-    const suppliersData = await prisma.supplier.findMany({
-        where: { id: { in: supplierIds } },
-        select: { id: true, name: true }
-    });
-    const suppliersMap = new Map(suppliersData.map(s => [s.id, s]));
-
+    // Формируем колонки поставщиков
     const supplierCols = sortedSuppliers.map(([supplierId, totalQty], index) => ({
         colIndex: index + 1,
         supplierId,
         supplierName: suppliersMap.get(supplierId)?.name || `Поставщик ${supplierId}`,
-        totalPurchase: totalQty  // Теперь это totalQty!
+        totalPurchase: totalQty
     }));
 
     // Значения закупок по поставщикам
     const supplierValues: { productId: number; supplierId: number; purchaseQty: number }[] = [];
     for (const [productId, supplierMap] of Array.from(purchasesByProduct.entries())) {
         for (const [supplierId, qty] of Array.from(supplierMap.entries())) {
-            if (supplierIds.includes(supplierId)) {
+            if (supplierIdsSet.has(supplierId)) {
                 supplierValues.push({ productId, supplierId, purchaseQty: qty });
             }
         }
     }
 
-
+    console.timeEnd('buildSvodPreview:total');
     return {
         id: null,
         svodDate,
         status: 'draft',
-        // KPI (новые поля!)
         ordersCount,
         totalOrderKg,
-        // Данные
         lines,
         supplierCols,
         supplierValues
@@ -415,6 +424,9 @@ export const saveSvod = async (req: Request, res: Response) => {
             }
 
             return header;
+        }, {
+            timeout: 60000,  // 60 секунд
+            maxWait: 10000
         });
 
         // Возвращаем полные данные
@@ -562,6 +574,9 @@ async function updateExistingSvod(
                     }))
                 });
             }
+        }, {
+            timeout: 60000,  // 60 секунд
+            maxWait: 10000
         });
 
         // Оптимизированный запрос - select только нужные поля product
@@ -587,56 +602,224 @@ async function updateExistingSvod(
 }
 
 /**
- * Обновить СВОД (пересобрать данные из источников)
+ * Обновить СВОД (добавить новые данные, сохраняя старые)
  * PUT /api/svod/:id/refresh
+ * 
+ * Логика:
+ * 1. Получаем свежие данные из источников (заказы, закупки, производство)
+ * 2. Добавляем ТОЛЬКО новые товары (которых еще нет в своде)
+ * 3. Для существующих строк - обновляем только данные из источников
+ *    (orderQty, productionInQty, supplierCols, supplierValues)
+ * 4. Ручные правки пользователя (weightToShip, qtyToShip, openingStock с флагом manual, и т.д.) остаются неизменными
+ * 
+ * ОПТИМИЗИРОВАНО: Используем batch UPDATE с CASE/WHEN вместо отдельных запросов
  */
 export const refreshSvod = async (req: Request, res: Response) => {
     try {
         const svodId = Number(req.params.id);
         const username = (req as any).user?.username || 'system';
 
+        console.time('refreshSvod:initialFetch');
+        // ОПТИМИЗАЦИЯ: Минимальный набор полей для существующих строк
         const svod = await prisma.svodHeader.findUnique({
             where: { id: svodId },
-            include: { lines: true }
+            include: {
+                lines: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        openingStockIsManual: true,
+                        sortOrder: true
+                    }
+                }
+            }
         });
+        console.timeEnd('refreshSvod:initialFetch');
 
         if (!svod) {
             return res.status(404).json({ error: 'Svod not found' });
         }
 
-        // Сохраняем ручные правки
-        const manualEdits = new Map<number, { openingStock: number; afterPurchaseStock: number | null }>();
+        console.time('refreshSvod:buildPreview');
+        // Формируем свежие данные из источников
+        const freshData = await buildSvodPreview(svod.svodDate);
+        console.timeEnd('refreshSvod:buildPreview');
+
+        // Создаём Map существующих позиций по productId
+        const existingLinesMap = new Map<number, typeof svod.lines[0]>();
         for (const line of svod.lines) {
-            if (line.openingStockIsManual || line.afterPurchaseStock) {
-                manualEdits.set(line.productId, {
-                    openingStock: line.openingStockIsManual ? Number(line.openingStock) : 0,
-                    afterPurchaseStock: line.afterPurchaseStock ? Number(line.afterPurchaseStock) : null
+            existingLinesMap.set(line.productId, line);
+        }
+
+        // Создаём Map свежих данных по productId
+        const freshLinesMap = new Map<number, typeof freshData.lines[0]>();
+        for (const line of freshData.lines) {
+            freshLinesMap.set(line.productId, line);
+        }
+
+        const addedProducts: number[] = [];
+        const updatedProducts: number[] = [];
+
+        console.time('refreshSvod:transaction');
+        await prisma.$transaction(async (tx) => {
+            // 1. ОПТИМИЗАЦИЯ: Собираем данные для batch update
+            const linesToUpdate: {
+                id: number;
+                orderQty: number;
+                productionInQty: number;
+                coefficient: number;
+                category: string;
+                shortName: string;
+                openingStock: number | null;
+            }[] = [];
+
+            for (const existingLine of svod.lines) {
+                const freshLine = freshLinesMap.get(existingLine.productId);
+                if (freshLine) {
+                    updatedProducts.push(existingLine.productId);
+                    linesToUpdate.push({
+                        id: existingLine.id,
+                        orderQty: freshLine.orderQty,
+                        productionInQty: freshLine.productionInQty,
+                        coefficient: freshLine.coefficient ?? 1,
+                        category: freshLine.category || 'Без категории',
+                        shortName: freshLine.shortName || '',
+                        openingStock: existingLine.openingStockIsManual ? null : freshLine.openingStock
+                    });
+                }
+            }
+
+            // ОПТИМИЗАЦИЯ: Один batch UPDATE через UNNEST (PostgreSQL)
+            if (linesToUpdate.length > 0) {
+                const ids = linesToUpdate.map(l => l.id);
+                const orderQtys = linesToUpdate.map(l => l.orderQty);
+                const productionInQtys = linesToUpdate.map(l => l.productionInQty);
+                const coefficients = linesToUpdate.map(l => l.coefficient);
+                const categories = linesToUpdate.map(l => l.category);
+                const shortNames = linesToUpdate.map(l => l.shortName);
+                const openingStocks = linesToUpdate.map(l => l.openingStock);
+
+                await tx.$executeRaw`
+                    UPDATE "SvodLine" AS sl SET
+                        "orderQty" = v.order_qty,
+                        "productionInQty" = v.production_in_qty,
+                        "coefficient" = v.coefficient,
+                        "category" = v.category,
+                        "shortName" = v.short_name,
+                        "openingStock" = COALESCE(v.opening_stock, sl."openingStock"),
+                        "updatedAt" = NOW()
+                    FROM (
+                        SELECT 
+                            UNNEST(${ids}::int[]) AS id,
+                            UNNEST(${orderQtys}::decimal[]) AS order_qty,
+                            UNNEST(${productionInQtys}::decimal[]) AS production_in_qty,
+                            UNNEST(${coefficients}::decimal[]) AS coefficient,
+                            UNNEST(${categories}::text[]) AS category,
+                            UNNEST(${shortNames}::text[]) AS short_name,
+                            UNNEST(${openingStocks}::decimal[]) AS opening_stock
+                    ) AS v
+                    WHERE sl."id" = v.id
+                `;
+            }
+
+            // 2. Добавляем новые товары БАТЧЕМ
+            const maxSortOrder = svod.lines.length > 0
+                ? Math.max(...svod.lines.map(l => l.sortOrder || 0))
+                : 0;
+
+            const newLines = freshData.lines
+                .filter(freshLine => !existingLinesMap.has(freshLine.productId))
+                .map((freshLine, index) => {
+                    addedProducts.push(freshLine.productId);
+                    return {
+                        svodId,
+                        productId: freshLine.productId,
+                        shortName: freshLine.shortName,
+                        category: freshLine.category,
+                        coefficient: freshLine.coefficient,
+                        orderQty: freshLine.orderQty,
+                        productionInQty: freshLine.productionInQty,
+                        openingStock: freshLine.openingStock,
+                        openingStockIsManual: false,
+                        afterPurchaseStock: null,
+                        qtyToShip: null,
+                        factMinusWaste: null,
+                        weightToShip: null,
+                        planFactDiff: null,
+                        underOver: null,
+                        sortOrder: maxSortOrder + index + 1
+                    };
+                });
+
+            if (newLines.length > 0) {
+                await tx.svodLine.createMany({ data: newLines });
+            }
+
+            // 3. Обновляем колонки поставщиков (полностью заменяем)
+            await tx.svodSupplierCol.deleteMany({ where: { svodId } });
+            if (freshData.supplierCols.length > 0) {
+                await tx.svodSupplierCol.createMany({
+                    data: freshData.supplierCols.map((col: any) => ({
+                        svodId,
+                        colIndex: col.colIndex,
+                        supplierId: col.supplierId,
+                        supplierName: col.supplierName,
+                        totalPurchase: col.totalPurchase || 0
+                    }))
                 });
             }
-        }
 
-        // Формируем свежие данные
-        const freshData = await buildSvodPreview(svod.svodDate);
-
-        // Восстанавливаем ручные правки
-        for (const line of freshData.lines) {
-            const manual = manualEdits.get(line.productId);
-            if (manual) {
-                if (manual.openingStock) {
-                    line.openingStock = manual.openingStock;
-                    line.openingStockIsManual = true;
-                }
-                if (manual.afterPurchaseStock !== null) {
-                    line.afterPurchaseStock = manual.afterPurchaseStock;
-                }
+            // 4. Обновляем значения поставщиков (полностью заменяем)
+            await tx.svodSupplierValue.deleteMany({ where: { svodId } });
+            if (freshData.supplierValues.length > 0) {
+                await tx.svodSupplierValue.createMany({
+                    data: freshData.supplierValues.map((val: any) => ({
+                        svodId,
+                        productId: val.productId,
+                        supplierId: val.supplierId,
+                        purchaseQty: val.purchaseQty || 0
+                    }))
+                });
             }
-        }
 
-        // Обновляем в БД
-        await updateExistingSvod(res, svodId, username, freshData.lines, freshData.supplierCols, freshData.supplierValues);
-    } catch (error) {
-        console.error('refreshSvod error:', error);
-        res.status(500).json({ error: 'Failed to refresh svod' });
+            // 5. Обновляем заголовок свода
+            await tx.svodHeader.update({
+                where: { id: svodId },
+                data: { updatedBy: username }
+            });
+        }, {
+            timeout: 30000,  // 30 секунд (уменьшили, т.к. теперь быстрее)
+            maxWait: 5000
+        });
+        console.timeEnd('refreshSvod:transaction');
+
+        console.time('refreshSvod:finalFetch');
+        // Возвращаем обновлённые данные
+        const updatedSvod = await prisma.svodHeader.findUnique({
+            where: { id: svodId },
+            include: {
+                lines: {
+                    include: {
+                        product: { select: { id: true, code: true, name: true, priceListName: true, category: true, coefficient: true } }
+                    },
+                    orderBy: { sortOrder: 'asc' }
+                },
+                supplierCols: { orderBy: { colIndex: 'asc' } },
+                supplierValues: true
+            }
+        });
+        console.timeEnd('refreshSvod:finalFetch');
+
+        res.json({
+            mode: 'saved',
+            svod: updatedSvod,
+            addedProducts: addedProducts.length,
+            updatedProducts: updatedProducts.length
+        });
+    } catch (error: any) {
+        console.error('refreshSvod error:', error?.message || error);
+        console.error('Stack:', error?.stack);
+        res.status(500).json({ error: 'Failed to refresh svod', details: error?.message });
     }
 };
 
