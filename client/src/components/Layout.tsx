@@ -73,7 +73,6 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             icon: <FolderOpen size={20} />,
             children: [
                 { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} /> },
-                { label: 'Журнал сборок', path: '/journals/assembly', icon: <BookOpen size={18} /> },
                 { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
                 { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },
                 { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} /> },

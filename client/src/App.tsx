@@ -22,7 +22,7 @@ import AssemblyPage from './pages/AssemblyPage';
 import AssemblyOrderPage from './pages/AssemblyOrderPage';
 import AssemblyOrdersPage from './pages/AssemblyOrdersPage';
 import SummaryOrdersPage from './pages/SummaryOrdersPage';
-import AssemblyJournalPage from './pages/AssemblyJournalPage';
+// AssemblyJournalPage удалён
 import ExpeditionPage from './pages/ExpeditionPage';
 import ExpeditionInvoicePage from './pages/ExpeditionInvoicePage';
 import ProductionV2Page from './pages/ProductionV2Page';
@@ -107,7 +107,7 @@ function App() {
             <Route path="/summary-orders" element={<ProtectedRoute><SummaryOrdersPage /></ProtectedRoute>} />
             <Route path="/assembly-orders" element={<ProtectedRoute><AssemblyOrdersPage /></ProtectedRoute>} />
             <Route path="/dispatch" element={<ProtectedRoute><DispatchPage /></ProtectedRoute>} />
-            <Route path="/journals/assembly" element={<ProtectedRoute><AssemblyJournalPage /></ProtectedRoute>} />
+            {/* Журнал сборок удалён */}
             {/* Expedition routes */}
             <Route path="/expedition" element={<ProtectedRoute><ExpeditionPage /></ProtectedRoute>} />
             <Route path="/expedition/:id/invoice" element={<ProtectedRoute><ExpeditionInvoicePage /></ProtectedRoute>} />
