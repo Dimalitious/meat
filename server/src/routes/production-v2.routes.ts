@@ -28,6 +28,7 @@ import {
     getRunValuesWithStaff,
     addRunValueEntry,
     updateRunValueEntry,
+    deleteRunValueEntry,
     getMmlCategories
 } from '../controllers/production-v2.controller';
 
@@ -94,6 +95,9 @@ router.post('/runs/:id/values', addRunValueEntry);
 
 // Обновить запись значения
 router.patch('/runs/values/:valueId', updateRunValueEntry);
+
+// Удалить запись значения
+router.delete('/runs/values/:valueId', deleteRunValueEntry);
 
 // Зафиксировать/разблокировать
 router.patch('/runs/:id/lock', toggleProductionRunLock);

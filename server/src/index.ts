@@ -89,6 +89,10 @@ app.use('/api/production-docs', productionDocRoutes);
 import materialReportRoutes from './routes/materialReport.routes';
 app.use('/api/material-report', materialReportRoutes);
 
+// Customer Cards Module (Карточки клиентов с MML и фото)
+import customerCardsRoutes from './routes/customerCards.routes';
+app.use('/api/customer-cards', customerCardsRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // Health check (also for telegram agent)

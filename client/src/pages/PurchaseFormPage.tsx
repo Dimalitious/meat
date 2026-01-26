@@ -57,6 +57,7 @@ const PurchaseFormPage: React.FC = () => {
     const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedSuppliers, setSelectedSuppliers] = useState<Supplier[]>([]);
     const [items, setItems] = useState<PurchaseItem[]>([]);
+    const [idn, setIdn] = useState<string | null>(null);  // IDN закупки
 
     // Справочники
     const [allSuppliers, setAllSuppliers] = useState<Supplier[]>([]);
@@ -129,6 +130,7 @@ const PurchaseFormPage: React.FC = () => {
                 .then(res => {
                     const data = res.data;
                     setPurchaseDate(data.purchaseDate.split('T')[0]);
+                    setIdn(data.idn || null);  // Загружаем IDN
 
                     // Восстановить поставщиков
                     const suppliers = data.suppliers.map((s: any) => s.supplier);
@@ -473,9 +475,16 @@ const PurchaseFormPage: React.FC = () => {
                 {/* Правая панель: Товары выбранного поставщика */}
                 <div className="bg-white rounded-lg border border-slate-200 p-4">
                     <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-lg font-semibold text-slate-800">
-                            {activeSupplier ? `Товары: ${activeSupplier.name}` : 'Товары'}
-                        </h2>
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-lg font-semibold text-slate-800">
+                                {activeSupplier ? `Товары: ${activeSupplier.name}` : 'Товары'}
+                            </h2>
+                            {idn && (
+                                <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs font-mono rounded-md">
+                                    IDN: {idn}
+                                </span>
+                            )}
+                        </div>
                         {activeSupplier && (
                             <button
                                 onClick={() => setIsProductModalOpen(true)}

@@ -81,6 +81,8 @@ model Product {
   cuttingLineOutputs    ProductionCuttingLine[]   @relation("CuttingLineOutput")
   // Customer-specific product catalogs
   customerProducts      CustomerProduct[]
+  // Customer Card items (карточки клиентов с описаниями и фото)
+  customerCardItems     CustomerCardItem[]
   // Material Report relations
   materialReportLines      MaterialReportLine[]
   materialReportDraftLines MaterialReportDraftLine[]
@@ -91,6 +93,9 @@ model Customer {
   code       String    @unique
   name       String
   legalName  String?
+  inn        String?   @db.VarChar(9)  // ИНН клиента (до 9 символов)
+  telegramGroupName     String?  // Название группы в Telegram
+  telegramGroupUsername String?  // Никнейм группы (@username)
   districtId String?
   managerId  String?
   createdAt  DateTime  @default(now())
@@ -102,6 +107,55 @@ model Customer {
   salesPriceLists       SalesPriceList[]
   // Customer-specific product catalog (персональный каталог товаров клиента)
   customerProducts      CustomerProduct[]
+  // Карточки клиента (MML с описаниями и фото)
+  customerCards         CustomerCard[]
+}
+
+// Карточка клиента - набор позиций MML с описаниями и фото для конкретного клиента
+model CustomerCard {
+  id          Int       @id @default(autoincrement())
+  customerId  Int       // FK → Customer
+  name        String    // Название карточки (например "Основной ассортимент")
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  items       CustomerCardItem[]
+  
+  @@index([customerId])
+}
+
+// Позиция в карточке клиента - товар с описанием и фото
+model CustomerCardItem {
+  id              Int       @id @default(autoincrement())
+  cardId          Int       // FK → CustomerCard
+  productId       Int       // FK → Product (товар из MML)
+  description     String?   @db.Text  // Детальное описание разделки
+  sortOrder       Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  card            CustomerCard  @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  product         Product       @relation(fields: [productId], references: [id])
+  photos          CustomerCardItemPhoto[]
+  
+  @@unique([cardId, productId])
+  @@index([cardId])
+  @@index([productId])
+}
+
+// Фото для позиции карточки клиента (до 3 фото на позицию)
+model CustomerCardItemPhoto {
+  id          Int       @id @default(autoincrement())
+  itemId      Int       // FK → CustomerCardItem
+  url         String    // URL фото
+  sortOrder   Int       @default(0)  // Порядок фото (0, 1, 2)
+  createdAt   DateTime  @default(now())
+  
+  item        CustomerCardItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  
+  @@index([itemId])
 }
 
 // Связь клиента с его товарами (персональный каталог)
@@ -671,6 +725,7 @@ model PaymentType {
 // Шапка закупки (документ)
 model Purchase {
   id              Int       @id @default(autoincrement())
+  idn             String?   // Автогенерируемый идентификатор (код_поставщика + дата ДДММГГГГ)
   purchaseDate    DateTime  // Дата закупки (редактируемая)
   totalAmount     Decimal?  @db.Decimal(14, 2)  // Итоговая сумма закупки
   createdByUserId Int       // Кто создал

@@ -1268,10 +1268,27 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Production run is locked' });
         }
 
-        // Получаем staff по userId
-        const staff = await prisma.productionStaff.findUnique({
+        // Получаем staff по userId (или создаём если нет)
+        let staff = await prisma.productionStaff.findUnique({
             where: { userId }
         });
+
+        // Баг 3 fix: автосоздаём ProductionStaff если не существует
+        if (!staff && userId) {
+            const user = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { id: true, name: true, username: true }
+            });
+            if (user) {
+                staff = await prisma.productionStaff.create({
+                    data: {
+                        fullName: user.name || user.username || 'Пользователь',
+                        userId: userId,
+                        isActive: true
+                    }
+                });
+            }
+        }
 
         // Получаем узел для snapshotProductId
         const node = await prisma.productionMmlNode.findUnique({
@@ -1409,7 +1426,64 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
 };
 
 /**
+ * Удалить запись значения выработки
+ */
+export const deleteRunValueEntry = async (req: Request, res: Response) => {
+    try {
+        const valueId = Number(req.params.valueId);
+
+        const existing = await prisma.productionRunValue.findUnique({
+            where: { id: valueId },
+            include: { run: true }
+        });
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Value entry not found' });
+        }
+        if (existing.run.isLocked) {
+            return res.status(400).json({ error: 'Production run is locked' });
+        }
+
+        await prisma.productionRunValue.delete({
+            where: { id: valueId }
+        });
+
+        // Пересчитываем actualWeight
+        const allValues = await prisma.productionRunValue.findMany({
+            where: { productionRunId: existing.productionRunId },
+            include: { node: true }
+        });
+
+        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
+        const nodes = await prisma.productionMmlNode.findMany({
+            where: { id: { in: Array.from(nodeIds) } }
+        });
+        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
+
+        let actualWeight = 0;
+        for (const val of allValues) {
+            const n = nodes.find(x => x.id === val.mmlNodeId);
+            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
+            if (shouldSum && val.value !== null) {
+                actualWeight += Number(val.value);
+            }
+        }
+
+        await prisma.productionRun.update({
+            where: { id: existing.productionRunId },
+            data: { actualWeight }
+        });
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('deleteRunValueEntry error:', error);
+        res.status(500).json({ error: 'Failed to delete run value entry' });
+    }
+};
+
+/**
  * Получить категории MML узлов для группировки по вкладкам
+ * Каждый узел MML = отдельный таб
  */
 export const getMmlCategories = async (req: Request, res: Response) => {
     try {
@@ -1421,23 +1495,16 @@ export const getMmlCategories = async (req: Request, res: Response) => {
                 product: {
                     select: { id: true, code: true, name: true, category: true }
                 }
-            }
+            },
+            orderBy: [{ sortOrder: 'asc' }]
         });
 
-        // Группируем по категории
-        const categories = new Map<string, typeof nodes>();
-        for (const node of nodes) {
-            const cat = node.product.category || 'Без категории';
-            if (!categories.has(cat)) {
-                categories.set(cat, []);
-            }
-            categories.get(cat)!.push(node);
-        }
-
-        const result = Array.from(categories.entries()).map(([category, items]) => ({
-            category,
-            nodes: items,
-            count: items.length
+        // Каждый узел = отдельный таб
+        const result = nodes.map(node => ({
+            category: node.product.name, // Имя товара как название таба
+            nodes: [node], // Один узел в табе
+            count: 1,
+            rootNode: node
         }));
 
         res.json(result);

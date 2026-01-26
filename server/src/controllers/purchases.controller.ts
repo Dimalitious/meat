@@ -183,8 +183,24 @@ export const createPurchase = async (req: Request, res: Response) => {
             const normalizedDate = new Date(purchaseDate);
             normalizedDate.setUTCHours(0, 0, 0, 0);
 
+            // Генерация IDN: код_первого_поставщика + дата ДДММГГГГ
+            let idn: string | null = null;
+            if (suppliers.length > 0) {
+                const firstSupplier = await tx.supplier.findUnique({
+                    where: { id: Number(suppliers[0]) },
+                    select: { code: true }
+                });
+                if (firstSupplier) {
+                    const day = String(normalizedDate.getUTCDate()).padStart(2, '0');
+                    const month = String(normalizedDate.getUTCMonth() + 1).padStart(2, '0');
+                    const year = normalizedDate.getUTCFullYear();
+                    idn = `${firstSupplier.code}${day}${month}${year}`;
+                }
+            }
+
             const newPurchase = await tx.purchase.create({
                 data: {
+                    idn,
                     purchaseDate: normalizedDate,
                     totalAmount,
                     createdByUserId: userId
