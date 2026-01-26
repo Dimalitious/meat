@@ -456,7 +456,10 @@ export const syncToOrders = async (req: Request, res: Response) => {
             if (orderItemId) {
                 await prisma.summaryOrderJournal.update({
                     where: { id: entry.id },
-                    data: { orderItemId }
+                    data: {
+                        orderItemId,
+                        status: 'synced'
+                    }
                 });
             }
         }

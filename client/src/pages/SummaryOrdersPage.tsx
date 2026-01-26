@@ -506,27 +506,27 @@ export default function SummaryOrdersPage() {
         setSavingToJournal(true);
         try {
             const token = localStorage.getItem('token');
+            const entryIds = entries.map(e => e.id);
 
-            // Оптимизация: отправляем только нужные поля (без _dirty и прочего)
-            const optimizedData = entries.map(e => ({
-                id: e.id,
-                customerName: e.customerName,
-                productFullName: e.productFullName,
-                orderQty: e.orderQty,
-                shippedQty: e.shippedQty,
-                price: e.price,
-                category: e.category,
-                status: e.status
-            }));
+            if (entryIds.length === 0) {
+                alert('Нет записей для синхронизации');
+                setSavingToJournal(false);
+                return;
+            }
 
-            await axios.post(`${API_URL}/api/journals/summary`, {
-                summaryDate: filterDate,
-                createdBy: user?.username || 'Unknown',
-                data: optimizedData
+            const res = await axios.post(`${API_URL}/api/summary-orders/sync`, {
+                entryIds
             }, { headers: { Authorization: `Bearer ${token}` } });
+
+            console.log('[SYNC RESULT]', res.data);
+            alert(`Синхронизировано заказов: ${res.data.results.length}`);
+
             setSavedToJournal(true);
+            // Перезагружаем данные чтобы обновить статусы
+            fetchData(page, true);
         } catch (err) {
-            alert('Ошибка сохранения');
+            console.error('Sync error:', err);
+            alert('Ошибка синхронизации заказов');
         } finally {
             setSavingToJournal(false);
         }
@@ -776,7 +776,7 @@ export default function SummaryOrdersPage() {
                             {savedToJournal ? (
                                 <>
                                     <span className="bg-green-100 text-green-700 px-4 py-2 rounded flex items-center gap-1 font-medium">
-                                        ✓ Сохранен в журнале
+                                        ✓ Заказы созданы
                                     </span>
                                     <button
                                         onClick={editJournal}
@@ -793,7 +793,7 @@ export default function SummaryOrdersPage() {
                                         ? 'bg-gray-400 cursor-not-allowed'
                                         : 'bg-purple-600 hover:bg-purple-700'} text-white`}
                                 >
-                                    <Save size={16} /> {savingToJournal ? 'Сохранение...' : 'В журнал'}
+                                    <Save size={16} /> {savingToJournal ? 'Создание...' : 'Создать заказы'}
                                 </button>
                             )}
                             {selectedIds.size > 0 && (
