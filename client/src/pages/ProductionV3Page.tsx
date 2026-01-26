@@ -364,10 +364,15 @@ export default function ProductionV3Page() {
 
     // Создать выработку из закупки/остатка с MML значениями
     const createRunFromSource = async () => {
-        if (!mmlModalData || !mmlId) return;
+        console.log('createRunFromSource called', { mmlModalData, mmlId, mmlValues: Array.from(mmlValues.entries()) });
+        if (!mmlModalData || !mmlId) {
+            console.log('Early return - missing data', { mmlModalData: !!mmlModalData, mmlId });
+            return;
+        }
 
         try {
             // Создаём выработку
+            console.log('Creating run...');
             const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
                 productId: mmlModalData.productId,
                 sourceType: mmlModalData.sourceType,
@@ -376,8 +381,10 @@ export default function ProductionV3Page() {
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
+            console.log('Run created:', res.data);
 
             const newRun = res.data.run || res.data;
+            console.log('newRun:', newRun);
 
             // Сохраняем значения MML
             const values: { mmlNodeId: number; value: number }[] = [];
@@ -386,15 +393,18 @@ export default function ProductionV3Page() {
                     values.push({ mmlNodeId: nodeId, value });
                 }
             });
+            console.log('Values to save:', values);
 
             if (values.length > 0) {
-                await axios.put(`${API_URL}/api/production-v2/runs/${newRun.id}/values`, {
+                console.log('Saving values...');
+                const valRes = await axios.put(`${API_URL}/api/production-v2/runs/${newRun.id}/values`, {
                     values,
                     productionDate: dateFrom,
                     plannedWeight: mmlModalData.sourceQty
                 }, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
+                console.log('Values saved:', valRes.data);
             }
 
             // Обновляем список
@@ -680,18 +690,31 @@ export default function ProductionV3Page() {
                                         </div>
                                         {purchaseItems.map(item => (
                                             <div key={item.purchaseItemId}
-                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedPurchase?.purchaseItemId === item.purchaseItemId ? 'bg-green-100 border-l-4 border-green-600' : selectedPurchaseItems.has(item.purchaseItemId) ? 'bg-green-50 border-l-4 border-green-500' : 'hover:bg-gray-50'}`}
-                                                onClick={() => {
+                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedRun?.sourceType === 'PURCHASE' && selectedPurchase?.purchaseItemId === item.purchaseItemId ? 'bg-green-100 border-l-4 border-green-600' : 'hover:bg-gray-50'}`}
+                                                onClick={async () => {
                                                     setSelectedPurchase(item);
-                                                    const newSet = new Set(selectedPurchaseItems);
-                                                    if (newSet.has(item.purchaseItemId)) {
-                                                        newSet.delete(item.purchaseItemId);
-                                                    } else {
-                                                        newSet.add(item.purchaseItemId);
+                                                    // Создаём выработку сразу при клике
+                                                    try {
+                                                        const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
+                                                            productId: item.productId,
+                                                            sourceType: 'PURCHASE',
+                                                            productionDate: dateFrom,
+                                                            plannedWeight: item.qty
+                                                        }, {
+                                                            headers: { Authorization: `Bearer ${token}` }
+                                                        });
+                                                        const newRun = res.data.run || res.data;
+                                                        setRuns([newRun, ...runs]);
+                                                        await loadRunDetails(newRun.id);
+                                                    } catch (err: any) {
+                                                        if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
+                                                            setWarning('У этого товара нет MML структуры');
+                                                            setTimeout(() => setWarning(null), 3000);
+                                                        } else {
+                                                            console.error('Failed to create run:', err);
+                                                        }
                                                     }
-                                                    setSelectedPurchaseItems(newSet);
                                                 }}>
-                                                <input type="checkbox" checked={selectedPurchaseItems.has(item.purchaseItemId)} readOnly />
                                                 <div className="flex-1 min-w-0">
                                                     <div className="font-medium text-sm truncate">{item.productName}</div>
                                                     <div className="text-xs text-gray-500">{item.supplierName} • {item.category || '—'}</div>
@@ -733,18 +756,31 @@ export default function ProductionV3Page() {
                                         </div>
                                         {balanceItems.map(item => (
                                             <div key={item.productId}
-                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedBalance?.productId === item.productId ? 'bg-blue-100 border-l-4 border-blue-600' : selectedBalanceItems.has(item.productId) ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}
-                                                onClick={() => {
+                                                className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedRun?.sourceType === 'OPENING_BALANCE' && selectedBalance?.productId === item.productId ? 'bg-blue-100 border-l-4 border-blue-600' : 'hover:bg-gray-50'}`}
+                                                onClick={async () => {
                                                     setSelectedBalance(item);
-                                                    const newSet = new Set(selectedBalanceItems);
-                                                    if (newSet.has(item.productId)) {
-                                                        newSet.delete(item.productId);
-                                                    } else {
-                                                        newSet.add(item.productId);
+                                                    // Создаём выработку сразу при клике
+                                                    try {
+                                                        const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
+                                                            productId: item.productId,
+                                                            sourceType: 'OPENING_BALANCE',
+                                                            productionDate: dateFrom,
+                                                            plannedWeight: item.openingBalance
+                                                        }, {
+                                                            headers: { Authorization: `Bearer ${token}` }
+                                                        });
+                                                        const newRun = res.data.run || res.data;
+                                                        setRuns([newRun, ...runs]);
+                                                        await loadRunDetails(newRun.id);
+                                                    } catch (err: any) {
+                                                        if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
+                                                            setWarning('У этого товара нет MML структуры');
+                                                            setTimeout(() => setWarning(null), 3000);
+                                                        } else {
+                                                            console.error('Failed to create run:', err);
+                                                        }
                                                     }
-                                                    setSelectedBalanceItems(newSet);
                                                 }}>
-                                                <input type="checkbox" checked={selectedBalanceItems.has(item.productId)} readOnly />
                                                 <div className="flex-1 min-w-0">
                                                     <div className="font-medium text-sm truncate">{item.productName}</div>
                                                     <div className="text-xs text-gray-500">{item.category || '—'}</div>
@@ -771,115 +807,36 @@ export default function ProductionV3Page() {
 
                 {/* Правая панель */}
                 <div className="flex-1 bg-white rounded-lg shadow flex flex-col overflow-hidden">
-                    {/* Контент для вкладки "Новая" (выработки) */}
-                    {activeTab === 'runs' && !selectedRun && (
+                    {/* Placeholder когда нет выбранной выработки */}
+                    {!selectedRun && (
                         <div className="flex-1 flex items-center justify-center text-gray-400">
                             <div className="text-center">
-                                <Package size={48} className="mx-auto mb-4 text-gray-300" />
-                                <p>Выберите карточку выработки</p>
+                                {activeTab === 'runs' && (
+                                    <>
+                                        <Package size={48} className="mx-auto mb-4 text-gray-300" />
+                                        <p>Выберите карточку выработки</p>
+                                    </>
+                                )}
+                                {activeTab === 'purchases' && (
+                                    <>
+                                        <Download size={48} className="mx-auto mb-4 text-green-300" />
+                                        <p>Выберите позицию закупки</p>
+                                        <p className="text-sm mt-1">Выработка создастся автоматически</p>
+                                    </>
+                                )}
+                                {activeTab === 'balances' && (
+                                    <>
+                                        <BarChart3 size={48} className="mx-auto mb-4 text-blue-300" />
+                                        <p>Выберите позицию остатка</p>
+                                        <p className="text-sm mt-1">Выработка создастся автоматически</p>
+                                    </>
+                                )}
                             </div>
                         </div>
                     )}
 
-                    {/* Контент для вкладки "Закуп" */}
-                    {activeTab === 'purchases' && (
-                        <div className="flex-1 flex flex-col">
-                            {selectedPurchase ? (
-                                <>
-                                    <div className="p-4 border-b bg-green-50">
-                                        <h3 className="font-semibold text-lg text-green-800">{selectedPurchase.productName}</h3>
-                                        <div className="text-sm text-green-700 mt-1">
-                                            Закупка от {new Date(selectedPurchase.purchaseDate).toLocaleDateString('ru-RU')}
-                                        </div>
-                                    </div>
-                                    <div className="p-4 space-y-4">
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div className="bg-gray-50 rounded-lg p-4">
-                                                <div className="text-xs text-gray-500 mb-1">Количество</div>
-                                                <div className="text-2xl font-bold text-green-700">{formatNumber(selectedPurchase.qty, 3)} кг</div>
-                                            </div>
-                                            <div className="bg-gray-50 rounded-lg p-4">
-                                                <div className="text-xs text-gray-500 mb-1">Поставщик</div>
-                                                <div className="text-lg font-semibold">{selectedPurchase.supplierName}</div>
-                                            </div>
-                                        </div>
-                                        <div className="bg-gray-50 rounded-lg p-4">
-                                            <div className="text-xs text-gray-500 mb-1">Категория</div>
-                                            <div className="text-md">{selectedPurchase.category || 'Не указана'}</div>
-                                        </div>
-                                        <Button className="w-full bg-green-600 hover:bg-green-700" onClick={() => {
-                                            openMmlModal(
-                                                selectedPurchase.productId,
-                                                selectedPurchase.productName,
-                                                'PURCHASE',
-                                                selectedPurchase.qty,
-                                                selectedPurchase.purchaseItemId
-                                            );
-                                        }}>
-                                            <Plus size={16} className="mr-1" /> Создать выработку из этой закупки
-                                        </Button>
-                                    </div>
-                                </>
-                            ) : (
-                                <div className="flex-1 flex items-center justify-center text-gray-400">
-                                    <div className="text-center">
-                                        <Download size={48} className="mx-auto mb-4 text-green-300" />
-                                        <p>Выберите позицию закупки</p>
-                                        <p className="text-sm mt-1">или отметьте несколько для массового импорта</p>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Контент для вкладки "Остатки" */}
-                    {activeTab === 'balances' && (
-                        <div className="flex-1 flex flex-col">
-                            {selectedBalance ? (
-                                <>
-                                    <div className="p-4 border-b bg-blue-50">
-                                        <h3 className="font-semibold text-lg text-blue-800">{selectedBalance.productName}</h3>
-                                        <div className="text-sm text-blue-700 mt-1">
-                                            Остаток на {dateFrom}
-                                        </div>
-                                    </div>
-                                    <div className="p-4 space-y-4">
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <div className="bg-gray-50 rounded-lg p-4">
-                                                <div className="text-xs text-gray-500 mb-1">Остаток</div>
-                                                <div className="text-2xl font-bold text-blue-700">{formatNumber(selectedBalance.openingBalance, 3)} кг</div>
-                                            </div>
-                                            <div className="bg-gray-50 rounded-lg p-4">
-                                                <div className="text-xs text-gray-500 mb-1">Категория</div>
-                                                <div className="text-lg font-semibold">{selectedBalance.category || 'Не указана'}</div>
-                                            </div>
-                                        </div>
-                                        <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={() => {
-                                            openMmlModal(
-                                                selectedBalance.productId,
-                                                selectedBalance.productName,
-                                                'OPENING_BALANCE',
-                                                selectedBalance.openingBalance
-                                            );
-                                        }}>
-                                            <Plus size={16} className="mr-1" /> Создать выработку из этого остатка
-                                        </Button>
-                                    </div>
-                                </>
-                            ) : (
-                                <div className="flex-1 flex items-center justify-center text-gray-400">
-                                    <div className="text-center">
-                                        <BarChart3 size={48} className="mx-auto mb-4 text-blue-300" />
-                                        <p>Выберите позицию остатка</p>
-                                        <p className="text-sm mt-1">или отметьте несколько для массового импорта</p>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Детали выработки (только для вкладки runs когда выбрана выработка) */}
-                    {activeTab === 'runs' && selectedRun && (
+                    {/* Детали выработки (для всех вкладок когда выбрана выработка) */}
+                    {selectedRun && (
                         <>
                             {/* Шапка */}
                             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
@@ -1239,16 +1196,22 @@ export default function ProductionV3Page() {
                                         )}
                                     </div>
                                     <div className="flex gap-2">
-                                        <Button variant="outline" onClick={() => { setShowMmlModal(false); setMmlModalData(null); setMmlCategories([]); setMmlValues(new Map()); }}>
+                                        <button
+                                            className="px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-100"
+                                            onClick={() => { setShowMmlModal(false); setMmlModalData(null); setMmlCategories([]); setMmlValues(new Map()); }}
+                                        >
                                             Закрыть
-                                        </Button>
-                                        <Button
-                                            className={mmlModalData.sourceType === 'PURCHASE' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}
-                                            onClick={createRunFromSource}
+                                        </button>
+                                        <button
+                                            className={`px-4 py-2 rounded-lg text-white flex items-center ${mmlModalData.sourceType === 'PURCHASE' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} ${mmlTotalValue === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            onClick={() => {
+                                                console.log('Button clicked!');
+                                                createRunFromSource();
+                                            }}
                                             disabled={mmlTotalValue === 0}
                                         >
                                             <Plus size={16} className="mr-1" /> Создать выработку
-                                        </Button>
+                                        </button>
                                     </div>
                                 </div>
                             </>
