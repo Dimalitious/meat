@@ -153,6 +153,21 @@ export default function ProductionV3Page() {
     const [selectedPurchase, setSelectedPurchase] = useState<PurchaseItem | null>(null);
     const [selectedBalance, setSelectedBalance] = useState<OpeningBalanceItem | null>(null);
 
+    // MML модальное окно для закупок/остатков
+    const [showMmlModal, setShowMmlModal] = useState(false);
+    const [mmlModalData, setMmlModalData] = useState<{
+        productId: number;
+        productName: string;
+        sourceType: 'PURCHASE' | 'OPENING_BALANCE';
+        sourceQty: number;
+        sourceItemId?: number;
+    } | null>(null);
+    const [mmlCategories, setMmlCategories] = useState<CategoryGroup[]>([]);
+    const [mmlActiveCategory, setMmlActiveCategory] = useState<string | null>(null);
+    const [mmlValues, setMmlValues] = useState<Map<number, number>>(new Map());
+    const [mmlLoading, setMmlLoading] = useState(false);
+    const [mmlId, setMmlId] = useState<number | null>(null);
+
     // ============================================
     // ЗАГРУЗКА ДАННЫХ
     // ============================================
@@ -304,6 +319,122 @@ export default function ProductionV3Page() {
     };
 
     // ============================================
+    // MML МОДАЛЬНОЕ ОКНО ДЛЯ ЗАКУПОК/ОСТАТКОВ
+    // ============================================
+
+    // Открыть MML модал для закупки или остатка
+    const openMmlModal = async (productId: number, productName: string, sourceType: 'PURCHASE' | 'OPENING_BALANCE', sourceQty: number, sourceItemId?: number) => {
+        setMmlLoading(true);
+        setMmlModalData({ productId, productName, sourceType, sourceQty, sourceItemId });
+        setShowMmlModal(true);
+        setMmlValues(new Map());
+
+        try {
+            // Получаем MML для товара
+            const mmlRes = await axios.get(`${API_URL}/api/production-v2/mml/product/${productId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (!mmlRes.data) {
+                setWarning(`У товара "${productName}" нет MML структуры`);
+                setTimeout(() => setWarning(null), 3000);
+                setShowMmlModal(false);
+                return;
+            }
+
+            setMmlId(mmlRes.data.id);
+
+            // Загружаем категории MML
+            const catRes = await axios.get(`${API_URL}/api/production-v2/mml/${mmlRes.data.id}/categories`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setMmlCategories(catRes.data);
+            if (catRes.data.length > 0) {
+                setMmlActiveCategory(catRes.data[0].category);
+            }
+        } catch (err) {
+            console.error('Failed to load MML:', err);
+            setWarning('Не удалось загрузить структуру MML');
+            setTimeout(() => setWarning(null), 3000);
+            setShowMmlModal(false);
+        } finally {
+            setMmlLoading(false);
+        }
+    };
+
+    // Создать выработку из закупки/остатка с MML значениями
+    const createRunFromSource = async () => {
+        if (!mmlModalData || !mmlId) return;
+
+        try {
+            // Создаём выработку
+            const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
+                productId: mmlModalData.productId,
+                sourceType: mmlModalData.sourceType,
+                sourceItemId: mmlModalData.sourceItemId,
+                productionDate: dateFrom
+            }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const newRun = res.data.run || res.data;
+
+            // Сохраняем значения MML
+            const values: { mmlNodeId: number; value: number }[] = [];
+            mmlValues.forEach((value, nodeId) => {
+                if (value > 0) {
+                    values.push({ mmlNodeId: nodeId, value });
+                }
+            });
+
+            if (values.length > 0) {
+                await axios.put(`${API_URL}/api/production-v2/runs/${newRun.id}/values`, {
+                    values,
+                    productionDate: dateFrom,
+                    plannedWeight: mmlModalData.sourceQty
+                }, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+            }
+
+            // Обновляем список
+            setRuns([newRun, ...runs]);
+            setShowMmlModal(false);
+            setMmlModalData(null);
+            setMmlCategories([]);
+            setMmlValues(new Map());
+
+            // Переключаемся на вкладку выработок и открываем созданную
+            setActiveTab('runs');
+            await loadRunDetails(newRun.id);
+
+            setWarning('Выработка создана!');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            console.error('Failed to create run from source:', err);
+            alert(err.response?.data?.error || 'Ошибка создания выработки');
+        }
+    };
+
+    // Обновить значение в MML модале
+    const updateMmlValue = (nodeId: number, value: string) => {
+        const newValues = new Map(mmlValues);
+        const numValue = parseFloat(value) || 0;
+        if (numValue > 0) {
+            newValues.set(nodeId, numValue);
+        } else {
+            newValues.delete(nodeId);
+        }
+        setMmlValues(newValues);
+    };
+
+    // Получить узлы активной категории MML модала
+    const mmlActiveCategoryNodes = mmlCategories.find(c => c.category === mmlActiveCategory)?.nodes || [];
+
+    // Итого по MML модалу
+    const mmlTotalValue = Array.from(mmlValues.values()).reduce((sum, v) => sum + v, 0);
+
+    // ============================================
     // ДЕЙСТВИЯ
     // ============================================
 
@@ -437,37 +568,37 @@ export default function ProductionV3Page() {
             <div className="flex gap-4 flex-1 overflow-hidden">
                 {/* Левая панель - тёмная */}
                 <div className="w-96 bg-gradient-to-b from-slate-900 to-slate-800 rounded-xl shadow-xl flex flex-col border border-slate-700">
-                    <div className="p-4 border-b">
-                        <h2 className="font-semibold mb-2 flex items-center justify-between">
+                    <div className="p-4 border-b border-slate-700">
+                        <h2 className="font-semibold mb-2 flex items-center justify-between text-white">
                             Журнал выработки
-                            {loading && <span className="text-xs text-gray-400 animate-pulse">загрузка...</span>}
+                            {loading && <span className="text-xs text-slate-400 animate-pulse">загрузка...</span>}
                         </h2>
 
                         {/* Фильтры дат */}
                         <div className="flex gap-2 mb-3">
                             <div className="flex-1">
-                                <label className="text-xs text-gray-500 block mb-1">Дата С</label>
-                                <input type="date" className="w-full border rounded px-2 py-1 text-sm"
+                                <label className="text-xs text-slate-400 block mb-1">Дата С</label>
+                                <input type="date" className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white"
                                     value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
                             </div>
                             <div className="flex-1">
-                                <label className="text-xs text-gray-500 block mb-1">Дата По</label>
-                                <input type="date" className="w-full border rounded px-2 py-1 text-sm"
+                                <label className="text-xs text-slate-400 block mb-1">Дата По</label>
+                                <input type="date" className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-white"
                                     value={dateTo} onChange={e => setDateTo(e.target.value)} />
                             </div>
                         </div>
 
                         {/* Счётчик найденных */}
                         {listLoaded && (
-                            <div className="text-xs text-gray-500 mb-2">
-                                Найдено: <span className="font-medium text-gray-700">{runs.length}</span> выработок
+                            <div className="text-xs text-slate-400 mb-2">
+                                Найдено: <span className="font-medium text-white">{runs.length}</span> выработок
                             </div>
                         )}
 
                         {/* Поиск */}
                         <div className="relative mb-3">
-                            <Search className="absolute left-2 top-2.5 text-gray-400" size={16} />
-                            <input type="text" placeholder="Поиск..." className="w-full border rounded pl-8 pr-3 py-2 text-sm"
+                            <Search className="absolute left-2 top-2.5 text-slate-400" size={16} />
+                            <input type="text" placeholder="Поиск..." className="w-full bg-slate-800 border border-slate-600 rounded pl-8 pr-3 py-2 text-sm text-white placeholder-slate-500"
                                 value={productSearch} onChange={e => setProductSearch(e.target.value)} />
                         </div>
 
@@ -475,17 +606,17 @@ export default function ProductionV3Page() {
                         <div className="flex gap-1 mb-3">
                             <button
                                 onClick={() => setActiveTab('runs')}
-                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'runs' ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'runs' ? 'bg-indigo-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>
                                 <Plus size={14} className="inline mr-1" /> Новая
                             </button>
                             <button
                                 onClick={() => { setActiveTab('purchases'); loadPurchaseItems(); }}
-                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'purchases' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-700 hover:bg-green-100'}`}>
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'purchases' ? 'bg-green-600 text-white' : 'bg-slate-700 text-green-400 hover:bg-slate-600'}`}>
                                 <Download size={14} className="inline mr-1" /> Закуп
                             </button>
                             <button
                                 onClick={() => { setActiveTab('balances'); loadBalanceItems(); }}
-                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'balances' ? 'bg-blue-600 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
+                                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === 'balances' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-blue-400 hover:bg-slate-600'}`}>
                                 <BarChart3 size={14} className="inline mr-1" /> Остатки
                             </button>
                         </div>
@@ -677,8 +808,13 @@ export default function ProductionV3Page() {
                                             <div className="text-md">{selectedPurchase.category || 'Не указана'}</div>
                                         </div>
                                         <Button className="w-full bg-green-600 hover:bg-green-700" onClick={() => {
-                                            setWarning(`Создание выработки из закупки ${selectedPurchase.productName} (в разработке)`);
-                                            setTimeout(() => setWarning(null), 3000);
+                                            openMmlModal(
+                                                selectedPurchase.productId,
+                                                selectedPurchase.productName,
+                                                'PURCHASE',
+                                                selectedPurchase.qty,
+                                                selectedPurchase.purchaseItemId
+                                            );
                                         }}>
                                             <Plus size={16} className="mr-1" /> Создать выработку из этой закупки
                                         </Button>
@@ -719,8 +855,12 @@ export default function ProductionV3Page() {
                                             </div>
                                         </div>
                                         <Button className="w-full bg-blue-600 hover:bg-blue-700" onClick={() => {
-                                            setWarning(`Создание выработки из остатка ${selectedBalance.productName} (в разработке)`);
-                                            setTimeout(() => setWarning(null), 3000);
+                                            openMmlModal(
+                                                selectedBalance.productId,
+                                                selectedBalance.productName,
+                                                'OPENING_BALANCE',
+                                                selectedBalance.openingBalance
+                                            );
                                         }}>
                                             <Plus size={16} className="mr-1" /> Создать выработку из этого остатка
                                         </Button>
@@ -1010,6 +1150,109 @@ export default function ProductionV3Page() {
                                 {editingValueId ? 'Сохранить' : 'Добавить'}
                             </Button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Модальное окно MML для закупок/остатков */}
+            {showMmlModal && mmlModalData && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[700px] max-h-[85vh] flex flex-col">
+                        <div className={`p-4 border-b flex justify-between items-center ${mmlModalData.sourceType === 'PURCHASE' ? 'bg-green-50' : 'bg-blue-50'}`}>
+                            <div>
+                                <h3 className="text-lg font-semibold">Структура MML: {mmlModalData.productName}</h3>
+                                <div className="text-sm text-gray-600 mt-1">
+                                    {mmlModalData.sourceType === 'PURCHASE' ? '📥 Закупка' : '📊 Остаток'}: {formatNumber(mmlModalData.sourceQty, 3)} кг
+                                </div>
+                            </div>
+                            <button onClick={() => { setShowMmlModal(false); setMmlModalData(null); setMmlCategories([]); setMmlValues(new Map()); }} className="text-gray-400 hover:text-gray-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        {mmlLoading ? (
+                            <div className="flex-1 flex items-center justify-center py-12">
+                                <div className="animate-spin w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full"></div>
+                            </div>
+                        ) : mmlCategories.length === 0 ? (
+                            <div className="flex-1 flex items-center justify-center py-12 text-gray-400">
+                                <div className="text-center">
+                                    <Package size={48} className="mx-auto mb-4 text-gray-300" />
+                                    <p>MML структура не найдена</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                {/* Вкладки категорий */}
+                                <div className="p-3 border-b flex gap-2 overflow-x-auto">
+                                    {mmlCategories.map(cat => (
+                                        <button
+                                            key={cat.category}
+                                            onClick={() => setMmlActiveCategory(cat.category)}
+                                            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${mmlActiveCategory === cat.category ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+                                        >
+                                            {cat.category} ({cat.count})
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* Таблица позиций */}
+                                <div className="flex-1 overflow-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-gray-50 sticky top-0">
+                                            <tr>
+                                                <th className="text-left px-4 py-2 font-medium">Позиция</th>
+                                                <th className="text-right px-4 py-2 font-medium w-32">Значение (кг)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {mmlActiveCategoryNodes.map(node => (
+                                                <tr key={node.id} className="border-b hover:bg-gray-50">
+                                                    <td className="px-4 py-2">{node.product.name}</td>
+                                                    <td className="px-4 py-2">
+                                                        <input
+                                                            type="number"
+                                                            step="0.001"
+                                                            className="w-full border rounded px-2 py-1 text-right"
+                                                            placeholder="0.000"
+                                                            value={mmlValues.get(node.id) || ''}
+                                                            onChange={(e) => updateMmlValue(node.id, e.target.value)}
+                                                        />
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                {/* Футер */}
+                                <div className="p-4 border-t flex justify-between items-center">
+                                    <div className="text-sm">
+                                        <span className="text-gray-500">Итого:</span>
+                                        <span className={`ml-2 font-bold text-lg ${mmlTotalValue > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                                            {formatNumber(mmlTotalValue, 3)} кг
+                                        </span>
+                                        {mmlTotalValue > 0 && mmlModalData.sourceQty > 0 && (
+                                            <span className={`ml-2 text-xs ${Math.abs(mmlTotalValue - mmlModalData.sourceQty) < 0.01 ? 'text-green-600' : 'text-orange-500'}`}>
+                                                ({formatNumber((mmlTotalValue / mmlModalData.sourceQty) * 100, 1)}%)
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Button variant="outline" onClick={() => { setShowMmlModal(false); setMmlModalData(null); setMmlCategories([]); setMmlValues(new Map()); }}>
+                                            Закрыть
+                                        </Button>
+                                        <Button
+                                            className={mmlModalData.sourceType === 'PURCHASE' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}
+                                            onClick={createRunFromSource}
+                                            disabled={mmlTotalValue === 0}
+                                        >
+                                            <Plus size={16} className="mr-1" /> Создать выработку
+                                        </Button>
+                                    </div>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}
