@@ -454,13 +454,35 @@ export const syncToOrders = async (req: Request, res: Response) => {
 
             // Сохраняем связь orderItemId в SummaryOrderJournal для обратной синхронизации
             if (orderItemId) {
-                await prisma.summaryOrderJournal.update({
-                    where: { id: entry.id },
-                    data: {
-                        orderItemId,
-                        status: 'synced'
+                try {
+                    // Проверяем, не занят ли уже этот orderItemId
+                    const existingLink = await prisma.summaryOrderJournal.findFirst({
+                        where: { orderItemId }
+                    });
+
+                    if (existingLink && existingLink.id !== entry.id) {
+                        // orderItemId уже привязан к другой записи, просто обновляем статус
+                        await prisma.summaryOrderJournal.update({
+                            where: { id: entry.id },
+                            data: { status: 'synced' }
+                        });
+                    } else {
+                        await prisma.summaryOrderJournal.update({
+                            where: { id: entry.id },
+                            data: {
+                                orderItemId,
+                                status: 'synced'
+                            }
+                        });
                     }
-                });
+                } catch (linkError) {
+                    // При ошибке unique constraint - просто обновляем статус
+                    console.log('[SYNC] orderItemId link skipped for entry', entry.id);
+                    await prisma.summaryOrderJournal.update({
+                        where: { id: entry.id },
+                        data: { status: 'synced' }
+                    });
+                }
             }
         }
 

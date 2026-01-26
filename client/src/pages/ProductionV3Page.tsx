@@ -153,11 +153,6 @@ export default function ProductionV3Page() {
     const [selectedPurchase, setSelectedPurchase] = useState<PurchaseItem | null>(null);
     const [selectedBalance, setSelectedBalance] = useState<OpeningBalanceItem | null>(null);
 
-    // MML структура для закупки/остатка
-    const [purchaseMmlCategories, setPurchaseMmlCategories] = useState<CategoryGroup[]>([]);
-    const [purchaseMmlActiveCategory, setPurchaseMmlActiveCategory] = useState<string | null>(null);
-    const [purchaseMmlLoading, setPurchaseMmlLoading] = useState(false);
-
     // ============================================
     // ЗАГРУЗКА ДАННЫХ
     // ============================================
@@ -305,36 +300,6 @@ export default function ProductionV3Page() {
             console.error('Failed to load balances:', err);
         } finally {
             setBalanceLoading(false);
-        }
-    };
-
-    // Загрузка MML структуры по productId (для закупки/остатка)
-    const loadMmlByProductId = async (productId: number) => {
-        setPurchaseMmlLoading(true);
-        setPurchaseMmlCategories([]);
-        setPurchaseMmlActiveCategory(null);
-        try {
-            // Сначала находим MML для этого продукта
-            const mmlRes = await axios.get(`${API_URL}/api/mmls`, {
-                params: { productId },
-                headers: { Authorization: `Bearer ${token}` }
-            });
-            const mmls = mmlRes.data;
-            if (mmls && mmls.length > 0) {
-                const mmlId = mmls[0].id;
-                // Загружаем категории MML
-                const catRes = await axios.get(`${API_URL}/api/production-v2/mml/${mmlId}/categories`, {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                setPurchaseMmlCategories(catRes.data);
-                if (catRes.data.length > 0) {
-                    setPurchaseMmlActiveCategory(catRes.data[0].category);
-                }
-            }
-        } catch (err) {
-            console.error('Failed to load MML by productId:', err);
-        } finally {
-            setPurchaseMmlLoading(false);
         }
     };
 
@@ -587,7 +552,6 @@ export default function ProductionV3Page() {
                                                 className={`flex items-center gap-2 px-4 py-2 border-b cursor-pointer transition-colors ${selectedPurchase?.purchaseItemId === item.purchaseItemId ? 'bg-green-100 border-l-4 border-green-600' : selectedPurchaseItems.has(item.purchaseItemId) ? 'bg-green-50 border-l-4 border-green-500' : 'hover:bg-gray-50'}`}
                                                 onClick={() => {
                                                     setSelectedPurchase(item);
-                                                    loadMmlByProductId(item.productId);
                                                     const newSet = new Set(selectedPurchaseItems);
                                                     if (newSet.has(item.purchaseItemId)) {
                                                         newSet.delete(item.purchaseItemId);
@@ -691,97 +655,41 @@ export default function ProductionV3Page() {
                         <div className="flex-1 flex flex-col">
                             {selectedPurchase ? (
                                 <>
-                                    {/* Шапка закупки */}
-                                    <div className="p-4 border-b bg-gradient-to-r from-green-50 to-green-100 flex justify-between items-center">
-                                        <div>
-                                            <h3 className="font-semibold text-lg text-green-800">{selectedPurchase.productName}</h3>
-                                            <div className="text-sm text-green-700 mt-1 flex items-center gap-4">
-                                                <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(selectedPurchase.purchaseDate).toLocaleDateString('ru-RU')}</span>
-                                                <span className="flex items-center gap-1"><User size={14} /> {selectedPurchase.supplierName}</span>
-                                            </div>
-                                        </div>
-                                        <div className="text-right">
-                                            <div className="text-2xl font-bold text-green-800">{formatNumber(selectedPurchase.qty, 2)} кг</div>
-                                            <div className="text-xs text-green-600">Количество закупки</div>
+                                    <div className="p-4 border-b bg-green-50">
+                                        <h3 className="font-semibold text-lg text-green-800">{selectedPurchase.productName}</h3>
+                                        <div className="text-sm text-green-700 mt-1">
+                                            Закупка от {new Date(selectedPurchase.purchaseDate).toLocaleDateString('ru-RU')}
                                         </div>
                                     </div>
-
-                                    {/* Вкладки категорий MML */}
-                                    {purchaseMmlLoading ? (
-                                        <div className="p-4 text-center text-gray-400">
-                                            <div className="animate-spin w-6 h-6 border-2 border-green-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                                            Загрузка MML структуры...
-                                        </div>
-                                    ) : purchaseMmlCategories.length > 0 ? (
-                                        <>
-                                            <div className="p-4 border-b flex gap-2 overflow-x-auto">
-                                                {purchaseMmlCategories.map(cat => (
-                                                    <button key={cat.category}
-                                                        onClick={() => setPurchaseMmlActiveCategory(cat.category)}
-                                                        className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${purchaseMmlActiveCategory === cat.category ? 'bg-green-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
-                                                        {cat.category}
-                                                    </button>
-                                                ))}
+                                    <div className="p-4 space-y-4">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <div className="text-xs text-gray-500 mb-1">Количество</div>
+                                                <div className="text-2xl font-bold text-green-700">{formatNumber(selectedPurchase.qty, 3)} кг</div>
                                             </div>
-
-                                            {/* Таблица MML позиций */}
-                                            <div className="flex-1 overflow-auto">
-                                                <div className="px-4 py-3 bg-green-50 border-b flex justify-between items-center sticky top-0">
-                                                    <span className="font-semibold text-green-800">Структура MML: {purchaseMmlActiveCategory || 'Выберите категорию'}</span>
-                                                    <Button size="sm" className="bg-green-600 hover:bg-green-700">
-                                                        <Plus size={14} className="mr-1" /> Добавить
-                                                    </Button>
-                                                </div>
-
-                                                {purchaseMmlCategories
-                                                    .filter(cat => cat.category === purchaseMmlActiveCategory)
-                                                    .map(cat => (
-                                                        <table key={cat.category} className="w-full text-sm">
-                                                            <thead className="bg-slate-50 sticky top-12">
-                                                                <tr>
-                                                                    <th className="text-left px-4 py-3 font-semibold text-slate-600">Позиция</th>
-                                                                    <th className="text-right px-4 py-3 font-semibold text-slate-600 w-32">Значение (кг)</th>
-                                                                    <th className="text-center px-4 py-3 font-semibold text-slate-600 w-24">Действие</th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody>
-                                                                {cat.nodes.map(node => (
-                                                                    <tr key={node.id} className="border-b hover:bg-slate-50">
-                                                                        <td className="px-4 py-3 font-medium">{node.product.name}</td>
-                                                                        <td className="px-4 py-3 text-right text-slate-400">—</td>
-                                                                        <td className="px-4 py-3 text-center">
-                                                                            <button className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors">
-                                                                                <Plus size={18} />
-                                                                            </button>
-                                                                        </td>
-                                                                    </tr>
-                                                                ))}
-                                                            </tbody>
-                                                        </table>
-                                                    ))}
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <div className="flex-1 flex items-center justify-center text-gray-400">
-                                            <div className="text-center">
-                                                <Package size={48} className="mx-auto mb-4 text-gray-300" />
-                                                <p>Нет MML структуры для этого товара</p>
-                                                <Button className="mt-4 bg-green-600 hover:bg-green-700" onClick={() => {
-                                                    setWarning(`Создание выработки из закупки ${selectedPurchase.productName} (в разработке)`);
-                                                    setTimeout(() => setWarning(null), 3000);
-                                                }}>
-                                                    <Plus size={16} className="mr-1" /> Создать выработку без MML
-                                                </Button>
+                                            <div className="bg-gray-50 rounded-lg p-4">
+                                                <div className="text-xs text-gray-500 mb-1">Поставщик</div>
+                                                <div className="text-lg font-semibold">{selectedPurchase.supplierName}</div>
                                             </div>
                                         </div>
-                                    )}
+                                        <div className="bg-gray-50 rounded-lg p-4">
+                                            <div className="text-xs text-gray-500 mb-1">Категория</div>
+                                            <div className="text-md">{selectedPurchase.category || 'Не указана'}</div>
+                                        </div>
+                                        <Button className="w-full bg-green-600 hover:bg-green-700" onClick={() => {
+                                            setWarning(`Создание выработки из закупки ${selectedPurchase.productName} (в разработке)`);
+                                            setTimeout(() => setWarning(null), 3000);
+                                        }}>
+                                            <Plus size={16} className="mr-1" /> Создать выработку из этой закупки
+                                        </Button>
+                                    </div>
                                 </>
                             ) : (
                                 <div className="flex-1 flex items-center justify-center text-gray-400">
                                     <div className="text-center">
                                         <Download size={48} className="mx-auto mb-4 text-green-300" />
                                         <p>Выберите позицию закупки</p>
-                                        <p className="text-sm mt-1">для просмотра MML структуры</p>
+                                        <p className="text-sm mt-1">или отметьте несколько для массового импорта</p>
                                     </div>
                                 </div>
                             )}
@@ -890,7 +798,7 @@ export default function ProductionV3Page() {
                                     }, 0);
                                     return (
                                         <button key={cat.category}
-                                            onClick={() => setActiveCategory(cat.category)}
+                                            onClick={() => { setActiveCategory(cat.category); setShowCategoryModal(true); }}
                                             className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex flex-col items-center gap-1 ${activeCategory === cat.category ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
                                             <span>{cat.category}</span>
                                             <span className={`text-xs ${activeCategory === cat.category ? 'text-indigo-100' : 'text-gray-500'}`}>
@@ -901,106 +809,42 @@ export default function ProductionV3Page() {
                                 })}
                             </div>
 
-                            {/* Таблица MML позиций - inline */}
-                            <div className="flex-1 overflow-auto">
-                                {/* Заголовок таблицы */}
-                                <div className="px-4 py-3 bg-slate-100 border-b flex justify-between items-center sticky top-0">
-                                    <div className="flex items-center gap-2">
-                                        <span className="font-semibold text-slate-700">Структура MML: {activeCategory || 'Выберите категорию'}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-sm text-slate-500">Всего: </span>
-                                        <span className="font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 2)} кг</span>
-                                        {!selectedRun.isLocked && (
-                                            <Button size="sm" className="bg-green-600 hover:bg-green-700 ml-2"
-                                                onClick={() => { setSelectedNodeForValue(activeCategoryNodes[0] || null); setShowAddValueModal(true); }}>
-                                                <Plus size={14} className="mr-1" /> Добавить
-                                            </Button>
-                                        )}
+                            {/* Превью категории */}
+                            <div className="flex-1 overflow-auto p-4">
+                                <div className="flex justify-between items-center mb-3">
+                                    <p className="text-gray-500 text-sm">Нажмите на категорию для редактирования позиций</p>
+                                    <div className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1 rounded">
+                                        Всего: {formatNumber(calculateActualWeight(), 3)} кг
                                     </div>
                                 </div>
-
-                                {/* Таблица позиций */}
                                 {activeCategoryNodes.length > 0 && (
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-slate-50 sticky top-12">
-                                            <tr>
-                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Позиция</th>
-                                                <th className="text-right px-4 py-3 font-semibold text-slate-600 w-32">Значение (кг)</th>
-                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Сотрудник</th>
-                                                <th className="text-left px-4 py-3 font-semibold text-slate-600">Добавлено</th>
-                                                <th className="text-center px-4 py-3 font-semibold text-slate-600 w-24">Действие</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {activeCategoryNodes.map(node => {
-                                                const entries = runValues.get(node.id) || [];
-                                                if (entries.length === 0) {
-                                                    return (
-                                                        <tr key={node.id} className="border-b hover:bg-slate-50">
-                                                            <td className="px-4 py-3 font-medium">{node.product.name}</td>
-                                                            <td className="px-4 py-3 text-right text-slate-400">—</td>
-                                                            <td className="px-4 py-3 text-slate-400">—</td>
-                                                            <td className="px-4 py-3 text-slate-400">—</td>
-                                                            <td className="px-4 py-3 text-center">
-                                                                <button onClick={() => { setSelectedNodeForValue(node); setShowAddValueModal(true); }}
-                                                                    className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors"
-                                                                    disabled={selectedRun?.isLocked}>
-                                                                    <Plus size={18} />
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                }
-                                                return entries.map((entry, idx) => (
-                                                    <tr key={entry.id} className="border-b hover:bg-slate-50">
-                                                        {idx === 0 && <td className="px-4 py-3 font-medium" rowSpan={entries.length}>{node.product.name}</td>}
-                                                        <td className="px-4 py-3 text-right font-semibold text-indigo-700 tabular-nums">{formatNumber(Number(entry.value), 3)}</td>
-                                                        <td className="px-4 py-3">{entry.staff?.fullName || '—'}</td>
-                                                        <td className="px-4 py-3 text-xs text-slate-500">
-                                                            {entry.recordedAt ? new Date(entry.recordedAt).toLocaleString('ru-RU') : '—'}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-center">
-                                                            <div className="flex justify-center gap-1">
-                                                                <button onClick={() => { setEditingValueId(entry.id); setNewValueAmount(String(entry.value || '')); setShowAddValueModal(true); }}
-                                                                    className="text-blue-600 hover:text-blue-800 p-1 rounded hover:bg-blue-50 transition-colors"
-                                                                    disabled={selectedRun?.isLocked}>
-                                                                    <Edit2 size={16} />
-                                                                </button>
-                                                                {idx === entries.length - 1 && (
-                                                                    <button onClick={() => { setSelectedNodeForValue(node); setShowAddValueModal(true); }}
-                                                                        className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50 transition-colors"
-                                                                        disabled={selectedRun?.isLocked}>
-                                                                        <Plus size={16} />
-                                                                    </button>
-                                                                )}
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                ));
-                                            })}
-                                        </tbody>
+                                    <div className="border rounded-lg overflow-hidden shadow-sm">
+                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-3 flex justify-between text-xs font-semibold text-gray-700 border-b">
+                                            <span>Позиция</span>
+                                            <span>Итого (кг)</span>
+                                        </div>
+                                        {activeCategoryNodes.map((node, idx) => {
+                                            const entries = runValues.get(node.id) || [];
+                                            const total = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                            return (
+                                                <div key={node.id} className={`flex items-center gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                                                    <Package size={16} className={total > 0 ? 'text-indigo-500' : 'text-gray-300'} />
+                                                    <span className="flex-1 text-sm">{node.product.name}</span>
+                                                    <span className={`text-sm font-semibold tabular-nums ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
+                                                        {total > 0 ? formatNumber(total, 3) : '—'}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
                                         {/* Итоговая строка */}
-                                        <tfoot>
-                                            <tr className="bg-indigo-100 font-semibold">
-                                                <td className="px-4 py-3 text-indigo-900">ИТОГО</td>
-                                                <td className="px-4 py-3 text-right text-indigo-800 text-base tabular-nums">
-                                                    {formatNumber(activeCategoryNodes.reduce((sum, node) => {
-                                                        const entries = runValues.get(node.id) || [];
-                                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                                    }, 0), 3)} кг
-                                                </td>
-                                                <td colSpan={3}></td>
-                                            </tr>
-                                        </tfoot>
-                                    </table>
-                                )}
-
-                                {activeCategoryNodes.length === 0 && (
-                                    <div className="flex-1 flex items-center justify-center py-12 text-slate-400">
-                                        <div className="text-center">
-                                            <Package size={48} className="mx-auto mb-4 text-slate-300" />
-                                            <p>Нажмите на вкладку для редактирования позиций</p>
+                                        <div className="flex items-center gap-3 px-4 py-3 bg-indigo-100 border-t-2 border-indigo-200">
+                                            <span className="flex-1 text-sm font-semibold text-indigo-900">ИТОГО по категории</span>
+                                            <span className="text-base font-bold text-indigo-800 tabular-nums">
+                                                {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                                    const entries = runValues.get(node.id) || [];
+                                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                }, 0), 3)} кг
+                                            </span>
                                         </div>
                                     </div>
                                 )}
