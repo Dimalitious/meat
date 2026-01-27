@@ -96,8 +96,13 @@ async function buildSvodPreview(svodDate: Date) {
     // ============================================
     console.time('buildSvodPreview:fetchSources');
 
+    // Дата предыдущего дня для остатков
+    const previousDate = new Date(svodDate);
+    previousDate.setDate(previousDate.getDate() - 1);
+    previousDate.setUTCHours(0, 0, 0, 0);
+
     // ОПТИМИЗАЦИЯ: Используем SQL агрегацию для заказов вместо загрузки всех записей
-    const [orderAggregates, ordersCountResult, stockItems, purchases, productionValues] = await Promise.all([
+    const [orderAggregates, ordersCountResult, previousReportLines, purchases, productionValues] = await Promise.all([
         // A1: Агрегация заказов по товарам через SQL
         prisma.$queryRaw<{ productId: number; totalQty: number }[]>`
             SELECT "productId", SUM("orderQty") as "totalQty"
@@ -118,10 +123,20 @@ async function buildSvodPreview(svodDate: Date) {
               AND "status" IN ('draft', 'forming', 'synced')
         `,
 
-        // B: Товары с остатком (из Stock)
-        prisma.stock.findMany({
-            where: { quantity: { gt: 0 } },
-            select: { productId: true, quantity: true }
+        // B: Остатки на начало дня из материального отчёта за предыдущий день
+        // Берём closingBalanceFact (если введён) или closingBalanceCalc
+        prisma.materialReportLine.findMany({
+            where: {
+                materialReport: {
+                    reportDate: previousDate,
+                    warehouseId: null
+                }
+            },
+            select: {
+                productId: true,
+                closingBalanceCalc: true,
+                closingBalanceFact: true
+            }
         }),
 
         // C: Товары из закупок на дату
@@ -166,16 +181,28 @@ async function buildSvodPreview(svodDate: Date) {
 
     // A: Заказы уже агрегированы через SQL
     const ordersByProduct = new Map<number, number>();
+    console.log('[SVOD DEBUG] orderAggregates count:', orderAggregates.length);
+    console.log('[SVOD DEBUG] orderAggregates raw:', JSON.stringify(orderAggregates.slice(0, 5)));
     for (const row of orderAggregates) {
-        ordersByProduct.set(row.productId, Number(row.totalQty));
+        // Приводим к Number явно, т.к. PostgreSQL может вернуть BigInt
+        const productId = Number(row.productId);
+        const totalQty = Number(row.totalQty);
+        console.log('[SVOD DEBUG] order row:', { productId, totalQty, rawProductId: row.productId, type: typeof row.productId });
+        ordersByProduct.set(productId, totalQty);
     }
     const ordersCount = Number(ordersCountResult[0]?.ordersCount || 0);
     const totalOrderKg = Number(ordersCountResult[0]?.totalKg || 0);
+    console.log('[SVOD DEBUG] ordersCount:', ordersCount, 'totalOrderKg:', totalOrderKg);
+    console.log('[SVOD DEBUG] ordersByProduct size:', ordersByProduct.size);
 
-    // B: Агрегируем остатки
+    // B: Агрегируем остатки из материального отчёта за предыдущий день
     const stockByProduct = new Map<number, number>();
-    for (const stock of stockItems) {
-        stockByProduct.set(stock.productId, Number(stock.quantity));
+    for (const line of previousReportLines) {
+        // Используем фактический остаток если введён, иначе расчётный
+        const balance = line.closingBalanceFact !== null
+            ? Number(line.closingBalanceFact)
+            : Number(line.closingBalanceCalc);
+        stockByProduct.set(line.productId, balance);
     }
 
     // C: Агрегируем закупки по товарам и поставщикам
@@ -214,6 +241,8 @@ async function buildSvodPreview(svodDate: Date) {
         ...Array.from(purchasesByProduct.keys()),
         ...Array.from(productionByProduct.keys())
     ]);
+    console.log('[SVOD DEBUG] Product sources - orders:', ordersByProduct.size, 'stock:', stockByProduct.size, 'purchases:', purchasesByProduct.size, 'production:', productionByProduct.size);
+    console.log('[SVOD DEBUG] allProductIds count:', allProductIds.size);
 
     // ============================================
     // ТОП-10 поставщиков по сумме закупленного количества
@@ -227,6 +256,7 @@ async function buildSvodPreview(svodDate: Date) {
     // ОПТИМИЗАЦИЯ: Параллельный запрос товаров и поставщиков
     console.time('buildSvodPreview:fetchProducts');
     const productIdsArray = Array.from(allProductIds);
+    console.log('[SVOD DEBUG] Querying products with IDs:', productIdsArray.slice(0, 10), '...');
     const [products, suppliersData] = await Promise.all([
         productIdsArray.length > 0
             ? prisma.product.findMany({
@@ -241,6 +271,8 @@ async function buildSvodPreview(svodDate: Date) {
             })
             : Promise.resolve([])
     ]);
+    console.log('[SVOD DEBUG] Found products (active):', products.length);
+    console.timeEnd('buildSvodPreview:fetchProducts');
     console.timeEnd('buildSvodPreview:fetchProducts');
 
     const productsMap = new Map(products.map(p => [p.id, p]));

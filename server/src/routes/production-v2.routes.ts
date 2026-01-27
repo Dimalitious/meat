@@ -11,6 +11,8 @@ import {
     deleteNode,
     toggleMmlLock,
     deleteMml,
+    softDeleteMml,
+    restoreMml,
     // Production Run
     getProductionRuns,
     getProductionRunById,
@@ -67,6 +69,12 @@ router.delete('/mml/node/:nodeId', deleteNode);
 
 // Зафиксировать/разблокировать MML
 router.patch('/mml/:id/lock', toggleMmlLock);
+
+// Мягкое удаление MML
+router.patch('/mml/:id/soft-delete', softDeleteMml);
+
+// Восстановить MML
+router.patch('/mml/:id/restore', restoreMml);
 
 // Удалить MML
 router.delete('/mml/:id', deleteMml);

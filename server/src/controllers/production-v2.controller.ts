@@ -12,9 +12,14 @@ const prisma = new PrismaClient();
  */
 export const getMmlList = async (req: Request, res: Response) => {
     try {
-        const { search, isLocked } = req.query;
+        const { search, isLocked, showDeleted } = req.query;
 
         const where: any = {};
+
+        // По умолчанию не показываем удалённые
+        if (showDeleted !== 'true') {
+            where.isDeleted = false;
+        }
 
         if (search) {
             where.product = {
@@ -184,7 +189,7 @@ export const createMml = async (req: Request, res: Response) => {
                     select: { id: true, code: true, name: true, priceListName: true }
                 },
                 creator: {
-                    select: { id: true, name: true }
+                    select: { id: true, name: true, username: true }
                 }
             }
         });
@@ -412,6 +417,62 @@ export const deleteMml = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('deleteMml error:', error);
         res.status(500).json({ error: 'Failed to delete MML' });
+    }
+};
+
+/**
+ * Мягкое удаление MML (пометить как удалённый)
+ */
+export const softDeleteMml = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+
+        const mml = await prisma.productionMml.findUnique({ where: { id } });
+        if (!mml) {
+            return res.status(404).json({ error: 'MML not found' });
+        }
+
+        const updated = await prisma.productionMml.update({
+            where: { id },
+            data: { isDeleted: true },
+            include: {
+                product: { select: { id: true, code: true, name: true } },
+                creator: { select: { id: true, name: true, username: true } }
+            }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        console.error('softDeleteMml error:', error);
+        res.status(500).json({ error: 'Failed to soft delete MML' });
+    }
+};
+
+/**
+ * Восстановить MML (снять пометку удаления)
+ */
+export const restoreMml = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+
+        const mml = await prisma.productionMml.findUnique({ where: { id } });
+        if (!mml) {
+            return res.status(404).json({ error: 'MML not found' });
+        }
+
+        const updated = await prisma.productionMml.update({
+            where: { id },
+            data: { isDeleted: false },
+            include: {
+                product: { select: { id: true, code: true, name: true } },
+                creator: { select: { id: true, name: true, username: true } }
+            }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        console.error('restoreMml error:', error);
+        res.status(500).json({ error: 'Failed to restore MML' });
     }
 };
 

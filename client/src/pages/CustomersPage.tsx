@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import {
@@ -12,7 +11,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Plus, X, Save, Settings, FileText, Trash2, Upload, Image } from 'lucide-react';
+import { Plus, X, Save, Settings, FileText, Trash2, Upload, Image, Download, Archive } from 'lucide-react';
 
 interface District {
     id: number;
@@ -96,6 +95,7 @@ const CustomersPage = () => {
     const [filterDistrict, setFilterDistrict] = useState('');
     const [filterManager, setFilterManager] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const zipInputRef = useRef<HTMLInputElement>(null);
 
     // Customer Card Modal state
     const [isCardModalOpen, setIsCardModalOpen] = useState(false);
@@ -362,76 +362,117 @@ const CustomersPage = () => {
         }
     };
 
-    // Excel import
-    const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Скачать шаблон импорта с сервера
+    const downloadTemplate = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await axios.get(`${API_URL}/api/customers/template`, {
+                headers: { Authorization: `Bearer ${token}` },
+                responseType: 'blob'
+            });
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'customers_import_template.xlsx');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Failed to download template:', err);
+            alert('Ошибка скачивания шаблона');
+        }
+    };
+
+    // Серверный импорт клиентов с карточками
+    const handleServerImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-            try {
-                const data = evt.target?.result;
-                const workbook = XLSX.read(data, { type: 'binary' });
-                const sheetName = workbook.SheetNames[0];
-                const sheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(sheet);
+        try {
+            const token = localStorage.getItem('token');
+            const formData = new FormData();
+            formData.append('file', file);
 
-                const token = localStorage.getItem('token');
-                let imported = 0;
-
-                // Helper function to get value case-insensitively
-                const getVal = (row: any, ...keys: string[]) => {
-                    for (const key of keys) {
-                        const found = Object.keys(row).find(k => k.toLowerCase().trim() === key.toLowerCase().trim());
-                        if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') {
-                            return String(row[found]);
-                        }
-                    }
-                    return '';
-                };
-
-                console.log('Excel data:', jsonData);
-                console.log('First row keys:', jsonData.length > 0 ? Object.keys(jsonData[0] as object) : 'no data');
-
-                for (const row of jsonData as any[]) {
-                    const code = getVal(row, 'код', 'code');
-                    const name = getVal(row, 'название', 'name');
-                    console.log('Row:', { code, name, row });
-                    if (!code || !name) continue;
-
-                    // Find district and manager by name
-                    const districtName = getVal(row, 'район', 'district');
-                    const managerName = getVal(row, 'менеджер', 'manager');
-
-                    const district = districts.find(d =>
-                        d.name.toLowerCase() === districtName.toLowerCase()
-                    );
-                    const manager = managers.find(m =>
-                        m.name.toLowerCase() === managerName.toLowerCase()
-                    );
-
-                    try {
-                        await axios.post(`${API_URL}/api/customers`, {
-                            code,
-                            name,
-                            legalName: getVal(row, 'юр. название', 'legalname', 'юр название'),
-                            districtId: district?.code || null,
-                            managerId: manager?.code || null
-                        }, { headers: { Authorization: `Bearer ${token}` } });
-                        imported++;
-                    } catch (err) {
-                        console.warn('Skip duplicate:', code);
-                    }
+            const response = await axios.post(`${API_URL}/api/customers/import`, formData, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'multipart/form-data'
                 }
+            });
 
-                alert(`Импортировано ${imported} клиентов`);
-                fetchCustomers();
-            } catch (err) {
-                console.error('Excel import error:', err);
-                alert('Ошибка импорта Excel');
+            const result = response.data;
+            let message = result.message;
+            if (result.errors && result.errors.length > 0) {
+                message += `\n\nОшибки:\n${result.errors.slice(0, 10).join('\n')}`;
+                if (result.errors.length > 10) {
+                    message += `\n... и ещё ${result.errors.length - 10} ошибок`;
+                }
             }
-        };
-        reader.readAsBinaryString(file);
+            alert(message);
+            fetchCustomers();
+        } catch (err: any) {
+            console.error('Server import error:', err);
+            alert('Ошибка импорта: ' + (err.response?.data?.error || err.message));
+        }
+        e.target.value = '';
+    };
+
+    // Экспорт клиентов с карточками и фото в ZIP
+    const exportWithPhotos = async () => {
+        try {
+            const token = localStorage.getItem('token');
+            const response = await axios.get(`${API_URL}/api/customers/export`, {
+                headers: { Authorization: `Bearer ${token}` },
+                responseType: 'blob'
+            });
+
+            const url = window.URL.createObjectURL(new Blob([response.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'customers_export.zip');
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Failed to export:', err);
+            alert('Ошибка экспорта');
+        }
+    };
+
+    // Импорт из ZIP с фото
+    const handleZipImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await axios.post(`${API_URL}/api/customers/import-zip`, formData, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'multipart/form-data'
+                }
+            });
+
+            const result = response.data;
+            let message = result.message;
+            if (result.errors && result.errors.length > 0) {
+                message += `\n\nОшибки:\n${result.errors.slice(0, 10).join('\n')}`;
+                if (result.errors.length > 10) {
+                    message += `\n... и ещё ${result.errors.length - 10} ошибок`;
+                }
+            }
+            alert(message);
+            fetchCustomers();
+        } catch (err: any) {
+            console.error('ZIP import error:', err);
+            alert('Ошибка импорта ZIP: ' + (err.response?.data?.error || err.message));
+        }
         e.target.value = '';
     };
 
@@ -451,16 +492,32 @@ const CustomersPage = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-900">Клиенты</h1>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                     <input
                         type="file"
                         accept=".xlsx,.xls"
                         ref={fileInputRef}
-                        onChange={handleExcelImport}
+                        onChange={handleServerImport}
                         className="hidden"
                     />
-                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
-                        📥 Загрузить Excel
+                    <input
+                        type="file"
+                        accept=".zip"
+                        ref={zipInputRef}
+                        onChange={handleZipImport}
+                        className="hidden"
+                    />
+                    <Button onClick={downloadTemplate} variant="outline" className="flex items-center gap-2" title="Скачать пустой шаблон Excel">
+                        <Download size={16} /> Шаблон
+                    </Button>
+                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2" title="Импорт из Excel (без фото)">
+                        <Upload size={16} /> Импорт Excel
+                    </Button>
+                    <Button onClick={exportWithPhotos} variant="outline" className="flex items-center gap-2 bg-green-50 border-green-300 text-green-700 hover:bg-green-100" title="Экспорт всех клиентов с карточками и фото">
+                        <Archive size={16} /> Экспорт ZIP
+                    </Button>
+                    <Button onClick={() => zipInputRef.current?.click()} variant="outline" className="flex items-center gap-2 bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100" title="Импорт из ZIP с фото">
+                        <Archive size={16} /> Импорт ZIP
                     </Button>
                     <Button onClick={handleCreate} className="flex items-center gap-2">
                         <Plus size={16} /> Новый клиент
@@ -792,8 +849,25 @@ const CustomersPage = () => {
                                                         </button>
                                                     </div>
 
+                                                    {/* Description - перемещено сюда, под название */}
+                                                    <textarea
+                                                        className="w-full border rounded px-3 py-2 text-sm resize-none mb-4"
+                                                        rows={3}
+                                                        placeholder="Детальное описание разделки..."
+                                                        value={item.description || ''}
+                                                        onChange={e => {
+                                                            setCustomerCard({
+                                                                ...customerCard,
+                                                                items: customerCard.items.map(i =>
+                                                                    i.id === item.id ? { ...i, description: e.target.value } : i
+                                                                )
+                                                            });
+                                                        }}
+                                                        onBlur={e => updateCardItemDescription(item.id, e.target.value)}
+                                                    />
+
                                                     {/* Photos row */}
-                                                    <div className="flex gap-3 mb-4">
+                                                    <div className="flex gap-3">
                                                         {[0, 1, 2].map(idx => {
                                                             const photo = item.photos[idx];
                                                             return (
@@ -832,23 +906,6 @@ const CustomersPage = () => {
                                                             );
                                                         })}
                                                     </div>
-
-                                                    {/* Description */}
-                                                    <textarea
-                                                        className="w-full border rounded px-3 py-2 text-sm resize-none"
-                                                        rows={3}
-                                                        placeholder="Детальное описание разделки..."
-                                                        value={item.description || ''}
-                                                        onChange={e => {
-                                                            setCustomerCard({
-                                                                ...customerCard,
-                                                                items: customerCard.items.map(i =>
-                                                                    i.id === item.id ? { ...i, description: e.target.value } : i
-                                                                )
-                                                            });
-                                                        }}
-                                                        onBlur={e => updateCardItemDescription(item.id, e.target.value)}
-                                                    />
                                                 </div>
                                             ))}
                                         </div>

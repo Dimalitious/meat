@@ -28,6 +28,7 @@ interface MaterialReportLine {
     outWaste: number;
     outBundle: number;
     outDefectWriteoff: number;
+    outProductionWriteoff: number;  // Списано в производство
     outWeightLoss: number;
     outSupplierReturn: number;
     closingBalanceCalc: number;
@@ -68,11 +69,11 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
     const [report, setReport] = useState<MaterialReportData | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
     const [isPreview, setIsPreview] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
     const [editedFacts, setEditedFacts] = useState<Map<number, number | null>>(new Map());
     const [error, setError] = useState<string | null>(null);
+    const [hasDataChanges, setHasDataChanges] = useState(false); // Отслеживание изменений данных после сохранения
 
     // Загрузка данных отчёта
     const fetchReport = useCallback(async () => {
@@ -80,13 +81,15 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
             setLoading(true);
             setError(null);
             const token = localStorage.getItem('token');
+            // Всегда запрашиваем пересчёт данных
             const res = await axios.get(`${API_URL}/api/material-report`, {
-                params: { date: selectedDate },
+                params: { date: selectedDate, refresh: 'true' },
                 headers: { Authorization: `Bearer ${token}` }
             });
 
             setReport(res.data.report);
             setIsPreview(res.data.isPreview);
+            setHasDataChanges(res.data.hasChanges || false); // Если данные изменились после сохранения
             setEditedFacts(new Map());
         } catch (err: any) {
             console.error('Failed to fetch material report:', err);
@@ -100,27 +103,7 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
         fetchReport();
     }, [fetchReport]);
 
-    // Обновить отчёт (кнопка "Обновить отчет")
-    const handleRefresh = async () => {
-        try {
-            setRefreshing(true);
-            setError(null);
-            const token = localStorage.getItem('token');
-            const res = await axios.post(`${API_URL}/api/material-report/refresh`,
-                { date: selectedDate },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
 
-            setReport(res.data.report);
-            setIsPreview(false);
-            // Не сбрасываем editedFacts - они должны сохраниться с сервера
-        } catch (err: any) {
-            console.error('Failed to refresh material report:', err);
-            setError(err.response?.data?.error || 'Ошибка обновления отчёта');
-        } finally {
-            setRefreshing(false);
-        }
-    };
 
     // Сохранить отчёт (кнопка "Сохранить отчет")
     const handleSave = async () => {
@@ -157,6 +140,7 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
             setReport(res.data.report);
             setIsPreview(false);
             setEditedFacts(new Map());
+            setHasDataChanges(false); // Сбрасываем флаг изменений после сохранения
             alert('Отчёт сохранён успешно!');
         } catch (err: any) {
             console.error('Failed to save material report:', err);
@@ -232,7 +216,8 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
             'Отход': line.outWaste || 0,
             'Пучок': line.outBundle || 0,
             'Брак': line.outDefectWriteoff || 0,
-            'Потеря веса': line.outWeightLoss || 0,
+            'Спис. в пр-во': line.outProductionWriteoff || 0,
+            'Списали': line.outWeightLoss || 0,
             'Возврат пост.': line.outSupplierReturn || 0,
             'Расч. остаток': line.closingBalanceCalc || 0,
             'Факт. остаток': getFactValue(line) ?? ''
@@ -295,26 +280,15 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                             />
                         </div>
 
-                        {/* Кнопка Обновить отчёт */}
-                        <button
-                            onClick={handleRefresh}
-                            disabled={refreshing}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${refreshing
-                                ? 'bg-gray-300 cursor-not-allowed'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                }`}
-                        >
-                            <RefreshCw className={refreshing ? 'animate-spin' : ''} size={16} />
-                            {refreshing ? 'Обновление...' : 'Обновить отчёт'}
-                        </button>
+
 
                         {/* Кнопка Сохранить отчёт */}
                         <button
                             onClick={handleSave}
-                            disabled={saving || (editedFacts.size === 0 && !isPreview)}
+                            disabled={saving || (editedFacts.size === 0 && !isPreview && !hasDataChanges)}
                             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${saving
                                 ? 'bg-gray-300 cursor-not-allowed'
-                                : editedFacts.size > 0 || isPreview
+                                : editedFacts.size > 0 || isPreview || hasDataChanges
                                     ? 'bg-green-600 hover:bg-green-700 text-white'
                                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                                 }`}
@@ -352,22 +326,21 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                             <th className="border px-3 py-2 text-left w-20" rowSpan={2}>Код</th>
                             <th className="border px-3 py-2 text-left" rowSpan={2}>Наименование товара</th>
                             <th className="border px-3 py-2 text-center w-16" rowSpan={2}>МЕМ</th>
-                            <th className="border px-3 py-2 text-center bg-blue-50" colSpan={3}>Поступления</th>
-                            <th className="border px-3 py-2 text-center bg-red-50" colSpan={6}>Расход</th>
+                            <th className="border px-3 py-2 text-center bg-blue-50" colSpan={4}>Поступления</th>
+                            <th className="border px-3 py-2 text-center bg-red-50" colSpan={4}>Расход</th>
                             <th className="border px-3 py-2 text-center bg-green-50" colSpan={2}>Остатки</th>
                         </tr>
                         <tr>
-                            <th className="border px-2 py-1 text-right bg-blue-50 w-20">На начало</th>
-                            <th className="border px-2 py-1 text-right bg-blue-50 w-20">Закупка</th>
-                            <th className="border px-2 py-1 text-right bg-blue-50 w-20">Пр-во</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-20">Продано</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-16">Отход</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-16">Пучок</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-16">Брак</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-16">П.веса</th>
-                            <th className="border px-2 py-1 text-right bg-red-50 w-20">Возврат</th>
-                            <th className="border px-2 py-1 text-right bg-green-50 w-24">Расч. остаток</th>
-                            <th className="border px-2 py-1 text-right bg-yellow-50 w-28">Факт. остаток</th>
+                            <th className="border px-2 py-1 text-center bg-blue-50 w-20 whitespace-normal">На начало</th>
+                            <th className="border px-2 py-1 text-center bg-blue-50 w-20">Закупка</th>
+                            <th className="border px-2 py-1 text-center bg-blue-50 w-20">Пр-во</th>
+                            <th className="border px-2 py-1 text-center bg-blue-50 w-24 whitespace-normal">Возврат от покупателя</th>
+                            <th className="border px-2 py-1 text-center bg-red-50 w-20">Продано</th>
+                            <th className="border px-2 py-1 text-center bg-red-50 w-24 whitespace-normal">Спис. в пр-во</th>
+                            <th className="border px-2 py-1 text-center bg-red-50 w-20">Списали</th>
+                            <th className="border px-2 py-1 text-center bg-red-50 w-24 whitespace-normal">Возврат поставщику</th>
+                            <th className="border px-2 py-1 text-center bg-green-50 w-24">Расч. остаток</th>
+                            <th className="border px-2 py-1 text-center bg-yellow-50 w-28">Факт. остаток</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -375,7 +348,7 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                             <React.Fragment key={`group-${category}`}>
                                 {/* Заголовок категории */}
                                 <tr className="bg-gray-200">
-                                    <td colSpan={14} className="px-3 py-2 font-bold text-gray-700">
+                                    <td colSpan={12} className="px-3 py-2 font-bold text-gray-700">
                                         📦 {category} ({lines.length})
                                     </td>
                                 </tr>
@@ -429,17 +402,14 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                                             <td className="border px-2 py-1 text-right bg-blue-50/30">
                                                 {formatNumber(line.inProduction)}
                                             </td>
+                                            <td className="border px-2 py-1 text-right bg-blue-50/30">
+                                                {formatNumber(0)}{/* Возврат от покупателя - TODO */}
+                                            </td>
                                             <td className="border px-2 py-1 text-right bg-red-50/30">
                                                 {formatNumber(line.outSale)}
                                             </td>
                                             <td className="border px-2 py-1 text-right bg-red-50/30">
-                                                {formatNumber(line.outWaste)}
-                                            </td>
-                                            <td className="border px-2 py-1 text-right bg-red-50/30">
-                                                {formatNumber(line.outBundle)}
-                                            </td>
-                                            <td className="border px-2 py-1 text-right bg-red-50/30">
-                                                {formatNumber(line.outDefectWriteoff)}
+                                                {formatNumber(line.outProductionWriteoff)}
                                             </td>
                                             <td className="border px-2 py-1 text-right bg-red-50/30">
                                                 {formatNumber(line.outWeightLoss)}
@@ -471,7 +441,7 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                         ))}
                         {filteredLines.length === 0 && (
                             <tr>
-                                <td colSpan={14} className="text-center py-8 text-gray-500">
+                                <td colSpan={12} className="text-center py-8 text-gray-500">
                                     {searchTerm ? 'Товары не найдены' : 'Нет данных для отображения'}
                                 </td>
                             </tr>

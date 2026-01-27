@@ -106,6 +106,9 @@ export default function SummaryOrdersPage() {
     const [loading, setLoading] = useState(true);
 
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteProgress, setDeleteProgress] = useState(0);
+    const [selectAllOnDate, setSelectAllOnDate] = useState(false); // Выбрать ВСЕ на дату
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Вкладки (Заказы / СВОД / Отчет)
@@ -115,7 +118,7 @@ export default function SummaryOrdersPage() {
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
     const [totalCount, setTotalCount] = useState(0);
-    const LIMIT = 50;
+    const LIMIT = 100;
 
     // Filters
     const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
@@ -356,6 +359,7 @@ export default function SummaryOrdersPage() {
 
 
     const toggleSelect = (id: number) => {
+        setSelectAllOnDate(false); // Снимаем режим "все на дату"
         const newSelected = new Set(selectedIds);
         if (newSelected.has(id)) newSelected.delete(id);
         else newSelected.add(id);
@@ -364,29 +368,86 @@ export default function SummaryOrdersPage() {
 
     const toggleSelectAll = () => {
         const selectable = entries.filter(e => e.status !== 'synced');
-        if (selectedIds.size === selectable.length) {
+
+        if (selectAllOnDate) {
+            // Если было "все на дату" — снимаем всё
             setSelectedIds(new Set());
+            setSelectAllOnDate(false);
+        } else if (selectedIds.size === selectable.length && selectable.length > 0) {
+            // Если все видимые уже выбраны — переключаем на "все на дату"
+            setSelectAllOnDate(true);
         } else {
+            // Первый клик или частичный выбор — выбираем все видимые
             setSelectedIds(new Set(selectable.map(e => e.id)));
         }
     };
 
+    const allSelected = selectAllOnDate || (entries.length > 0 && selectedIds.size === entries.filter(e => e.status !== 'synced').length);
+
     const deleteSelected = async () => {
-        if (selectedIds.size === 0) return;
+        if (selectedIds.size === 0 && !selectAllOnDate) return;
+
+        const token = localStorage.getItem('token');
+        const headers = { Authorization: `Bearer ${token}` };
+
+        // Если выбраны "все на дату"
+        if (selectAllOnDate) {
+            if (!confirm(`Удалить ВСЕ записи за ${new Date(filterDate).toLocaleDateString('ru-RU')}? (кроме синхронизированных)`)) return;
+
+            setIsDeleting(true);
+            setDeleteProgress(10);
+
+            try {
+                const response = await axios.post(`${API_URL}/api/summary-orders/bulk-delete`, {
+                    date: filterDate,
+                    excludeSynced: true
+                }, { headers });
+
+                setDeleteProgress(100);
+                alert(response.data.message);
+
+                // Перезагружаем страницу
+                setPage(1);
+                setEntries([]);
+                fetchData(1, true);
+            } catch (err) {
+                console.error('Bulk delete error:', err);
+                alert('Ошибка массового удаления');
+            } finally {
+                setIsDeleting(false);
+                setDeleteProgress(0);
+                setSelectAllOnDate(false);
+                setSelectedIds(new Set());
+            }
+            return;
+        }
+
+        // Удаление по ID (выбранные записи)
         if (!confirm(`Удалить ${selectedIds.size} записей?`)) return;
+
+        setIsDeleting(true);
+        setDeleteProgress(10);
+
         try {
-            const token = localStorage.getItem('token');
-            await Promise.all(
-                Array.from(selectedIds).map(id =>
-                    axios.delete(`${API_URL}/api/summary-orders/${id}`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    })
-                )
-            );
+            const response = await axios.post(`${API_URL}/api/summary-orders/bulk-delete`, {
+                ids: Array.from(selectedIds),
+                excludeSynced: true
+            }, { headers });
+
+            setDeleteProgress(100);
+
+            // Обновляем локальное состояние
             setEntries(entries.filter(e => !selectedIds.has(e.id)));
+            setTotalCount(prev => prev - response.data.count);
             setSelectedIds(new Set());
+
+            alert(response.data.message);
         } catch (err) {
+            console.error('Bulk delete error:', err);
             alert('Ошибка при удалении');
+        } finally {
+            setIsDeleting(false);
+            setDeleteProgress(0);
         }
     };
 
@@ -562,7 +623,9 @@ export default function SummaryOrdersPage() {
                     shipDate: filterDate,
                     paymentType: row['Оплата'] || 'bank',
                     customerName: row['Клиент'] || '',
+                    productCode: row['Код товара'] || null,
                     productFullName: row['Товар'] || '',
+                    category: row['Категория'] || null,
                     price: Number(row['Цена'] || 0),
                     shippedQty: Number(row['Факт'] || 0),
                     orderQty: Number(row['Заказ'] || 0),
@@ -640,8 +703,8 @@ export default function SummaryOrdersPage() {
     // ДАШБОРД: Компактная статистика заказов
     // ============================================
     const dashboardStats = useMemo(() => {
-        // Количество уникальных точек (клиентов)
-        const uniqueCustomers = new Set(entries.map(e => e.customerId).filter(id => id !== null));
+        // Количество уникальных точек (клиентов) по имени
+        const uniqueCustomers = new Set(entries.map(e => e.customerName).filter(name => name && name.trim() !== ''));
         const pointsCount = uniqueCustomers.size;
 
         // Общий тоннаж = сумма orderQty
@@ -650,15 +713,18 @@ export default function SummaryOrdersPage() {
         // Общая сумма
         const totalSum = entries.reduce((sum, e) => sum + (e.sumWithRevaluation || 0), 0);
 
+        // Фактический вес к отгрузке
+        const totalWeightToShip = entries.reduce((sum, e) => sum + (e.weightToDistribute || 0), 0);
+
         return {
             pointsCount,
             totalTonnage,
-            totalSum
+            totalSum,
+            totalWeightToShip
         };
     }, [entries]);
 
-    const selectableEntries = entries.filter(e => e.status !== 'synced');
-    const allSelected = selectableEntries.length > 0 && selectedIds.size === selectableEntries.length;
+    // allSelected is defined above in toggleSelectAll section
 
     return (
         <div className="max-w-full mx-auto">
@@ -727,13 +793,13 @@ export default function SummaryOrdersPage() {
                                     </span>
                                     <span className="text-orange-600 text-xs">т</span>
                                 </div>
-                                {/* Сумма */}
-                                <div className="flex items-center gap-1 px-3 py-1 bg-purple-100 rounded-lg">
-                                    <span className="text-purple-600 text-sm">💰</span>
-                                    <span className="font-semibold text-purple-700">
-                                        {(dashboardStats.totalSum / 1000).toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}K
+                                {/* Вес к отгрузке */}
+                                <div className="flex items-center gap-1 px-3 py-1 bg-blue-100 rounded-lg">
+                                    <span className="text-blue-600 text-sm">📦</span>
+                                    <span className="font-semibold text-blue-700">
+                                        {dashboardStats.totalWeightToShip.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
-                                    <span className="text-purple-600 text-xs">₸</span>
+                                    <span className="text-blue-600 text-xs">кг к отгрузке</span>
                                 </div>
                             </div>
                             {dirtyEntryIds.size > 0 && (
@@ -796,14 +862,34 @@ export default function SummaryOrdersPage() {
                                     <Save size={16} /> {savingToJournal ? 'Создание...' : 'Создать заказы'}
                                 </button>
                             )}
-                            {selectedIds.size > 0 && (
-                                <button onClick={deleteSelected} className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 flex items-center gap-1">
-                                    <Trash2 size={16} /> ({selectedIds.size})
+                            {(selectedIds.size > 0 || selectAllOnDate) && (
+                                <button
+                                    onClick={deleteSelected}
+                                    disabled={isDeleting}
+                                    className={`text-white px-4 py-2 rounded flex items-center gap-1 ${isDeleting ? 'bg-gray-400' : 'bg-red-600 hover:bg-red-700'}`}
+                                >
+                                    <Trash2 size={16} />
+                                    {isDeleting ? 'Удаление...' : selectAllOnDate ? `Все на дату (${totalCount})` : `(${selectedIds.size})`}
                                 </button>
                             )}
                         </div>
                     </div>
 
+                    {/* Progress Bar for Deletion */}
+                    {isDeleting && (
+                        <div className="bg-white rounded shadow p-3 mb-4">
+                            <div className="flex items-center gap-3">
+                                <span className="text-sm text-gray-600">Удаление записей...</span>
+                                <div className="flex-1 bg-gray-200 rounded-full h-3">
+                                    <div
+                                        className="bg-red-500 h-3 rounded-full transition-all duration-300"
+                                        style={{ width: `${deleteProgress}%` }}
+                                    />
+                                </div>
+                                <span className="text-sm text-gray-600">{deleteProgress}%</span>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Filters Panel */}
                     <div className="bg-white rounded shadow p-4 mb-4">
@@ -861,27 +947,27 @@ export default function SummaryOrdersPage() {
                         <table className="w-full text-sm">
                             <thead className="bg-gray-100 sticky top-0">
                                 <tr>
-                                    <th className="border px-2 py-2 w-10">
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">
                                         <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="w-4 h-4" />
                                     </th>
-                                    <th className="border px-2 py-2 text-left w-24">Дата</th>
-                                    <th className="border px-2 py-2 text-left w-28">№ Сводки</th>
-                                    <th className="border px-2 py-2 text-left w-28">Оплата</th>
-                                    <th className="border px-2 py-2 text-left w-40">Клиент</th>
-                                    <th className="border px-2 py-2 text-left w-20">Код товара</th>
-                                    <th className="border px-2 py-2 text-left">Товар</th>
-                                    <th className="border px-2 py-2 text-left w-24">Категория</th>
-                                    <th className="border px-2 py-2 text-right w-24" style={{ minWidth: 80 }}>Цена</th>
-                                    <th className="border px-2 py-2 text-right w-20" style={{ minWidth: 60 }}>Факт</th>
-                                    <th className="border px-2 py-2 text-right w-24 bg-yellow-50" style={{ minWidth: 90 }}>Сумма</th>
-                                    <th className="border px-2 py-2 text-right w-16">Заказ</th>
-                                    <th className="border px-2 py-2 text-right w-16" style={{ minWidth: 50 }}>Коэф%</th>
-                                    <th className="border px-2 py-2 text-right w-20" style={{ minWidth: 60 }}>Вес</th>
-                                    <th className="border px-2 py-2 text-left w-28">Менеджер</th>
-                                    <th className="border px-2 py-2 text-left w-24">Район</th>
-                                    <th className="border px-2 py-2 text-left w-32">Адрес точки</th>
-                                    <th className="border px-2 py-2 text-center w-28">Статус</th>
-                                    <th className="border px-2 py-2 w-8"></th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Дата</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">№ Сводки</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Оплата</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Клиент</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Код товара</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Товар</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Категория</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Цена</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Факт</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap bg-yellow-50">Сумма</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Заказ</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Коэф%</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Вес</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Менеджер</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Район</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Адрес точки</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap">Статус</th>
+                                    <th className="border px-2 py-2 text-center whitespace-nowrap"></th>
                                 </tr>
                             </thead>
                             <tbody>

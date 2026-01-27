@@ -13,7 +13,9 @@ const prisma = new PrismaClient();
  */
 export const getMaterialReport = async (req: Request, res: Response) => {
     try {
-        const { date } = req.query;
+        const { date, refresh } = req.query;
+        const forceRefresh = refresh === 'true';
+        console.log('[DEBUG MaterialReport] getMaterialReport called with date:', date, 'refresh:', forceRefresh);
 
         if (!date || typeof date !== 'string') {
             return res.status(400).json({ error: 'Параметр date обязателен' });
@@ -46,7 +48,8 @@ export const getMaterialReport = async (req: Request, res: Response) => {
             }
         });
 
-        if (existingReport) {
+        // Если есть сохранённый и НЕ запрошено обновление — возвращаем как есть
+        if (existingReport && !forceRefresh) {
             return res.json({
                 report: existingReport,
                 isPreview: false,
@@ -54,18 +57,56 @@ export const getMaterialReport = async (req: Request, res: Response) => {
             });
         }
 
-        // Нет сохранённого - формируем предпросмотр
+        // Пересчитываем данные
         const preview = await buildMaterialReportPreview(reportDate);
+
+        // Если был сохранённый отчёт и запрошен refresh — сохраняем введённые факты и определяем изменения
+        let hasChanges = false;
+        if (existingReport && forceRefresh) {
+            const factsByProduct = new Map<number, number | null>();
+            existingReport.lines.forEach(l => {
+                if (l.closingBalanceFact !== null) {
+                    factsByProduct.set(l.productId, Number(l.closingBalanceFact));
+                }
+            });
+
+            // Мерджим введённые факты в новые данные
+            preview.lines.forEach(line => {
+                const existingFact = factsByProduct.get(line.productId);
+                if (existingFact !== undefined) {
+                    line.closingBalanceFact = existingFact;
+                }
+            });
+
+            // Проверяем есть ли изменения (сравниваем ключевые поля)
+            const savedLines = new Map(existingReport.lines.map(l => [l.productId, l]));
+            for (const newLine of preview.lines) {
+                const savedLine = savedLines.get(newLine.productId);
+                if (!savedLine) {
+                    hasChanges = true; // Новый товар
+                    break;
+                }
+                // Сравниваем расчётные поля
+                if (Number(savedLine.inProduction || 0) !== Number(newLine.inProduction || 0) ||
+                    Number(savedLine.outProductionWriteoff || 0) !== Number(newLine.outProductionWriteoff || 0) ||
+                    Number(savedLine.inPurchase || 0) !== Number(newLine.inPurchase || 0)) {
+                    hasChanges = true;
+                    break;
+                }
+            }
+        }
 
         return res.json({
             report: {
-                id: null,
+                id: existingReport?.id || null,
                 reportDate: reportDate.toISOString(),
-                status: 'preview',
+                status: existingReport ? 'saved' : 'preview',
                 lines: preview.lines
             },
-            isPreview: true,
-            message: 'Предпросмотр (не сохранён)'
+            isPreview: !existingReport,
+            hasChanges,
+            message: hasChanges ? 'Данные изменились, требуется сохранение' :
+                existingReport ? 'Данные актуальны' : 'Предпросмотр (не сохранён)'
         });
     } catch (error) {
         console.error('[MATERIAL_REPORT] Error:', error);
@@ -83,12 +124,18 @@ async function buildMaterialReportPreview(reportDate: Date) {
     const dateEnd = new Date(reportDate);
     dateEnd.setUTCHours(23, 59, 59, 999);
 
+    // DEBUG: логирование дат запроса
+    console.log('[DEBUG MaterialReport] reportDate input:', reportDate);
+    console.log('[DEBUG MaterialReport] dateStart:', dateStart.toISOString());
+    console.log('[DEBUG MaterialReport] dateEnd:', dateEnd.toISOString());
+
     // Параллельно получаем все данные
     const [
         products,
         svod,
         purchases,
         production,
+        productionWriteoffs,
         previousReport
     ] = await Promise.all([
         // Все активные товары
@@ -122,20 +169,48 @@ async function buildMaterialReportPreview(reportDate: Date) {
                 qty: true
             }
         }),
-        // Производство на дату
+        // Списано в производство = сырьё из левой панели (ProductionRun)
+        // actualWeight = сколько сырья использовали для производства
         prisma.productionRun.findMany({
             where: {
                 productionDate: { gte: dateStart, lte: dateEnd },
                 isHidden: false
             },
             select: {
-                productId: true,
-                actualWeight: true
+                productId: true,      // Сырьё (левая панель)
+                actualWeight: true    // Сколько сырья использовали (Списано)
+            }
+        }),
+        // Производство = выход из правой панели (ProductionRunValue)
+        // Это товары, которые ПОЛУЧИЛИ в результате выработки (MML узлы)
+        prisma.productionRunValue.findMany({
+            where: {
+                run: {
+                    productionDate: { gte: dateStart, lte: dateEnd },
+                    isHidden: false
+                },
+                value: { not: null }
+            },
+            select: {
+                snapshotProductId: true,
+                value: true,
+                node: {
+                    select: {
+                        productId: true
+                    }
+                }
             }
         }),
         // Предыдущий отчёт (для остатка на начало)
         getPreviousDayReport(reportDate)
     ]);
+
+    // DEBUG: логирование производственных данных
+    console.log('[DEBUG MaterialReport] production (сырьё) count:', production.length);
+    console.log('[DEBUG MaterialReport] productionWriteoffs (выход) count:', productionWriteoffs.length);
+    if (productionWriteoffs.length > 0) {
+        console.log('[DEBUG MaterialReport] productionWriteoffs sample:', JSON.stringify(productionWriteoffs[0], null, 2));
+    }
 
     // Группируем данные по товарам
     const purchasesByProduct = new Map<number, number>();
@@ -144,10 +219,23 @@ async function buildMaterialReportPreview(reportDate: Date) {
         purchasesByProduct.set(p.productId, current + Number(p.qty));
     });
 
-    const productionByProduct = new Map<number, number>();
+    // Списано в производство = сырьё (левая панель, ProductionRun.actualWeight)
+    // Это сколько сырья ИСПОЛЬЗОВАЛИ для производства
+    const productionWriteoffByProduct = new Map<number, number>();
     production.forEach(p => {
-        const current = productionByProduct.get(p.productId) || 0;
-        productionByProduct.set(p.productId, current + Number(p.actualWeight || 0));
+        const current = productionWriteoffByProduct.get(p.productId) || 0;
+        productionWriteoffByProduct.set(p.productId, current + Number(p.actualWeight || 0));
+    });
+
+    // Производство = выход (правая панель, ProductionRunValue)
+    // Это товары которые ПОЛУЧИЛИ в результате выработки
+    const productionByProduct = new Map<number, number>();
+    productionWriteoffs.forEach(p => {
+        const productId = p.snapshotProductId || p.node?.productId;
+        if (productId) {
+            const current = productionByProduct.get(productId) || 0;
+            productionByProduct.set(productId, current + Number(p.value || 0));
+        }
     });
 
     const svodByProduct = new Map<number, { orderQty: number; weightToShip: number }>();
@@ -175,6 +263,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
     const productIdsWithMovements = new Set<number>();
     purchasesByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     productionByProduct.forEach((_, id) => productIdsWithMovements.add(id));
+    productionWriteoffByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     svodByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     previousBalances.forEach((_, id) => productIdsWithMovements.add(id));
 
@@ -189,6 +278,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
         const openingBalance = previousBalances.get(productId) || 0;
         const inPurchase = purchasesByProduct.get(productId) || 0;
         const inProduction = productionByProduct.get(productId) || 0;
+        const outProductionWriteoff = productionWriteoffByProduct.get(productId) || 0;
         const svodData = svodByProduct.get(productId);
         const outSale = svodData?.weightToShip || 0;
 
@@ -196,7 +286,8 @@ async function buildMaterialReportPreview(reportDate: Date) {
         const closingBalanceCalc = openingBalance
             + inPurchase
             + inProduction
-            - outSale;
+            - outSale
+            - outProductionWriteoff;
 
         lines.push({
             productId,
@@ -210,6 +301,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
             outWaste: 0,
             outBundle: 0,
             outDefectWriteoff: 0,
+            outProductionWriteoff,
             outWeightLoss: 0,
             outSupplierReturn: 0,
             closingBalanceCalc,
@@ -231,14 +323,17 @@ async function buildMaterialReportPreview(reportDate: Date) {
 }
 
 /**
- * Получить отчёт за предыдущий день
+ * Получить остатки за предыдущий день
+ * Если есть сохранённый отчёт - берём из него
+ * Если нет — рассчитываем динамически на основе движений за все предыдущие дни
  */
 async function getPreviousDayReport(reportDate: Date) {
     const previousDate = new Date(reportDate);
     previousDate.setDate(previousDate.getDate() - 1);
     previousDate.setUTCHours(0, 0, 0, 0);
 
-    return prisma.materialReport.findFirst({
+    // Сначала пробуем найти сохранённый отчёт
+    const savedReport = await prisma.materialReport.findFirst({
         where: {
             reportDate: previousDate,
             warehouseId: null
@@ -253,6 +348,91 @@ async function getPreviousDayReport(reportDate: Date) {
             }
         }
     });
+
+    if (savedReport) {
+        return savedReport;
+    }
+
+    // Нет сохранённого отчёта — рассчитываем динамически
+    // Рассчитываем накопленные остатки до конца предыдущего дня
+    const endOfPreviousDay = new Date(previousDate);
+    endOfPreviousDay.setUTCHours(23, 59, 59, 999);
+
+    // Параллельно получаем все движения ДО конца предыдущего дня
+    const [purchases, production, svodShipped] = await Promise.all([
+        // Все закупки до конца предыдущего дня
+        prisma.purchaseItem.findMany({
+            where: {
+                purchase: {
+                    purchaseDate: { lte: endOfPreviousDay },
+                    isDisabled: false
+                }
+            },
+            select: {
+                productId: true,
+                qty: true
+            }
+        }),
+        // Всё производство до конца предыдущего дня (выход)
+        prisma.productionRun.findMany({
+            where: {
+                productionDate: { lte: endOfPreviousDay },
+                isHidden: false
+            },
+            select: {
+                productId: true,
+                actualWeight: true,
+                plannedWeight: true
+            }
+        }),
+        // Все отгрузки до конца предыдущего дня
+        prisma.svodLine.findMany({
+            where: {
+                svod: {
+                    svodDate: { lte: endOfPreviousDay }
+                }
+            },
+            select: {
+                productId: true,
+                weightToShip: true
+            }
+        })
+    ]);
+
+    // Группируем данные по товарам
+    const balanceByProduct = new Map<number, number>();
+
+    // Приход от закупок
+    purchases.forEach(p => {
+        const current = balanceByProduct.get(p.productId) || 0;
+        balanceByProduct.set(p.productId, current + Number(p.qty || 0));
+    });
+
+    // Приход от производства (actualWeight - то, что произвели)
+    // и списание в производство (plannedWeight - сырьё, которое использовали)
+    production.forEach(p => {
+        // Сырьё списываем (минус)
+        const currentRaw = balanceByProduct.get(p.productId) || 0;
+        balanceByProduct.set(p.productId, currentRaw - Number(p.plannedWeight || p.actualWeight || 0));
+    });
+
+    // Примечание: выход продукции (готовый продукт) в текущей схеме не отслеживается отдельно
+    // т.к. productId в ProductionRun = сырьё, а не готовый продукт
+
+    // Минус отгрузки
+    svodShipped.forEach(s => {
+        const current = balanceByProduct.get(s.productId) || 0;
+        balanceByProduct.set(s.productId, current - Number(s.weightToShip || 0));
+    });
+
+    // Формируем псевдо-отчёт с рассчитанными остатками
+    const lines = Array.from(balanceByProduct.entries()).map(([productId, balance]) => ({
+        productId,
+        closingBalanceCalc: balance,
+        closingBalanceFact: null
+    }));
+
+    return { lines };
 }
 
 /**
@@ -333,6 +513,7 @@ export const refreshMaterialReport = async (req: Request, res: Response) => {
                             outWaste: l.outWaste,
                             outBundle: l.outBundle,
                             outDefectWriteoff: l.outDefectWriteoff,
+                            outProductionWriteoff: l.outProductionWriteoff,
                             outWeightLoss: l.outWeightLoss,
                             outSupplierReturn: l.outSupplierReturn,
                             closingBalanceCalc: l.closingBalanceCalc,
@@ -478,6 +659,7 @@ export const saveMaterialReport = async (req: Request, res: Response) => {
                             outWaste: l.outWaste || 0,
                             outBundle: l.outBundle || 0,
                             outDefectWriteoff: l.outDefectWriteoff || 0,
+                            outProductionWriteoff: l.outProductionWriteoff || 0,
                             outWeightLoss: l.outWeightLoss || 0,
                             outSupplierReturn: l.outSupplierReturn || 0,
                             closingBalanceCalc: l.closingBalanceCalc || 0,

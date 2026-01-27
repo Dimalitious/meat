@@ -114,14 +114,24 @@ export const deleteCustomerCard = async (req: Request, res: Response) => {
     }
 };
 
-// Добавить позицию в карточку
+// Добавить позицию в карточку (upsert - обновить если существует, создать если нет)
 export const addCardItem = async (req: Request, res: Response) => {
     try {
         const { cardId } = req.params;
         const { productId, description, sortOrder } = req.body;
 
-        const item = await prisma.customerCardItem.create({
-            data: {
+        const item = await prisma.customerCardItem.upsert({
+            where: {
+                cardId_productId: {
+                    cardId: Number(cardId),
+                    productId: Number(productId)
+                }
+            },
+            update: {
+                description: description || null,
+                sortOrder: sortOrder || 0
+            },
+            create: {
                 cardId: Number(cardId),
                 productId: Number(productId),
                 description: description || null,

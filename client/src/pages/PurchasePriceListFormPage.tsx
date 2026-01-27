@@ -53,6 +53,7 @@ export default function PurchasePriceListFormPage() {
     const [supplierModalSearch, setSupplierModalSearch] = useState('');
     const [templateLoaded, setTemplateLoaded] = useState(false);
     const [templateSource, setTemplateSource] = useState<{ id: number; date: string; name: string } | null>(null);
+    const [addedProductIds, setAddedProductIds] = useState<Set<number>>(new Set());
 
     useEffect(() => {
         fetchSuppliers();
@@ -293,7 +294,8 @@ export default function PurchasePriceListFormPage() {
                 }]
             };
         }));
-        setShowProductModal(false);
+        // Отмечаем товар как добавленный (не закрываем модальное окно)
+        setAddedProductIds(prev => new Set(prev).add(product.id));
     };
 
     const handleRemoveProduct = (productId: number) => {
@@ -629,7 +631,11 @@ export default function PurchasePriceListFormPage() {
                             <div className="flex justify-between items-center mb-3">
                                 <h3 className="text-lg font-semibold text-white">Добавить продукцию</h3>
                                 <button
-                                    onClick={() => setShowProductModal(false)}
+                                    onClick={() => {
+                                        setShowProductModal(false);
+                                        setProductSearch('');
+                                        setAddedProductIds(new Set());
+                                    }}
                                     className="text-gray-400 hover:text-white text-xl"
                                 >
                                     ×
@@ -644,21 +650,49 @@ export default function PurchasePriceListFormPage() {
                             />
                         </div>
                         <div className="flex-1 overflow-auto p-4">
-                            {filteredProducts.slice(0, 50).map(p => (
-                                <div
-                                    key={p.id}
-                                    className="p-3 bg-slate-700 rounded-lg mb-2 cursor-pointer hover:bg-slate-600"
-                                    onClick={() => handleAddProduct(p)}
-                                >
-                                    <div className="text-white font-medium">{p.name}</div>
-                                    <div className="text-sm text-gray-400">{p.code}</div>
-                                </div>
-                            ))}
+                            {filteredProducts.slice(0, 50).map(p => {
+                                const isAdded = addedProductIds.has(p.id);
+                                const isAlreadyInList = selectedSupplier?.items.some(i => i.productId === p.id);
+                                return (
+                                    <div
+                                        key={p.id}
+                                        className="p-3 bg-slate-700 rounded-lg mb-2 flex items-center justify-between"
+                                    >
+                                        <div className="flex-1">
+                                            <div className="text-white font-medium">{p.name}</div>
+                                            <div className="text-sm text-gray-400">{p.code}</div>
+                                        </div>
+                                        <button
+                                            onClick={() => !isAdded && !isAlreadyInList && handleAddProduct(p)}
+                                            disabled={isAdded || isAlreadyInList}
+                                            className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${isAdded || isAlreadyInList
+                                                    ? 'bg-green-600/30 text-green-400 cursor-default'
+                                                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                                                }`}
+                                        >
+                                            {isAdded || isAlreadyInList ? '✓ Добавлен' : 'Добавить'}
+                                        </button>
+                                    </div>
+                                );
+                            })}
                             {filteredProducts.length > 50 && (
                                 <div className="text-center text-gray-500 py-2">
                                     Показано 50 из {filteredProducts.length}. Уточните поиск.
                                 </div>
                             )}
+                        </div>
+                        {/* Кнопка закрыть */}
+                        <div className="p-4 border-t border-slate-700 flex justify-end">
+                            <button
+                                onClick={() => {
+                                    setShowProductModal(false);
+                                    setProductSearch('');
+                                    setAddedProductIds(new Set());
+                                }}
+                                className="bg-slate-600 hover:bg-slate-500 text-white px-6 py-2 rounded-lg"
+                            >
+                                Закрыть
+                            </button>
                         </div>
                     </div>
                 </div>

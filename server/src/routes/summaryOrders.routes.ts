@@ -11,6 +11,7 @@ router.post('/', summaryOrders.createSummaryOrder);
 router.post('/bulk', summaryOrders.bulkCreateSummaryOrders);  // Fast Excel import
 router.put('/:id', summaryOrders.updateSummaryOrder);
 router.delete('/:id', summaryOrders.deleteSummaryOrder);
+router.post('/bulk-delete', summaryOrders.bulkDeleteSummaryOrders);  // Bulk delete by IDs or date
 router.post('/sync', summaryOrders.syncToOrders);
 router.post('/rework', summaryOrders.sendToRework);
 

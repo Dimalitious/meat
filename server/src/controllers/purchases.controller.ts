@@ -239,15 +239,27 @@ export const createPurchase = async (req: Request, res: Response) => {
             return newPurchase;
         });
 
-        // Вернуть полную закупку
-        const fullPurchase = await prisma.purchase.findUnique({
-            where: { id: purchase.id },
-            include: {
-                createdByUser: { select: { id: true, name: true, username: true } },
-                suppliers: { include: { supplier: true } },
-                items: { include: { product: true, supplier: true, paymentType: true } }
-            }
-        });
+        // Вернуть полную закупку (с защитой от ошибки если пользователь удалён)
+        let fullPurchase;
+        try {
+            fullPurchase = await prisma.purchase.findUnique({
+                where: { id: purchase.id },
+                include: {
+                    createdByUser: { select: { id: true, name: true, username: true } },
+                    suppliers: { include: { supplier: true } },
+                    items: { include: { product: true, supplier: true, paymentType: true } }
+                }
+            });
+        } catch (includeError) {
+            // Если ошибка с createdByUser — просто вернём purchase без include
+            fullPurchase = await prisma.purchase.findUnique({
+                where: { id: purchase.id },
+                include: {
+                    suppliers: { include: { supplier: true } },
+                    items: { include: { product: true, supplier: true, paymentType: true } }
+                }
+            });
+        }
 
         res.status(201).json(fullPurchase);
     } catch (error) {

@@ -239,7 +239,36 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
         console.log(`[BULK IMPORT] Starting import of ${items.length} items...`);
         const startTime = Date.now();
 
-        // Prepare all data for batch insert
+        // ============================================
+        // STEP 1: Collect unique product codes and resolve to productIds
+        // ============================================
+        const productCodes = [...new Set(items
+            .map((item: any) => item.productCode)
+            .filter((code: string | null) => code !== null && code !== '')
+        )] as string[];
+
+        console.log(`[BULK IMPORT] Resolving ${productCodes.length} unique product codes...`);
+
+        // Fetch products by code in single query
+        const products = productCodes.length > 0
+            ? await prisma.product.findMany({
+                where: { code: { in: productCodes } },
+                select: { id: true, code: true, category: true }
+            })
+            : [];
+
+        // Build code -> product map
+        const productByCode = new Map<string, { id: number; code: string; category: string | null }>();
+        for (const p of products) {
+            if (p.code) {
+                productByCode.set(p.code, p);
+            }
+        }
+        console.log(`[BULK IMPORT] Resolved ${productByCode.size} products by code`);
+
+        // ============================================
+        // STEP 2: Prepare data with resolved productIds
+        // ============================================
         const dataToCreate = items.map((item: any) => {
             const priceNum = Number(item.price) || 0;
             const shippedNum = Number(item.shippedQty) || 0;
@@ -251,15 +280,31 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
             const year = dateObj.getFullYear();
             const idn = `${day}${month}${year}`;
 
+            // Resolve productId from productCode if not provided
+            let resolvedProductId = item.productId ? Number(item.productId) : null;
+            let resolvedCategory = item.category || null;
+
+            if (!resolvedProductId && item.productCode) {
+                const product = productByCode.get(item.productCode);
+                if (product) {
+                    resolvedProductId = product.id;
+                    // Also use product category if not provided
+                    if (!resolvedCategory && product.category) {
+                        resolvedCategory = product.category;
+                    }
+                }
+            }
+
             return {
                 idn,
                 shipDate: dateObj,
                 paymentType: item.paymentType || 'bank',
                 customerId: item.customerId ? Number(item.customerId) : null,
                 customerName: item.customerName || '',
-                productId: item.productId ? Number(item.productId) : null,
+                productId: resolvedProductId,
+                productCode: item.productCode || null,
                 productFullName: item.productFullName || '',
-                category: item.category || null,
+                category: resolvedCategory,
                 shortNameMorning: item.shortNameMorning || null,
                 priceType: item.priceType || null,
                 price: priceNum,
@@ -274,6 +319,10 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
             };
         });
 
+        // Log how many items have resolved productId
+        const withProductId = dataToCreate.filter(d => d.productId !== null).length;
+        console.log(`[BULK IMPORT] Items with resolved productId: ${withProductId}/${dataToCreate.length}`);
+
         // Use createMany for maximum performance (single SQL INSERT)
         const result = await prisma.summaryOrderJournal.createMany({
             data: dataToCreate,
@@ -286,6 +335,7 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
         res.json({
             message: `Импортировано ${result.count} записей`,
             count: result.count,
+            resolvedProducts: withProductId,
             timeMs: elapsed
         });
     } catch (error: any) {
@@ -340,6 +390,61 @@ export const deleteSummaryOrder = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('Delete summary order error:', error);
         res.status(400).json({ error: 'Failed to delete summary order' });
+    }
+};
+
+// BULK DELETE - mass deletion by IDs or by date
+export const bulkDeleteSummaryOrders = async (req: Request, res: Response) => {
+    try {
+        const { ids, date, excludeSynced } = req.body;
+
+        // If specific IDs provided - delete those
+        if (ids && Array.isArray(ids) && ids.length > 0) {
+            const where: any = { id: { in: ids.map((id: number) => Number(id)) } };
+
+            // Optionally exclude synced records
+            if (excludeSynced) {
+                where.status = { not: 'synced' };
+            }
+
+            const result = await prisma.summaryOrderJournal.deleteMany({ where });
+            console.log(`[BULK DELETE] Deleted ${result.count} entries by IDs`);
+
+            return res.json({
+                message: `Удалено ${result.count} записей`,
+                count: result.count
+            });
+        }
+
+        // If date provided - delete all for that date (optionally excluding synced)
+        if (date) {
+            const startDate = new Date(date);
+            const endDate = new Date(startDate);
+            endDate.setDate(endDate.getDate() + 1);
+
+            const where: any = { shipDate: { gte: startDate, lt: endDate } };
+
+            if (excludeSynced) {
+                where.status = { not: 'synced' };
+            }
+
+            // First count how many will be deleted
+            const count = await prisma.summaryOrderJournal.count({ where });
+
+            // Delete all matching records
+            const result = await prisma.summaryOrderJournal.deleteMany({ where });
+            console.log(`[BULK DELETE] Deleted ${result.count} entries for date ${date}`);
+
+            return res.json({
+                message: `Удалено ${result.count} записей за ${new Date(date).toLocaleDateString('ru-RU')}`,
+                count: result.count
+            });
+        }
+
+        return res.status(400).json({ error: 'Необходимо указать ids или date' });
+    } catch (error: any) {
+        console.error('Bulk delete error:', error);
+        res.status(500).json({ error: 'Ошибка массового удаления', details: error.message });
     }
 };
 

@@ -75,6 +75,7 @@ const PurchaseFormPage: React.FC = () => {
     const [isProductModalOpen, setIsProductModalOpen] = useState(false);
     const [supplierSearch, setSupplierSearch] = useState('');
     const [productSearch, setProductSearch] = useState('');
+    const [addedProductIds, setAddedProductIds] = useState<Set<number>>(new Set());
 
     // Состояние
     const [loading, setLoading] = useState(false);
@@ -261,8 +262,8 @@ const PurchaseFormPage: React.FC = () => {
         };
 
         setItems(prev => [...prev, newItem]);
-        setIsProductModalOpen(false);
-        setProductSearch('');
+        // Отмечаем товар как добавленный (не закрываем модальное окно)
+        setAddedProductIds(prev => new Set(prev).add(product.id));
     };
 
     const removeItem = (supplierId: number, productId: number) => {
@@ -630,11 +631,15 @@ const PurchaseFormPage: React.FC = () => {
             {/* Модальное окно выбора товара */}
             {isProductModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
                         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                             <h2 className="text-lg font-bold text-slate-800">Добавить товар</h2>
                             <button
-                                onClick={() => setIsProductModalOpen(false)}
+                                onClick={() => {
+                                    setIsProductModalOpen(false);
+                                    setProductSearch('');
+                                    setAddedProductIds(new Set());
+                                }}
                                 className="text-slate-400 hover:text-slate-600"
                             >
                                 ✕
@@ -650,20 +655,47 @@ const PurchaseFormPage: React.FC = () => {
                                 autoFocus
                             />
                             <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                                {filteredProducts.map(p => (
-                                    <div
-                                        key={p.id}
-                                        className="p-3 hover:bg-slate-50 cursor-pointer"
-                                        onClick={() => addProduct(p)}
-                                    >
-                                        <div className="font-medium text-slate-800">{p.name}</div>
-                                        <div className="text-xs text-slate-500">{p.code}</div>
-                                    </div>
-                                ))}
+                                {filteredProducts.map(p => {
+                                    const isAdded = addedProductIds.has(p.id);
+                                    return (
+                                        <div
+                                            key={p.id}
+                                            className="p-3 hover:bg-slate-50 flex items-center justify-between"
+                                        >
+                                            <div className="flex-1">
+                                                <div className="font-medium text-slate-800">{p.name}</div>
+                                                <div className="text-xs text-slate-500">{p.code}</div>
+                                            </div>
+                                            <button
+                                                onClick={() => !isAdded && addProduct(p)}
+                                                disabled={isAdded}
+                                                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${isAdded
+                                                        ? 'bg-green-100 text-green-700 cursor-default'
+                                                        : 'bg-blue-500 text-white hover:bg-blue-600'
+                                                    }`}
+                                            >
+                                                {isAdded ? '✓ Добавлен' : 'Добавить'}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
                                 {filteredProducts.length === 0 && (
                                     <div className="p-4 text-center text-slate-400">Нет доступных товаров</div>
                                 )}
                             </div>
+                        </div>
+                        {/* Кнопка закрыть */}
+                        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50">
+                            <button
+                                onClick={() => {
+                                    setIsProductModalOpen(false);
+                                    setProductSearch('');
+                                    setAddedProductIds(new Set());
+                                }}
+                                className="w-full px-4 py-2 text-sm font-medium text-slate-600 bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
+                            >
+                                Закрыть
+                            </button>
                         </div>
                     </div>
                 </div>

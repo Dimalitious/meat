@@ -604,6 +604,7 @@ model ProductionMml {
   productId   Int       @unique  // Товар, для которого создан MML
   createdBy   Int       // User ID создателя
   isLocked    Boolean   @default(false)  // Зафиксирован (нельзя редактировать)
+  isDeleted   Boolean   @default(false)  // Мягкое удаление (soft delete)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   
@@ -619,6 +620,7 @@ model ProductionMml {
   cuttingLines              ProductionCuttingLine[]
   
   @@index([isLocked])
+  @@index([isDeleted])
   @@index([createdAt])
 }
 
@@ -728,12 +730,12 @@ model Purchase {
   idn             String?   // Автогенерируемый идентификатор (код_поставщика + дата ДДММГГГГ)
   purchaseDate    DateTime  // Дата закупки (редактируемая)
   totalAmount     Decimal?  @db.Decimal(14, 2)  // Итоговая сумма закупки
-  createdByUserId Int       // Кто создал
+  createdByUserId Int?      // Кто создал (опционально)
   isDisabled      Boolean   @default(false)     // Для скрытия в журнале
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   
-  createdByUser   User              @relation("PurchaseCreator", fields: [createdByUserId], references: [id])
+  createdByUser   User?             @relation("PurchaseCreator", fields: [createdByUserId], references: [id])
   suppliers       PurchaseSupplier[]
   items           PurchaseItem[]
   // Production-Purchase Integration
@@ -1167,7 +1169,8 @@ model MaterialReportLine {
   outWaste              Decimal   @default(0) @db.Decimal(14, 3)   // Отход
   outBundle             Decimal   @default(0) @db.Decimal(14, 3)   // Пучок
   outDefectWriteoff     Decimal   @default(0) @db.Decimal(14, 3)   // Списали брак
-  outWeightLoss         Decimal   @default(0) @db.Decimal(14, 3)   // Потеря веса
+  outProductionWriteoff Decimal   @default(0) @db.Decimal(14, 3)   // Списано в производство
+  outWeightLoss         Decimal   @default(0) @db.Decimal(14, 3)   // Списали (потеря веса)
   outSupplierReturn     Decimal   @default(0) @db.Decimal(14, 3)   // Возврат поставщику
   closingBalanceCalc    Decimal   @default(0) @db.Decimal(14, 3)   // Остаток на конец (расчётный)
   closingBalanceFact    Decimal?  @db.Decimal(14, 3)               // Фактический остаток (ручной ввод)
@@ -1217,6 +1220,7 @@ model MaterialReportDraftLine {
   outWaste              Decimal   @default(0) @db.Decimal(14, 3)
   outBundle             Decimal   @default(0) @db.Decimal(14, 3)
   outDefectWriteoff     Decimal   @default(0) @db.Decimal(14, 3)
+  outProductionWriteoff Decimal   @default(0) @db.Decimal(14, 3)   // Списано в производство
   outWeightLoss         Decimal   @default(0) @db.Decimal(14, 3)
   outSupplierReturn     Decimal   @default(0) @db.Decimal(14, 3)
   closingBalanceCalc    Decimal   @default(0) @db.Decimal(14, 3)

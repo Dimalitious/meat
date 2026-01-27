@@ -157,7 +157,6 @@ export default function ProductionV3Page() {
     // UI
     const [loading, setLoading] = useState(false);
     const [warning, setWarning] = useState<string | null>(null);
-    const [selectedRunIds, setSelectedRunIds] = useState<Set<number>>(new Set());
     const [selectedMmlNodeIds, setSelectedMmlNodeIds] = useState<Set<number>>(new Set());
     const [isSubmitting, setIsSubmitting] = useState(false); // Защита от двойного клика
 
@@ -421,8 +420,9 @@ export default function ProductionV3Page() {
                 console.log('Values saved:', valRes.data);
             }
 
-            // Обновляем список
-            setRuns([newRun, ...runs]);
+            // Обновляем список runs (actualWeight обновляется на сервере)
+            await fetchRunsAuto();
+
             setShowMmlModal(false);
             setMmlModalData(null);
             setMmlCategories([]);
@@ -489,6 +489,10 @@ export default function ProductionV3Page() {
                 { values: allValues, productionDate: editProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
+
+            // Обновляем список runs для отображения актуального actualWeight
+            await fetchRunsAuto();
+
             setWarning('Сохранено!');
             setTimeout(() => setWarning(null), 2000);
         } catch (err) {
@@ -576,41 +580,17 @@ export default function ProductionV3Page() {
         return total;
     };
 
+    // Расчёт выработки по productId (сумма всех runs для этого товара)
+    const getYieldByProductId = (productId: number): number => {
+        return runs
+            .filter(r => r.productId === productId && !r.isHidden)
+            .reduce((sum, r) => sum + (Number(r.actualWeight) || 0), 0);
+    };
+
     // Получить узлы активной категории
     const activeCategoryNodes = categories.find(c => c.category === activeCategory)?.nodes || [];
 
-    // Скрыть выбранные выработки
-    const hideSelectedRuns = async () => {
-        if (selectedRunIds.size === 0) return;
-        try {
-            await axios.post(`${API_URL}/api/production-v2/runs/hide`,
-                { ids: Array.from(selectedRunIds) },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            // Удаляем скрытые из списка
-            setRuns(runs.filter(r => !selectedRunIds.has(r.id)));
-            setSelectedRunIds(new Set());
-            if (selectedRun && selectedRunIds.has(selectedRun.id)) {
-                setSelectedRun(null);
-            }
-            setWarning(`Скрыто ${selectedRunIds.size} выработок`);
-            setTimeout(() => setWarning(null), 2000);
-        } catch (err) {
-            console.error('Failed to hide runs:', err);
-        }
-    };
 
-    // Переключить выбор выработки
-    const toggleRunSelection = (runId: number, e: React.MouseEvent) => {
-        e.stopPropagation();
-        const newSet = new Set(selectedRunIds);
-        if (newSet.has(runId)) {
-            newSet.delete(runId);
-        } else {
-            newSet.add(runId);
-        }
-        setSelectedRunIds(newSet);
-    };
 
     // ============================================
     // РЕНДЕР
@@ -716,26 +696,35 @@ export default function ProductionV3Page() {
                                                 }`}
                                             onClick={async () => {
                                                 setSelectedCombinedItem(item);
-                                                // Создаём выработку при клике
-                                                try {
-                                                    const sourceType = item.purchaseQty > 0 ? 'PURCHASE' : 'OPENING_BALANCE';
-                                                    const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
-                                                        productId: item.productId,
-                                                        sourceType,
-                                                        productionDate: dateFrom,
-                                                        plannedWeight: item.totalQty
-                                                    }, {
-                                                        headers: { Authorization: `Bearer ${token}` }
-                                                    });
-                                                    const newRun = res.data.run || res.data;
-                                                    setRuns([newRun, ...runs]);
-                                                    await loadRunDetails(newRun.id);
-                                                } catch (err: any) {
-                                                    if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
-                                                        setWarning('У этого товара нет MML структуры');
-                                                        setTimeout(() => setWarning(null), 3000);
-                                                    } else {
-                                                        console.error('Failed to create run:', err);
+
+                                                // Сначала проверяем, есть ли уже выработка для этого товара
+                                                const existingRun = runs.find(r => r.productId === item.productId && !r.isHidden);
+
+                                                if (existingRun) {
+                                                    // Загружаем существующую выработку
+                                                    await loadRunDetails(existingRun.id);
+                                                } else {
+                                                    // Создаём новую выработку только если нет существующей
+                                                    try {
+                                                        const sourceType = item.purchaseQty > 0 ? 'PURCHASE' : 'OPENING_BALANCE';
+                                                        const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
+                                                            productId: item.productId,
+                                                            sourceType,
+                                                            productionDate: dateFrom,
+                                                            plannedWeight: item.totalQty
+                                                        }, {
+                                                            headers: { Authorization: `Bearer ${token}` }
+                                                        });
+                                                        const newRun = res.data.run || res.data;
+                                                        setRuns([newRun, ...runs]);
+                                                        await loadRunDetails(newRun.id);
+                                                    } catch (err: any) {
+                                                        if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
+                                                            setWarning('У этого товара нет MML структуры');
+                                                            setTimeout(() => setWarning(null), 3000);
+                                                        } else {
+                                                            console.error('Failed to create run:', err);
+                                                        }
                                                     }
                                                 }
                                             }}>
@@ -773,9 +762,9 @@ export default function ProductionV3Page() {
                                                                 📊 Остаток: {formatNumber(item.balanceQty, 2)}
                                                             </span>
                                                         )}
-                                                        {/* Маркер выработки - пока 0, будет обновляться */}
+                                                        {/* Маркер выработки - сумма всех runs для этого товара */}
                                                         <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded">
-                                                            🏭 Выработка: {formatNumber(selectedRun?.actualWeight || 0, 2)}
+                                                            🏭 Выработка: {formatNumber(getYieldByProductId(item.productId), 2)}
                                                         </span>
                                                         <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">
                                                             Итого: {formatNumber(item.totalQty, 2)} кг
@@ -1248,9 +1237,17 @@ export default function ProductionV3Page() {
                                 </div>
                             </div>
                             <div className="p-4 border-t flex justify-end gap-2">
-                                <Button variant="outline" onClick={() => { setShowAddValueModal(false); setEditingValueId(null); setNewValueAmount(''); }}>Отмена</Button>
-                                <Button onClick={editingValueId ? updateValueEntry : addValueEntry} className="bg-green-600 hover:bg-green-700">
-                                    {editingValueId ? 'Сохранить' : 'Добавить'}
+                                <Button variant="outline" onClick={() => { setShowAddValueModal(false); setEditingValueId(null); setNewValueAmount(''); }} disabled={isSubmitting}>Отмена</Button>
+                                <Button
+                                    onClick={editingValueId ? updateValueEntry : addValueEntry}
+                                    className="bg-green-600 hover:bg-green-700"
+                                    disabled={isSubmitting}
+                                >
+                                    {isSubmitting ? (
+                                        <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>Загрузка...</>
+                                    ) : (
+                                        editingValueId ? 'Сохранить' : 'Добавить'
+                                    )}
                                 </Button>
                             </div>
                         </div>

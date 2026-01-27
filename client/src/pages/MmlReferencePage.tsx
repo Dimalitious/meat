@@ -5,7 +5,7 @@ import { Button } from '../components/ui/Button';
 import { useAuth } from '../context/AuthContext';
 import {
     Search, Plus, Trash2, Lock, Unlock, Package,
-    ChevronRight, ChevronDown, FolderTree, Edit2
+    ChevronRight, ChevronDown, FolderTree, Edit2, RotateCcw, Eye, EyeOff
 } from 'lucide-react';
 
 // ============================================
@@ -36,6 +36,7 @@ interface Mml {
     product: Product;
     creator: { id: number; name: string; username: string };
     isLocked: boolean;
+    isDeleted?: boolean;
     createdAt: string;
     rootNodes: MmlNode[];
 }
@@ -58,6 +59,10 @@ export default function MmlReferencePage() {
     const [modalSearch, setModalSearch] = useState('');
     const [showProductModal, setShowProductModal] = useState(false);
     const [modalMode, setModalMode] = useState<'create-mml' | 'add-root' | 'add-child'>('create-mml');
+    const [addedProductIds, setAddedProductIds] = useState<Set<number>>(new Set());
+    // Soft delete & checkboxes
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [showDeleted, setShowDeleted] = useState(false);
 
     // ============================================
     // ЗАГРУЗКА ДАННЫХ
@@ -68,11 +73,17 @@ export default function MmlReferencePage() {
         fetchProducts();
     }, []);
 
+    // Перезагрузка при изменении showDeleted
+    useEffect(() => {
+        fetchMmls();
+    }, [showDeleted]);
+
     const fetchMmls = async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_URL}/api/production-v2/mml`, {
-                headers: { Authorization: `Bearer ${token}` }
+                headers: { Authorization: `Bearer ${token}` },
+                params: { showDeleted: showDeleted ? 'true' : undefined }
             });
             setMmls(res.data);
         } catch (err) {
@@ -117,7 +128,7 @@ export default function MmlReferencePage() {
             );
             setMmls([res.data, ...mmls]);
             setSelectedMml(res.data);
-            setShowProductModal(false);
+            // Не закрываем модальное окно — позволяем создать ещё техкарты
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка создания MML');
         }
@@ -131,7 +142,7 @@ export default function MmlReferencePage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             await loadMmlDetails(selectedMml.id);
-            setShowProductModal(false);
+            // Не закрываем модальное окно — позволяем добавить ещё товары
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка добавления позиции');
         }
@@ -145,7 +156,7 @@ export default function MmlReferencePage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             await loadMmlDetails(selectedMml.id);
-            setShowProductModal(false);
+            // Не закрываем модальное окно — позволяем добавить ещё товары
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка добавления подпозиции');
         }
@@ -193,6 +204,54 @@ export default function MmlReferencePage() {
         }
     };
 
+    // Мягкое удаление выбранных MML
+    const softDeleteSelected = async () => {
+        if (selectedIds.size === 0) return;
+        if (!confirm(`Пометить на удаление ${selectedIds.size} техкарт?`)) return;
+
+        try {
+            for (const id of selectedIds) {
+                await axios.patch(`${API_URL}/api/production-v2/mml/${id}/soft-delete`, {}, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+            }
+            setSelectedIds(new Set());
+            await fetchMmls();
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка удаления');
+        }
+    };
+
+    // Восстановить выбранные MML
+    const restoreSelected = async () => {
+        if (selectedIds.size === 0) return;
+
+        try {
+            for (const id of selectedIds) {
+                await axios.patch(`${API_URL}/api/production-v2/mml/${id}/restore`, {}, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+            }
+            setSelectedIds(new Set());
+            await fetchMmls();
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка восстановления');
+        }
+    };
+
+    // Переключить чекбокс
+    const toggleMmlSelection = (mmlId: number) => {
+        setSelectedIds(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(mmlId)) {
+                newSet.delete(mmlId);
+            } else {
+                newSet.add(mmlId);
+            }
+            return newSet;
+        });
+    };
+
     // ============================================
     // МОДАЛЬНОЕ ОКНО
     // ============================================
@@ -200,19 +259,29 @@ export default function MmlReferencePage() {
     const openProductModal = (mode: 'create-mml' | 'add-root' | 'add-child') => {
         setModalMode(mode);
         setModalSearch('');
+        // В режиме create-mml показываем существующие MML как добавленные
+        if (mode === 'create-mml') {
+            const existingProductIds = new Set(mmls.map(m => m.productId));
+            setAddedProductIds(existingProductIds);
+        } else {
+            setAddedProductIds(new Set());
+        }
         setShowProductModal(true);
     };
 
-    const handleProductSelect = (product: Product) => {
+    const handleProductSelect = async (product: Product) => {
+        // Отмечаем товар как добавленный
+        setAddedProductIds(prev => new Set(prev).add(product.id));
+
         switch (modalMode) {
             case 'create-mml':
-                createMml(product.id);
+                await createMml(product.id);
                 break;
             case 'add-root':
-                addRootNode(product.id);
+                await addRootNode(product.id);
                 break;
             case 'add-child':
-                addChildNode(product.id);
+                await addChildNode(product.id);
                 break;
         }
     };
@@ -328,6 +397,35 @@ export default function MmlReferencePage() {
                         >
                             <Plus size={16} className="mr-1" /> Создать техкарту
                         </Button>
+
+                        {/* Toolbar для управления */}
+                        <div className="mt-3 flex gap-2 flex-wrap">
+                            <button
+                                onClick={softDeleteSelected}
+                                disabled={selectedIds.size === 0}
+                                className="px-2 py-1 text-xs bg-red-100 text-red-600 rounded hover:bg-red-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <Trash2 size={12} className="inline mr-1" />
+                                Удалить ({selectedIds.size})
+                            </button>
+                            {showDeleted && (
+                                <button
+                                    onClick={restoreSelected}
+                                    disabled={selectedIds.size === 0}
+                                    className="px-2 py-1 text-xs bg-green-100 text-green-600 rounded hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <RotateCcw size={12} className="inline mr-1" />
+                                    Вернуть
+                                </button>
+                            )}
+                            <button
+                                onClick={() => setShowDeleted(!showDeleted)}
+                                className={`px-2 py-1 text-xs rounded ${showDeleted ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-600'} hover:opacity-80`}
+                            >
+                                {showDeleted ? <Eye size={12} className="inline mr-1" /> : <EyeOff size={12} className="inline mr-1" />}
+                                {showDeleted ? 'Скрыть удал.' : 'Показать удал.'}
+                            </button>
+                        </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto">
@@ -341,27 +439,39 @@ export default function MmlReferencePage() {
                             filteredMmls.map(mml => (
                                 <div
                                     key={mml.id}
-                                    onClick={() => loadMmlDetails(mml.id)}
                                     className={`p-3 border-b cursor-pointer hover:bg-gray-50 transition-colors ${selectedMml?.id === mml.id ? 'bg-purple-50 border-l-4 border-purple-500' : ''
-                                        }`}
+                                        } ${mml.isDeleted ? 'opacity-50 bg-red-50' : ''}`}
                                 >
                                     <div className="flex items-start gap-2">
-                                        <Package size={18} className="text-purple-600 mt-0.5 flex-shrink-0" />
-                                        <div className="flex-1 min-w-0">
-                                            <div className="font-medium text-sm truncate">
-                                                {mml.product.name}
+                                        {/* Чекбокс */}
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedIds.has(mml.id)}
+                                            onChange={() => toggleMmlSelection(mml.id)}
+                                            onClick={e => e.stopPropagation()}
+                                            className="mt-1 cursor-pointer"
+                                        />
+                                        <div
+                                            className="flex-1 min-w-0"
+                                            onClick={() => loadMmlDetails(mml.id)}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <Package size={18} className={`${mml.isDeleted ? 'text-red-400' : 'text-purple-600'} flex-shrink-0`} />
+                                                <div className="font-medium text-sm truncate">
+                                                    {mml.product.name}
+                                                </div>
+                                                <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
+                                                    <span>{mml.product.code}</span>
+                                                    <span>•</span>
+                                                    <span>{countNodes(mml.rootNodes || [])} поз.</span>
+                                                </div>
                                             </div>
-                                            <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
-                                                <span>{mml.product.code}</span>
-                                                <span>•</span>
-                                                <span>{countNodes(mml.rootNodes || [])} поз.</span>
-                                            </div>
+                                            {mml.isLocked ? (
+                                                <Lock size={14} className="text-green-500 flex-shrink-0" />
+                                            ) : (
+                                                <Edit2 size={14} className="text-gray-400 flex-shrink-0" />
+                                            )}
                                         </div>
-                                        {mml.isLocked ? (
-                                            <Lock size={14} className="text-green-500 flex-shrink-0" />
-                                        ) : (
-                                            <Edit2 size={14} className="text-gray-400 flex-shrink-0" />
-                                        )}
                                     </div>
                                 </div>
                             ))
@@ -508,28 +618,44 @@ export default function MmlReferencePage() {
                             {filteredModalProducts.length === 0 ? (
                                 <div className="p-4 text-center text-gray-500">Товары не найдены</div>
                             ) : (
-                                filteredModalProducts.slice(0, 50).map(product => (
-                                    <div
-                                        key={product.id}
-                                        onClick={() => handleProductSelect(product)}
-                                        className="p-3 border-b hover:bg-purple-50 cursor-pointer flex items-center gap-2"
-                                    >
-                                        <Package size={16} className="text-gray-400" />
-                                        <div className="flex-1">
-                                            <div className="text-sm font-medium">{product.name}</div>
-                                            <div className="text-xs text-gray-500">{product.code}</div>
+                                filteredModalProducts.slice(0, 50).map(product => {
+                                    const isAdded = addedProductIds.has(product.id);
+                                    return (
+                                        <div
+                                            key={product.id}
+                                            className="p-3 border-b hover:bg-purple-50 flex items-center gap-2"
+                                        >
+                                            <Package size={16} className="text-gray-400" />
+                                            <div className="flex-1">
+                                                <div className="text-sm font-medium">{product.name}</div>
+                                                <div className="text-xs text-gray-500">{product.code}</div>
+                                            </div>
+                                            <button
+                                                onClick={() => !isAdded && handleProductSelect(product)}
+                                                disabled={isAdded}
+                                                className={`px-3 py-1 text-sm font-medium rounded-lg transition-colors ${isAdded
+                                                    ? 'bg-green-100 text-green-700 cursor-default'
+                                                    : 'bg-purple-600 text-white hover:bg-purple-700'
+                                                    }`}
+                                            >
+                                                {isAdded ? '✓ Добавлен' : 'Добавить'}
+                                            </button>
                                         </div>
-                                    </div>
-                                ))
+                                    );
+                                })
                             )}
                         </div>
                         <div className="p-3 border-t">
                             <Button
                                 variant="outline"
-                                onClick={() => setShowProductModal(false)}
+                                onClick={() => {
+                                    setShowProductModal(false);
+                                    setModalSearch('');
+                                    setAddedProductIds(new Set());
+                                }}
                                 className="w-full"
                             >
-                                Отмена
+                                Закрыть
                             </Button>
                         </div>
                     </div>
