@@ -88,7 +88,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} /> },
                 { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} /> },
                 { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
-                { label: 'Производственный персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
+                { label: 'Произв. персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
                 { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} /> },
             ]
         },

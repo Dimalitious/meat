@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { formatNumber } from '../utils/formatters';
 import {
     Search, Plus, Save, Edit2, X, User, Calendar,
-    Package, AlertCircle, FolderTree, Download, Trash2
+    Package, AlertCircle, FolderTree, Download, Trash2, List
 } from 'lucide-react';
 
 
@@ -159,6 +159,11 @@ export default function ProductionV3Page() {
     const [warning, setWarning] = useState<string | null>(null);
     const [selectedMmlNodeIds, setSelectedMmlNodeIds] = useState<Set<number>>(new Set());
     const [isSubmitting, setIsSubmitting] = useState(false); // Защита от двойного клика
+
+    // Inline редактирование значений
+    const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
+    const [editingValue, setEditingValue] = useState<string>('');
+    const [deleteConfirmNode, setDeleteConfirmNode] = useState<MmlNode | null>(null);
 
     // Объединённые данные (закуп + остатки, сгруппированные по товару)
     const [combinedItems, setCombinedItems] = useState<CombinedItem[]>([]);
@@ -490,10 +495,23 @@ export default function ProductionV3Page() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
 
-            // Обновляем список runs для отображения актуального actualWeight
+            // Пункт 9 ТЗ: Автообновление списков после сохранения
             await fetchRunsAuto();
+            await loadCombinedItems();
 
-            setWarning('Сохранено!');
+            // Если дата изменилась, деселектим позицию (она может быть теперь вне фильтра)
+            const savedRunDate = new Date(editProductionDate).toDateString();
+            const filterFromDate = new Date(dateFrom).toDateString();
+            const filterToDate = new Date(dateTo).toDateString();
+            if (savedRunDate < filterFromDate || savedRunDate > filterToDate) {
+                // Позиция перенесена в другую дату - очищаем выбор
+                setSelectedRun(null);
+                setWarning('Позиция перенесена в дату ' + new Date(editProductionDate).toLocaleDateString('ru-RU'));
+            } else {
+                // Перезагружаем детали текущего run чтобы синхронизировать данные
+                await loadRunDetails(selectedRun.id);
+                setWarning('Сохранено!');
+            }
             setTimeout(() => setWarning(null), 2000);
         } catch (err) {
             console.error('Failed to save:', err);
@@ -580,10 +598,20 @@ export default function ProductionV3Page() {
         return total;
     };
 
-    // Расчёт выработки по productId (сумма всех runs для этого товара)
+    // Расчёт выработки по productId (сумма всех runs для этого товара В ТЕКУЩЕМ ДИАПАЗОНЕ ДАТ)
     const getYieldByProductId = (productId: number): number => {
+        const fromDate = new Date(dateFrom);
+        fromDate.setHours(0, 0, 0, 0);
+        const toDate = new Date(dateTo);
+        toDate.setHours(23, 59, 59, 999);
+
         return runs
-            .filter(r => r.productId === productId && !r.isHidden)
+            .filter(r => {
+                if (r.productId !== productId || r.isHidden) return false;
+                // Фильтруем по дате выработки
+                const runDate = new Date(r.productionDate);
+                return runDate >= fromDate && runDate <= toDate;
+            })
             .reduce((sum, r) => sum + (Number(r.actualWeight) || 0), 0);
     };
 
@@ -614,9 +642,9 @@ export default function ProductionV3Page() {
                 </h1>
             </div>
 
-            <div className="flex gap-4 flex-1 overflow-hidden">
-                {/* Левая панель - БЕЛЫЙ ФОН */}
-                <div className="w-96 bg-white rounded-xl shadow-lg flex flex-col border border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-[22%_18%_60%] gap-4 flex-1 overflow-hidden">
+                {/* Левая панель - Журнал */}
+                <div className="bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden">
                     <div className="p-4 border-b border-gray-200">
                         <h2 className="font-semibold mb-2 flex items-center justify-between text-gray-800">
                             Журнал производства
@@ -750,6 +778,22 @@ export default function ProductionV3Page() {
                                                     <div className="font-medium text-sm truncate text-gray-800">{item.productName}</div>
                                                     {/* Код товара */}
                                                     <div className="text-xs text-gray-400 mb-1">Код: {item.productCode}</div>
+                                                    {/* Пункт 8 ТЗ: Даты закупки и выработки */}
+                                                    <div className="flex flex-wrap gap-2 text-xs mb-1">
+                                                        {item.purchaseDetails && item.purchaseDetails.length > 0 && (
+                                                            <span className="text-gray-500">
+                                                                📅 Закуп: {new Date(item.purchaseDetails[0].date).toLocaleDateString('ru-RU')}
+                                                            </span>
+                                                        )}
+                                                        {(() => {
+                                                            const productRun = runs.find(r => r.productId === item.productId && !r.isHidden);
+                                                            return productRun ? (
+                                                                <span className="text-gray-500">
+                                                                    🏭 Выработка: {new Date(productRun.productionDate).toLocaleDateString('ru-RU')}
+                                                                </span>
+                                                            ) : null;
+                                                        })()}
+                                                    </div>
                                                     {/* Маркеры количества */}
                                                     <div className="flex flex-wrap gap-2 text-xs">
                                                         {item.purchaseQty > 0 && (
@@ -781,8 +825,64 @@ export default function ProductionV3Page() {
 
                 </div>
 
-                {/* Правая панель */}
-                <div className="flex-1 bg-white rounded-lg shadow flex flex-col overflow-hidden">
+                {/* СРЕДНЯЯ ПАНЕЛЬ - Вертикальные табы категорий */}
+                <div className="bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden">
+                    <div className="p-3 border-b bg-gradient-to-r from-indigo-50 to-purple-50">
+                        <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                            <List size={16} className="text-indigo-600" />
+                            Категории MML
+                        </h3>
+                        <p className="text-xs text-gray-500 mt-1">Выберите категорию для редактирования</p>
+                    </div>
+                    <div className="flex-1 overflow-auto p-2 space-y-1">
+                        {!selectedRun ? (
+                            <div className="text-center text-gray-400 py-8">
+                                <Package size={32} className="mx-auto mb-2 text-gray-300" />
+                                <p className="text-sm">Сначала выберите позицию</p>
+                            </div>
+                        ) : categories.length === 0 ? (
+                            <div className="text-center text-gray-400 py-8">
+                                <Package size={32} className="mx-auto mb-2 text-gray-300" />
+                                <p className="text-sm">Нет категорий</p>
+                            </div>
+                        ) : (
+                            categories.map(cat => {
+                                const catTotal = cat.nodes.reduce((sum, node) => {
+                                    const entries = runValues.get(node.id) || [];
+                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                }, 0);
+                                const isActive = activeCategory === cat.category;
+                                return (
+                                    <button
+                                        key={cat.category}
+                                        onClick={() => setActiveCategory(cat.category)}
+                                        className={`w-full text-left px-3 py-3 rounded-lg transition-all ${isActive
+                                            ? 'bg-indigo-600 text-white shadow-md'
+                                            : 'bg-gray-50 hover:bg-gray-100 text-gray-700'
+                                            }`}
+                                    >
+                                        <div className="font-medium text-sm truncate">{cat.category}</div>
+                                        <div className={`text-xs mt-1 ${isActive ? 'text-indigo-200' : 'text-gray-500'}`}>
+                                            {cat.nodes.length} позиций • {formatNumber(catTotal, 1)} кг
+                                        </div>
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                    {/* Итого по всем категориям */}
+                    {selectedRun && (
+                        <div className="p-3 border-t bg-indigo-50">
+                            <div className="flex justify-between items-center">
+                                <span className="text-sm font-medium text-gray-600">Итого:</span>
+                                <span className="text-lg font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 3)} кг</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* ПРАВАЯ ПАНЕЛЬ - Детали */}
+                <div className="bg-white rounded-lg shadow flex flex-col overflow-hidden">
                     {/* Placeholder когда нет выбранной выработки */}
                     {!selectedRun && (
                         <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -797,183 +897,166 @@ export default function ProductionV3Page() {
                     {/* Детали выработки (для всех вкладок когда выбрана выработка) */}
                     {selectedRun && (
                         <>
-                            {/* Шапка */}
-                            <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                                <div>
-                                    <h3 className="font-semibold text-lg">{selectedRun.product.name}</h3>
-                                    <div className="text-sm text-gray-500 flex items-center gap-4 mt-1">
-                                        <span className="flex items-center gap-1"><User size={14} /> {selectedRun.user?.name}</span>
-                                        <span className="flex items-center gap-1"><Calendar size={14} /> {new Date(selectedRun.createdAt).toLocaleDateString('ru-RU')}</span>
-                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${selectedRun.isLocked ? 'bg-gray-200' : 'bg-yellow-100 text-yellow-800'}`}>
-                                            {selectedRun.isLocked ? 'Зафиксировано' : 'Редактирование'}
+                            {/* Шапка - ультракомпактная */}
+                            <div className="px-2 py-1 border-b bg-gray-50 flex justify-between items-center">
+                                <div className="flex items-center gap-2">
+                                    <h3 className="font-semibold text-sm">{selectedRun.product.name}</h3>
+                                    <div className="text-xs text-gray-500 flex items-center gap-2">
+                                        <span className="flex items-center gap-0.5"><User size={10} /> {selectedRun.user?.name}</span>
+                                        <span className="flex items-center gap-0.5"><Calendar size={10} /> {new Date(selectedRun.createdAt).toLocaleDateString('ru-RU')}</span>
+                                        <span className={`px-1 py-0 rounded text-xs ${selectedRun.isLocked ? 'bg-gray-200' : 'bg-yellow-100 text-yellow-800'}`}>
+                                            {selectedRun.isLocked ? 'Зафикс.' : 'Ред.'}
                                         </span>
                                     </div>
                                 </div>
-                                <div className="flex gap-2">
+                                <div>
                                     {!selectedRun.isLocked ? (
-                                        <Button variant="outline" size="sm" onClick={saveRunValues}>
-                                            <Save size={14} className="mr-1" /> Сохранить
-                                        </Button>
+                                        <button onClick={saveRunValues} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded flex items-center gap-1">
+                                            <Save size={12} /> Сохранить
+                                        </button>
                                     ) : (
-                                        <Button variant="outline" size="sm" onClick={() => toggleRunLock(selectedRun.id)}>
-                                            <Edit2 size={14} className="mr-1" /> Редактировать
-                                        </Button>
+                                        <button onClick={() => toggleRunLock(selectedRun.id)} className="text-xs bg-gray-500 hover:bg-gray-600 text-white px-2 py-1 rounded flex items-center gap-1">
+                                            <Edit2 size={12} /> Ред.
+                                        </button>
                                     )}
                                 </div>
                             </div>
 
-                            {/* Поля — новый дизайн с Закупом/Остатком/Итого */}
-                            <div className="p-4 border-b bg-white">
-                                <div className="grid grid-cols-4 gap-4">
+                            {/* Поля — ультракомпактный дизайн */}
+                            <div className="px-2 py-1 border-b bg-white">
+                                <div className="grid grid-cols-5 gap-1 items-end">
                                     <div>
-                                        <label className="text-xs text-gray-500 block mb-1">Дата выработки</label>
-                                        <input type="date" className="w-full border rounded px-3 py-2 text-sm disabled:bg-gray-100"
+                                        <label className="text-[10px] text-gray-500 block">Дата</label>
+                                        <input type="date" className="w-full border rounded px-1 py-0.5 text-xs disabled:bg-gray-100"
                                             value={editProductionDate} onChange={e => setEditProductionDate(e.target.value)} disabled={selectedRun.isLocked} />
                                     </div>
                                     <div>
-                                        <label className="text-xs text-gray-500 block mb-1">
-                                            <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-1"></span>
-                                            Кол-во закупа (кг)
+                                        <label className="text-[10px] text-gray-500 block">
+                                            <span className="inline-block w-1 h-1 bg-green-500 rounded-full mr-0.5"></span>Закуп
                                         </label>
-                                        {/* Пункт 13: детализация по IDN */}
-                                        <div className="w-full border rounded px-3 py-2 text-sm bg-green-50">
-                                            {selectedCombinedItem?.purchaseDetails && selectedCombinedItem.purchaseDetails.length > 0 ? (
-                                                <div className="space-y-1">
-                                                    {selectedCombinedItem.purchaseDetails.map((d, i) => (
-                                                        <div key={i} className="flex justify-between text-xs">
-                                                            <span className="text-green-600">{d.idn}</span>
-                                                            <span className="font-medium text-green-700">{formatNumber(d.qty, 2)} кг</span>
-                                                        </div>
-                                                    ))}
-                                                    <div className="flex justify-between border-t pt-1 mt-1">
-                                                        <span className="font-semibold text-green-800">Итого:</span>
-                                                        <span className="font-bold text-green-800">{formatNumber(selectedCombinedItem.purchaseQty, 3)} кг</span>
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <span className="font-medium text-green-700">{formatNumber(selectedCombinedItem?.purchaseQty || 0, 3)}</span>
-                                            )}
+                                        <div className="border rounded px-1 py-0.5 text-xs bg-green-50 font-medium text-green-700">
+                                            {formatNumber(selectedCombinedItem?.purchaseQty || 0, 1)}
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="text-xs text-gray-500 block mb-1">
-                                            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full mr-1"></span>
-                                            Кол-во остатков (кг)
+                                        <label className="text-[10px] text-gray-500 block">
+                                            <span className="inline-block w-1 h-1 bg-blue-500 rounded-full mr-0.5"></span>Остаток
                                         </label>
-                                        <div className="w-full border rounded px-3 py-2 text-sm bg-blue-50 font-medium text-blue-700">
-                                            {formatNumber(selectedCombinedItem?.balanceQty || 0, 3)}
+                                        <div className="border rounded px-1 py-0.5 text-xs bg-blue-50 font-medium text-blue-700">
+                                            {formatNumber(selectedCombinedItem?.balanceQty || 0, 1)}
                                         </div>
                                     </div>
                                     <div>
-                                        <label className="text-xs text-gray-500 block mb-1">
-                                            <span className="inline-block w-2 h-2 bg-purple-500 rounded-full mr-1"></span>
-                                            Итого товара (кг)
+                                        <label className="text-[10px] text-gray-500 block">
+                                            <span className="inline-block w-1 h-1 bg-purple-500 rounded-full mr-0.5"></span>Итого
                                         </label>
-                                        <div className="w-full border rounded px-3 py-2 text-sm bg-purple-50 font-semibold text-purple-700">
-                                            {formatNumber(selectedCombinedItem?.totalQty || 0, 3)}
+                                        <div className="border rounded px-1 py-0.5 text-xs bg-purple-50 font-bold text-purple-700">
+                                            {formatNumber(selectedCombinedItem?.totalQty || 0, 1)}
                                         </div>
                                     </div>
-                                </div>
-                                {/* Факт выработка */}
-                                <div className="mt-3 pt-3 border-t">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm text-gray-600">
-                                            <span className="inline-block w-2 h-2 bg-orange-500 rounded-full mr-1"></span>
-                                            Факт выработка:
-                                        </span>
-                                        <span className="text-lg font-bold text-orange-600">{formatNumber(calculateActualWeight(), 3)} кг</span>
-                                    </div>
-                                </div>
-                                {/* Фактический вес */}
-                                <div className="mt-2">
-                                    <div className="flex items-center justify-between">
-                                        <span className="text-sm text-gray-600">Фактический вес (из MML):</span>
-                                        <span className="text-lg font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 3)} кг</span>
+                                    <div>
+                                        <label className="text-[10px] text-gray-500 block">
+                                            <span className="inline-block w-1 h-1 bg-orange-500 rounded-full mr-0.5"></span>Факт
+                                        </label>
+                                        <div className="border rounded px-1 py-0.5 text-xs bg-orange-50 font-bold text-orange-600">
+                                            {formatNumber(calculateActualWeight(), 1)}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* Вкладки категорий */}
-                            <div className="p-4 border-b flex gap-2 overflow-x-auto">
-                                {categories.map(cat => {
-                                    // Считаем итого по категории
-                                    const catTotal = cat.nodes.reduce((sum, node) => {
-                                        const entries = runValues.get(node.id) || [];
-                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                    }, 0);
-                                    return (
-                                        <button key={cat.category}
-                                            onClick={() => { setActiveCategory(cat.category); setShowCategoryModal(true); }}
-                                            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors flex flex-col items-center gap-1 ${activeCategory === cat.category ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}>
-                                            <span>{cat.category}</span>
-                                            <span className={`text-xs ${activeCategory === cat.category ? 'text-indigo-100' : 'text-gray-500'}`}>
-                                                {formatNumber(catTotal, 1)} кг
-                                            </span>
+                            {/* Таблица деталей категории - INLINE КОМПАКТНАЯ */}
+                            <div className="flex-1 overflow-auto px-3 py-2">
+                                <div className="flex justify-between items-center mb-2">
+                                    <div>
+                                        <h4 className="font-semibold text-sm text-gray-800">{activeCategory || 'Выберите категорию'}</h4>
+                                        <p className="text-gray-500 text-xs">{activeCategoryNodes.length} позиций</p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
+                                            onClick={() => {
+                                                // Пункт 7 ТЗ: Всегда позволять добавлять/редактировать
+                                                if (activeCategoryNodes.length > 0) {
+                                                    // Сначала ищем узел без значения
+                                                    let targetNode = activeCategoryNodes.find(n => {
+                                                        const entries = runValues.get(n.id) || [];
+                                                        return entries.reduce((s, e) => s + (Number(e.value) || 0), 0) === 0;
+                                                    });
+                                                    // Если все заполнены - открываем первый для редактирования
+                                                    if (!targetNode) {
+                                                        targetNode = activeCategoryNodes[0];
+                                                    }
+                                                    const entries = runValues.get(targetNode.id) || [];
+                                                    const currentTotal = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                    setEditingNodeId(targetNode.id);
+                                                    setEditingValue(currentTotal > 0 ? currentTotal.toString() : '');
+                                                } else {
+                                                    setWarning('Сначала выберите категорию');
+                                                    setTimeout(() => setWarning(null), 2000);
+                                                }
+                                            }}
+                                        >
+                                            <Plus size={14} /> Добавить строку
                                         </button>
-                                    );
-                                })}
-                            </div>
-
-                            {/* Превью категории */}
-                            <div className="flex-1 overflow-auto p-4">
-                                <div className="flex justify-between items-center mb-3">
-                                    <p className="text-gray-500 text-sm">Нажмите на категорию для редактирования позиций</p>
-                                    <div className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1 rounded">
-                                        Всего: {formatNumber(calculateActualWeight(), 3)} кг
+                                        <div className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded">
+                                            Итого: {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                                const entries = runValues.get(node.id) || [];
+                                                return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                            }, 0), 3)} кг
+                                        </div>
                                     </div>
                                 </div>
                                 {activeCategoryNodes.length > 0 && (
                                     <div className="border rounded-lg overflow-hidden shadow-sm">
-                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-3 flex justify-between items-center text-xs font-semibold text-gray-700 border-b">
-                                            <div className="flex items-center gap-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={activeCategoryNodes.every(n => selectedMmlNodeIds.has(n.id))}
-                                                    onChange={(e) => {
-                                                        const newSet = new Set(selectedMmlNodeIds);
-                                                        if (e.target.checked) {
-                                                            activeCategoryNodes.forEach(n => newSet.add(n.id));
-                                                        } else {
-                                                            activeCategoryNodes.forEach(n => newSet.delete(n.id));
-                                                        }
-                                                        setSelectedMmlNodeIds(newSet);
-                                                    }}
-                                                    className="w-4 h-4 accent-indigo-600"
-                                                />
-                                                <span className="flex-1">Позиция</span>
-                                                <span className="w-24 text-gray-500">Код</span>
-                                                <span className="w-28 text-gray-500">Пользователь</span>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                {selectedMmlNodeIds.size > 0 && (
+                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center text-xs font-semibold text-gray-700 border-b">
+                                            <input
+                                                type="checkbox"
+                                                checked={activeCategoryNodes.every(n => selectedMmlNodeIds.has(n.id))}
+                                                onChange={(e) => {
+                                                    const newSet = new Set(selectedMmlNodeIds);
+                                                    if (e.target.checked) {
+                                                        activeCategoryNodes.forEach(n => newSet.add(n.id));
+                                                    } else {
+                                                        activeCategoryNodes.forEach(n => newSet.delete(n.id));
+                                                    }
+                                                    setSelectedMmlNodeIds(newSet);
+                                                }}
+                                                className="w-4 h-4 accent-indigo-600"
+                                            />
+                                            <span>Позиция</span>
+                                            <span className="text-center text-gray-500">Код</span>
+                                            <span className="text-center text-gray-500">Пользователь</span>
+                                            <span className="text-center">Итого (кг)</span>
+                                            <span className="text-center">
+                                                {selectedMmlNodeIds.size > 0 ? (
                                                     <button
                                                         onClick={async () => {
                                                             if (!selectedRun) return;
-                                                            // Удаляем значения для выбранных узлов
                                                             const newValues = new Map(runValues);
                                                             selectedMmlNodeIds.forEach(nodeId => {
                                                                 newValues.delete(nodeId);
                                                             });
                                                             setRunValues(newValues);
                                                             setSelectedMmlNodeIds(new Set());
-                                                            setWarning(`Очищено ${selectedMmlNodeIds.size} позиций (сохраните для применения)`);
+                                                            setWarning(`Очищено ${selectedMmlNodeIds.size} позиций`);
                                                             setTimeout(() => setWarning(null), 2000);
                                                         }}
-                                                        className="text-red-600 hover:text-red-800 flex items-center gap-1"
+                                                        className="text-red-600 hover:text-red-800"
+                                                        title={`Очистить ${selectedMmlNodeIds.size} выбранных`}
                                                     >
-                                                        <Trash2 size={14} /> Очистить ({selectedMmlNodeIds.size})
+                                                        <Trash2 size={14} />
                                                     </button>
-                                                )}
-                                                <span>Итого (кг)</span>
-                                            </div>
+                                                ) : 'Действия'}
+                                            </span>
                                         </div>
                                         {activeCategoryNodes.map((node, idx) => {
                                             const entries = runValues.get(node.id) || [];
                                             const total = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                            // Пункт 3: не показывать пустые строки
-                                            if (total === 0) return null;
+                                            // Пункт 3: не показывать пустые строки, КРОМЕ тех что редактируются
+                                            if (total === 0 && editingNodeId !== node.id) return null;
                                             return (
-                                                <div key={node.id} className={`flex items-center gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
+                                                <div key={node.id} className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center px-4 py-2 border-b last:border-b-0 hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
                                                     <input
                                                         type="checkbox"
                                                         checked={selectedMmlNodeIds.has(node.id)}
@@ -988,41 +1071,97 @@ export default function ProductionV3Page() {
                                                         }}
                                                         className="w-4 h-4 accent-indigo-600"
                                                     />
-                                                    <Package size={16} className={total > 0 ? 'text-indigo-500' : 'text-gray-300'} />
-                                                    <span className="flex-1 text-sm">{node.product.name}</span>
-                                                    <span className="text-xs text-gray-400 w-24">{node.product.code}</span>
-                                                    {/* Пункт 6: столбец Пользователь */}
-                                                    <span className="text-xs text-gray-500 w-28 truncate" title={entries.map(e => e.staff?.fullName).filter(Boolean).join(', ')}>
+                                                    <span className="text-sm truncate" title={node.product.name}>{node.product.name}</span>
+                                                    <span className="text-xs text-gray-400 text-center">{node.product.code}</span>
+                                                    <span className="text-xs text-gray-500 truncate text-center" title={entries.map(e => e.staff?.fullName).filter(Boolean).join(', ')}>
                                                         {entries.length > 0 && entries[0].staff?.fullName ? entries[0].staff.fullName : '—'}
                                                     </span>
-                                                    <span className={`text-sm font-semibold tabular-nums ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
-                                                        {total > 0 ? formatNumber(total, 3) : '—'}
-                                                    </span>
-                                                    {total > 0 && (
+                                                    {/* Inline редактирование значения */}
+                                                    <div className="flex justify-center">
+                                                        {editingNodeId === node.id ? (
+                                                            <input
+                                                                type="number"
+                                                                step="0.001"
+                                                                className="w-16 text-sm font-semibold tabular-nums text-indigo-700 border-2 border-blue-500 rounded px-1 py-0.5 bg-white focus:outline-none text-center"
+                                                                value={editingValue}
+                                                                onChange={(e) => setEditingValue(e.target.value)}
+                                                                onBlur={() => {
+                                                                    const numValue = parseFloat(editingValue) || 0;
+                                                                    if (numValue > 0) {
+                                                                        const newValues = new Map(runValues);
+                                                                        const existingEntries = newValues.get(node.id) || [];
+                                                                        if (existingEntries.length > 0) {
+                                                                            existingEntries[0].value = numValue;
+                                                                        } else {
+                                                                            const staffObj = currentStaff ? { id: currentStaff.id || 0, fullName: currentStaff.fullName } : null;
+                                                                            newValues.set(node.id, [{ id: Date.now(), mmlNodeId: node.id, value: numValue, staff: staffObj }]);
+                                                                        }
+                                                                        setRunValues(newValues);
+                                                                    }
+                                                                    setEditingNodeId(null);
+                                                                    setEditingValue('');
+                                                                }}
+                                                                onKeyDown={(e) => {
+                                                                    if (e.key === 'Enter') {
+                                                                        (e.target as HTMLInputElement).blur();
+                                                                    } else if (e.key === 'Escape') {
+                                                                        setEditingNodeId(null);
+                                                                        setEditingValue('');
+                                                                    }
+                                                                }}
+                                                                autoFocus
+                                                            />
+                                                        ) : (
+                                                            <span
+                                                                className={`text-sm font-semibold tabular-nums cursor-pointer hover:bg-blue-50 px-1 py-0.5 rounded ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}
+                                                                onClick={() => {
+                                                                    setEditingNodeId(node.id);
+                                                                    setEditingValue(total > 0 ? total.toString() : '');
+                                                                }}
+                                                                title="Кликните для редактирования"
+                                                            >
+                                                                {total > 0 ? formatNumber(total, 3) : '—'}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    {/* Кнопки действий */}
+                                                    <div className="flex items-center gap-1 justify-center">
                                                         <button
                                                             onClick={() => {
-                                                                const newValues = new Map(runValues);
-                                                                newValues.delete(node.id);
-                                                                setRunValues(newValues);
+                                                                setEditingNodeId(node.id);
+                                                                setEditingValue(total > 0 ? total.toString() : '');
                                                             }}
-                                                            className="text-red-400 hover:text-red-600 ml-2"
-                                                            title="Очистить значение"
+                                                            className="text-blue-400 hover:text-blue-600 p-0.5"
+                                                            title="Редактировать"
                                                         >
-                                                            <Trash2 size={14} />
+                                                            <Edit2 size={14} />
                                                         </button>
-                                                    )}
+                                                        {total > 0 && (
+                                                            <button
+                                                                onClick={() => setDeleteConfirmNode(node)}
+                                                                className="text-red-400 hover:text-red-600 p-0.5"
+                                                                title="Удалить"
+                                                            >
+                                                                <Trash2 size={14} />
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             );
                                         })}
                                         {/* Итоговая строка */}
-                                        <div className="flex items-center gap-3 px-4 py-3 bg-indigo-100 border-t-2 border-indigo-200">
-                                            <span className="flex-1 text-sm font-semibold text-indigo-900">ИТОГО по категории</span>
-                                            <span className="text-base font-bold text-indigo-800 tabular-nums">
+                                        <div className="grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center px-4 py-2 bg-indigo-100 border-t-2 border-indigo-200">
+                                            <span></span>
+                                            <span className="text-sm font-semibold text-indigo-900">ИТОГО по категории</span>
+                                            <span></span>
+                                            <span></span>
+                                            <span className="text-sm font-bold text-indigo-800 tabular-nums text-center">
                                                 {formatNumber(activeCategoryNodes.reduce((sum, node) => {
                                                     const entries = runValues.get(node.id) || [];
                                                     return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                                }, 0), 3)} кг
+                                                }, 0), 3)}
                                             </span>
+                                            <span className="text-xs text-indigo-600 text-center">кг</span>
                                         </div>
                                     </div>
                                 )}
@@ -1031,6 +1170,44 @@ export default function ProductionV3Page() {
                     )}
                 </div>
             </div>
+
+            {/* Модальное окно подтверждения удаления */}
+            {deleteConfirmNode && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-xl w-[400px] p-6">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                                <Trash2 size={20} className="text-red-600" />
+                            </div>
+                            <h3 className="text-lg font-semibold text-gray-900">Подтверждение удаления</h3>
+                        </div>
+                        <p className="text-gray-600 mb-6">
+                            Вы уверены что хотите удалить позицию <strong>"{deleteConfirmNode.product.name}"</strong>?
+                        </p>
+                        <div className="flex gap-3 justify-end">
+                            <button
+                                onClick={() => setDeleteConfirmNode(null)}
+                                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const newValues = new Map(runValues);
+                                    newValues.delete(deleteConfirmNode.id);
+                                    setRunValues(newValues);
+                                    setDeleteConfirmNode(null);
+                                    setWarning('Позиция удалена (сохраните для применения)');
+                                    setTimeout(() => setWarning(null), 2000);
+                                }}
+                                className="px-4 py-2 text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+                            >
+                                Удалить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Модальное окно выбора товара */}
             {

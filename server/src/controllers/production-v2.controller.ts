@@ -692,6 +692,7 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
     try {
         const runId = Number(req.params.id);
         const { values, productionDate, plannedWeight } = req.body; // values: [{ mmlNodeId, value }]
+        console.log('saveProductionRunValues: runId=', runId, 'productionDate=', productionDate, 'typeof=', typeof productionDate);
 
         // Проверка что выработка не заблокирована
         const existingRun = await prisma.productionRun.findUnique({
@@ -768,6 +769,8 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
         if (plannedWeight !== undefined) {
             updateData.plannedWeight = plannedWeight !== null ? Number(plannedWeight) : null;
         }
+
+        console.log('Updating run with data:', updateData);
 
         await prisma.productionRun.update({
             where: { id: runId },

@@ -359,7 +359,7 @@ async function getPreviousDayReport(reportDate: Date) {
     endOfPreviousDay.setUTCHours(23, 59, 59, 999);
 
     // Параллельно получаем все движения ДО конца предыдущего дня
-    const [purchases, production, svodShipped] = await Promise.all([
+    const [purchases, productionRuns, productionOutput, svodShipped] = await Promise.all([
         // Все закупки до конца предыдущего дня
         prisma.purchaseItem.findMany({
             where: {
@@ -373,16 +373,34 @@ async function getPreviousDayReport(reportDate: Date) {
                 qty: true
             }
         }),
-        // Всё производство до конца предыдущего дня (выход)
+        // Производственные прогоны (сырьё списано) — actualWeight
         prisma.productionRun.findMany({
             where: {
                 productionDate: { lte: endOfPreviousDay },
                 isHidden: false
             },
             select: {
-                productId: true,
-                actualWeight: true,
-                plannedWeight: true
+                productId: true,      // Сырьё (ProductID левой панели)
+                actualWeight: true    // Сколько сырья списано
+            }
+        }),
+        // Выход продукции (ProductionRunValue) — произведённые товары
+        prisma.productionRunValue.findMany({
+            where: {
+                run: {
+                    productionDate: { lte: endOfPreviousDay },
+                    isHidden: false
+                },
+                value: { not: null }
+            },
+            select: {
+                snapshotProductId: true,
+                value: true,
+                node: {
+                    select: {
+                        productId: true
+                    }
+                }
             }
         }),
         // Все отгрузки до конца предыдущего дня
@@ -402,24 +420,28 @@ async function getPreviousDayReport(reportDate: Date) {
     // Группируем данные по товарам
     const balanceByProduct = new Map<number, number>();
 
-    // Приход от закупок
+    // 1. Приход от закупок (+)
     purchases.forEach(p => {
         const current = balanceByProduct.get(p.productId) || 0;
         balanceByProduct.set(p.productId, current + Number(p.qty || 0));
     });
 
-    // Приход от производства (actualWeight - то, что произвели)
-    // и списание в производство (plannedWeight - сырьё, которое использовали)
-    production.forEach(p => {
-        // Сырьё списываем (минус)
-        const currentRaw = balanceByProduct.get(p.productId) || 0;
-        balanceByProduct.set(p.productId, currentRaw - Number(p.plannedWeight || p.actualWeight || 0));
+    // 2. Списание сырья в производство (-) — ProductionRun.actualWeight
+    productionRuns.forEach(p => {
+        const current = balanceByProduct.get(p.productId) || 0;
+        balanceByProduct.set(p.productId, current - Number(p.actualWeight || 0));
     });
 
-    // Примечание: выход продукции (готовый продукт) в текущей схеме не отслеживается отдельно
-    // т.к. productId в ProductionRun = сырьё, а не готовый продукт
+    // 3. Приход от производства (+) — ProductionRunValue.value
+    productionOutput.forEach(p => {
+        const productId = p.snapshotProductId || p.node?.productId;
+        if (productId) {
+            const current = balanceByProduct.get(productId) || 0;
+            balanceByProduct.set(productId, current + Number(p.value || 0));
+        }
+    });
 
-    // Минус отгрузки
+    // 4. Минус отгрузки (-)
     svodShipped.forEach(s => {
         const current = balanceByProduct.get(s.productId) || 0;
         balanceByProduct.set(s.productId, current - Number(s.weightToShip || 0));
