@@ -541,16 +541,11 @@ export const getProductionRuns = async (req: Request, res: Response) => {
         let productIdsWithRunsOutsideRange: number[] = [];
 
         if (includeProductsWithRunsOutside === 'true' && dateFrom && dateTo) {
-            const fromDate = new Date(String(dateFrom));
-            const toDate = new Date(String(dateTo));
-            toDate.setHours(23, 59, 59, 999);
+            // Нормализуем даты для сравнения (без времени)
+            const fromDateStr = String(dateFrom).slice(0, 10); // "2026-01-26"
+            const toDateStr = String(dateTo).slice(0, 10);     // "2026-01-26"
 
-            // Найти ВСЕ productIds, у которых есть runs (не скрытые)
-            const allProductsWithRuns = await prisma.productionRun.findMany({
-                where: { isHidden: false },
-                select: { productId: true, productionDate: true },
-                distinct: ['productId']
-            });
+            console.log('[DEBUG productIdsOutside] Checking range:', fromDateStr, '-', toDateStr);
 
             // Найти productIds, у которых ВСЕ runs вне диапазона
             const productRunCounts: Map<number, { inRange: number; outOfRange: number }> = new Map();
@@ -562,8 +557,9 @@ export const getProductionRuns = async (req: Request, res: Response) => {
 
             for (const run of allRuns) {
                 const pid = run.productId;
-                const runDate = new Date(run.productionDate);
-                const inRange = runDate >= fromDate && runDate <= toDate;
+                // Нормализуем дату run к строке YYYY-MM-DD
+                const runDateStr = new Date(run.productionDate).toISOString().slice(0, 10);
+                const inRange = runDateStr >= fromDateStr && runDateStr <= toDateStr;
 
                 if (!productRunCounts.has(pid)) {
                     productRunCounts.set(pid, { inRange: 0, outOfRange: 0 });
@@ -578,7 +574,8 @@ export const getProductionRuns = async (req: Request, res: Response) => {
                 .filter(([_, counts]) => counts.outOfRange > 0 && counts.inRange === 0)
                 .map(([pid, _]) => pid);
 
-            console.log('[DEBUG getProductionRuns] ProductIds with runs outside range:', productIdsWithRunsOutsideRange);
+            console.log('[DEBUG productIdsOutside] Products with runs outside range:', productIdsWithRunsOutsideRange);
+            console.log('[DEBUG productIdsOutside] Product run counts:', Object.fromEntries(productRunCounts));
         }
 
         res.json({

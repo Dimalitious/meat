@@ -523,6 +523,12 @@ export default function ProductionV3Page() {
         console.log('[DEBUG saveRunValues] selectedRun:', selectedRun?.id, 'productionDate:', selectedRun?.productionDate);
         console.log('[DEBUG saveRunValues] editProductionDate:', editProductionDate);
         if (!selectedRun) return;
+
+        // Сохраняем значения в локальные переменные (чтобы избежать stale closure)
+        const savedProductionDate = editProductionDate;
+        const savedRunId = selectedRun.id;
+        const savedProductId = selectedRun.productId;
+
         try {
             const allValues: { mmlNodeId: number; value: number }[] = [];
             runValues.forEach((entries, nodeId) => {
@@ -531,26 +537,19 @@ export default function ProductionV3Page() {
             });
 
             console.log('[DEBUG saveRunValues] Sending to server:', {
-                runId: selectedRun.id,
-                productionDate: editProductionDate,
+                runId: savedRunId,
+                productionDate: savedProductionDate,
                 valuesCount: allValues.length
             });
 
-            const saveRes = await axios.put(`${API_URL}/api/production-v2/runs/${selectedRun.id}/values`,
-                { values: allValues, productionDate: editProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
+            const saveRes = await axios.put(`${API_URL}/api/production-v2/runs/${savedRunId}/values`,
+                { values: allValues, productionDate: savedProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             console.log('[DEBUG saveRunValues] Server response:', saveRes.data);
 
-            // Пункт 9 ТЗ: Автообновление списков после сохранения
-            console.log('[DEBUG saveRunValues] BEFORE fetchRunsAuto - editProductionDate:', editProductionDate);
-            await fetchRunsAuto();
-            console.log('[DEBUG saveRunValues] AFTER fetchRunsAuto - editProductionDate:', editProductionDate, 'runs count:', runs.length);
-            await loadCombinedItems();
-            console.log('[DEBUG saveRunValues] AFTER loadCombinedItems - editProductionDate:', editProductionDate);
-
-            // Если дата изменилась, деселектим позицию (она может быть теперь вне фильтра)
-            const savedRunDate = new Date(editProductionDate);
+            // Проверяем: дата попадает в текущий фильтр?
+            const savedRunDate = new Date(savedProductionDate);
             savedRunDate.setHours(0, 0, 0, 0);
             const filterFromDateObj = new Date(dateFrom);
             filterFromDateObj.setHours(0, 0, 0, 0);
@@ -565,23 +564,22 @@ export default function ProductionV3Page() {
             });
 
             if (savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj) {
-                // Позиция перенесена в другую дату - очищаем выбор и добавляем в список скрытых
-                console.log('[DEBUG saveRunValues] Date out of range, clearing selectedRun and adding to hidden');
-                // Добавляем productId в список тех что имеют run вне фильтра
-                setProductIdsWithRunOutsideFilter(prev => new Set([...prev, selectedRun.productId]));
+                // Позиция перенесена в другую дату - очищаем выбор
+                console.log('[DEBUG saveRunValues] Date out of range, clearing selectedRun');
+                setProductIdsWithRunOutsideFilter(prev => new Set([...prev, savedProductId]));
                 setSelectedRun(null);
-                setWarning('Позиция перенесена в дату ' + new Date(editProductionDate).toLocaleDateString('ru-RU'));
+                setWarning('Позиция перенесена в дату ' + new Date(savedProductionDate).toLocaleDateString('ru-RU'));
             } else {
-                // Обновляем selectedRun и runs ЛОКАЛЬНО с новой датой (без перезагрузки с сервера)
-                console.log('[DEBUG saveRunValues] Date in range, updating selectedRun locally');
-                const newProductionDate = editProductionDate;
-                setSelectedRun(prev => prev ? { ...prev, productionDate: newProductionDate } : null);
-                // Также обновляем runs массив
-                setRuns(prevRuns => prevRuns.map(r =>
-                    r.id === selectedRun.id ? { ...r, productionDate: newProductionDate } : r
-                ));
+                // Дата в пределах фильтра - СНАЧАЛА обновляем selectedRun локально
+                console.log('[DEBUG saveRunValues] Date in range, updating selectedRun with date:', savedProductionDate);
+                setSelectedRun(prev => prev ? { ...prev, productionDate: savedProductionDate } : null);
                 setWarning('Сохранено!');
             }
+
+            // Пункт 9 ТЗ: Автообновление списков ПОСЛЕ обновления локального стейта
+            await fetchRunsAuto();
+            await loadCombinedItems();
+
             setTimeout(() => setWarning(null), 2000);
         } catch (err) {
             console.error('Failed to save:', err);
@@ -696,6 +694,13 @@ export default function ProductionV3Page() {
         const toDate = new Date(dateTo);
         toDate.setHours(23, 59, 59, 999);
 
+        console.log('[DEBUG displayedItems] Input:', {
+            combinedItemsCount: combinedItems.length,
+            runsCount: runs.length,
+            productIdsWithRunOutsideFilter: Array.from(productIdsWithRunOutsideFilter),
+            dateFrom, dateTo
+        });
+
         // Фильтруем существующие combinedItems
         const filteredItems = combinedItems.filter(item => {
             // Если productId в списке "имеет run вне фильтра" — не показываем
@@ -724,16 +729,20 @@ export default function ProductionV3Page() {
         // но они ещё не в списке combinedItems
         const existingProductIds = new Set(filteredItems.map(i => i.productId));
 
-        const runsInRange = runs.filter(r => {
-            if (r.isHidden) return false;
+        // Дедуплицируем runs по productId — берём только первый run для каждого товара
+        const runsInRangeByProduct = new Map<number, typeof runs[0]>();
+        runs.forEach(r => {
+            if (r.isHidden) return;
             const runDate = new Date(r.productionDate);
             const inRange = runDate >= fromDate && runDate <= toDate;
             const notInList = !existingProductIds.has(r.productId);
-            return inRange && notInList;
+            if (inRange && notInList && !runsInRangeByProduct.has(r.productId)) {
+                runsInRangeByProduct.set(r.productId, r);
+            }
         });
 
-        // Создаём виртуальные CombinedItem из этих runs
-        const virtualItems: CombinedItem[] = runsInRange.map(run => ({
+        // Создаём виртуальные CombinedItem из уникальных runs
+        const virtualItems: CombinedItem[] = Array.from(runsInRangeByProduct.values()).map(run => ({
             productId: run.productId,
             productCode: run.product.code,
             productName: run.product.name,
@@ -743,6 +752,12 @@ export default function ProductionV3Page() {
             totalQty: Number(run.actualWeight) || 0,
             purchaseDetails: []
         }));
+
+        console.log('[DEBUG displayedItems] Result:', {
+            filteredItemsCount: filteredItems.length,
+            virtualItemsCount: virtualItems.length,
+            runsInRangeByProduct: Array.from(runsInRangeByProduct.keys())
+        });
 
         return [...filteredItems, ...virtualItems];
     })();
@@ -824,7 +839,7 @@ export default function ProductionV3Page() {
                                 <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto mb-2"></div>
                                 Загрузка данных...
                             </div>
-                        ) : combinedItems.length === 0 ? (
+                        ) : displayedItems.length === 0 ? (
                             <div className="text-center text-gray-400 py-8">
                                 <Package size={32} className="mx-auto mb-2 text-gray-300" />
                                 <p>Нет данных за выбранный период</p>
@@ -1083,7 +1098,7 @@ export default function ProductionV3Page() {
                                     <h3 className="font-semibold text-sm">{selectedRun.product.name}</h3>
                                     <div className="text-xs text-gray-500 flex items-center gap-2">
                                         <span className="flex items-center gap-0.5"><User size={10} /> {selectedRun.user?.name}</span>
-                                        <span className="flex items-center gap-0.5"><Calendar size={10} /> {new Date(selectedRun.createdAt).toLocaleDateString('ru-RU')}</span>
+                                        <span className="flex items-center gap-0.5"><Calendar size={10} /> {new Date(selectedRun.productionDate).toLocaleDateString('ru-RU')}</span>
                                         <span className={`px-1 py-0 rounded text-xs ${selectedRun.isLocked ? 'bg-gray-200' : 'bg-yellow-100 text-yellow-800'}`}>
                                             {selectedRun.isLocked ? 'Зафикс.' : 'Ред.'}
                                         </span>
