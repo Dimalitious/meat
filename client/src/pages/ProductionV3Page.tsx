@@ -132,6 +132,8 @@ export default function ProductionV3Page() {
     const [runs, setRuns] = useState<ProductionRun[]>([]);
     const [selectedRun, setSelectedRun] = useState<ProductionRun | null>(null);
     const [runValues, setRunValues] = useState<Map<number, RunValue[]>>(new Map());
+    // productIds которые имеют run вне текущего диапазона дат (для скрытия из списка)
+    const [productIdsWithRunOutsideFilter, setProductIdsWithRunOutsideFilter] = useState<Set<number>>(new Set());
     const [categories, setCategories] = useState<CategoryGroup[]>([]);
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
     const [currentStaff, setCurrentStaff] = useState<StaffInfo | null>(null);
@@ -202,6 +204,7 @@ export default function ProductionV3Page() {
     // Автозагрузка данных при изменении дат
     useEffect(() => {
         if (dateFrom && dateTo) {
+            // fetchRunsAuto теперь сам устанавливает productIdsWithRunOutsideFilter на основе данных с сервера
             const timer = setTimeout(() => {
                 fetchRunsAuto();
                 loadCombinedItems(); // Загружаем закупки + остатки
@@ -240,11 +243,30 @@ export default function ProductionV3Page() {
             const params = new URLSearchParams();
             params.append('dateFrom', dateFrom);
             params.append('dateTo', dateTo);
+            params.append('includeProductsWithRunsOutside', 'true');
 
+            console.log('[DEBUG fetchRunsAuto] Fetching runs with filter:', { dateFrom, dateTo });
             const res = await axios.get(`${API_URL}/api/production-v2/runs?${params.toString()}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            setRuns(res.data);
+
+            // Новый формат ответа: { runs, productIdsWithRunsOutsideRange }
+            const { runs: runsData, productIdsWithRunsOutsideRange } = res.data;
+
+            console.log('[DEBUG fetchRunsAuto] Server returned:', runsData?.length || 0, 'runs');
+            console.log('[DEBUG fetchRunsAuto] Products with runs outside range:', productIdsWithRunsOutsideRange);
+
+            if (runsData && runsData.length > 0) {
+                console.log('[DEBUG fetchRunsAuto] Runs productionDates:', runsData.map((r: any) => ({ id: r.id, productId: r.productId, productionDate: r.productionDate })));
+            }
+            setRuns(runsData || []);
+
+            // Обновляем список productIds, которые нужно скрыть (их run вне текущего фильтра)
+            if (productIdsWithRunsOutsideRange && productIdsWithRunsOutsideRange.length > 0) {
+                setProductIdsWithRunOutsideFilter(new Set(productIdsWithRunsOutsideRange));
+            } else {
+                setProductIdsWithRunOutsideFilter(new Set());
+            }
         } catch (err) {
             console.error('Failed to fetch runs:', err);
         } finally {
@@ -252,12 +274,20 @@ export default function ProductionV3Page() {
         }
     };
 
-    const loadRunDetails = async (runId: number) => {
+    const loadRunDetails = async (runId: number, skipDateOverwrite: boolean = false) => {
+        console.log('[DEBUG loadRunDetails] START runId:', runId, 'skipDateOverwrite:', skipDateOverwrite);
+        console.trace('[DEBUG loadRunDetails] Called from:');
         try {
             const res = await axios.get(`${API_URL}/api/production-v2/runs/${runId}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             const run = res.data as ProductionRun;
+            console.log('[DEBUG loadRunDetails] Loaded run:', {
+                id: run.id,
+                productId: run.productId,
+                productionDate: run.productionDate,
+                productName: run.product?.name
+            });
             setSelectedRun(run);
 
             // Загружаем значения с информацией о сотрудниках
@@ -280,8 +310,15 @@ export default function ProductionV3Page() {
                 }
             }
 
-            setEditPlannedWeight(run.plannedWeight !== null ? String(run.plannedWeight) : '');
-            setEditProductionDate(run.productionDate ? run.productionDate.slice(0, 10) : new Date().toISOString().slice(0, 10));
+            // Устанавливаем дату ТОЛЬКО если не пропускаем перезапись
+            if (!skipDateOverwrite) {
+                const parsedDate = run.productionDate ? run.productionDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
+                console.log('[DEBUG loadRunDetails] Setting editProductionDate to:', parsedDate);
+                setEditPlannedWeight(run.plannedWeight !== null ? String(run.plannedWeight) : '');
+                setEditProductionDate(parsedDate);
+            } else {
+                console.log('[DEBUG loadRunDetails] SKIPPING date overwrite, keeping current editProductionDate');
+            }
         } catch (err) {
             console.error('Failed to load run details:', err);
         }
@@ -482,6 +519,9 @@ export default function ProductionV3Page() {
     };
 
     const saveRunValues = async () => {
+        console.log('[DEBUG saveRunValues] START');
+        console.log('[DEBUG saveRunValues] selectedRun:', selectedRun?.id, 'productionDate:', selectedRun?.productionDate);
+        console.log('[DEBUG saveRunValues] editProductionDate:', editProductionDate);
         if (!selectedRun) return;
         try {
             const allValues: { mmlNodeId: number; value: number }[] = [];
@@ -490,26 +530,56 @@ export default function ProductionV3Page() {
                 allValues.push({ mmlNodeId: nodeId, value: total });
             });
 
-            await axios.put(`${API_URL}/api/production-v2/runs/${selectedRun.id}/values`,
+            console.log('[DEBUG saveRunValues] Sending to server:', {
+                runId: selectedRun.id,
+                productionDate: editProductionDate,
+                valuesCount: allValues.length
+            });
+
+            const saveRes = await axios.put(`${API_URL}/api/production-v2/runs/${selectedRun.id}/values`,
                 { values: allValues, productionDate: editProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
+            console.log('[DEBUG saveRunValues] Server response:', saveRes.data);
 
             // Пункт 9 ТЗ: Автообновление списков после сохранения
+            console.log('[DEBUG saveRunValues] BEFORE fetchRunsAuto - editProductionDate:', editProductionDate);
             await fetchRunsAuto();
+            console.log('[DEBUG saveRunValues] AFTER fetchRunsAuto - editProductionDate:', editProductionDate, 'runs count:', runs.length);
             await loadCombinedItems();
+            console.log('[DEBUG saveRunValues] AFTER loadCombinedItems - editProductionDate:', editProductionDate);
 
             // Если дата изменилась, деселектим позицию (она может быть теперь вне фильтра)
-            const savedRunDate = new Date(editProductionDate).toDateString();
-            const filterFromDate = new Date(dateFrom).toDateString();
-            const filterToDate = new Date(dateTo).toDateString();
-            if (savedRunDate < filterFromDate || savedRunDate > filterToDate) {
-                // Позиция перенесена в другую дату - очищаем выбор
+            const savedRunDate = new Date(editProductionDate);
+            savedRunDate.setHours(0, 0, 0, 0);
+            const filterFromDateObj = new Date(dateFrom);
+            filterFromDateObj.setHours(0, 0, 0, 0);
+            const filterToDateObj = new Date(dateTo);
+            filterToDateObj.setHours(23, 59, 59, 999);
+
+            console.log('[DEBUG saveRunValues] Date comparison:', {
+                savedRunDate: savedRunDate.toISOString(),
+                filterFrom: filterFromDateObj.toISOString(),
+                filterTo: filterToDateObj.toISOString(),
+                isOutOfRange: savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj
+            });
+
+            if (savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj) {
+                // Позиция перенесена в другую дату - очищаем выбор и добавляем в список скрытых
+                console.log('[DEBUG saveRunValues] Date out of range, clearing selectedRun and adding to hidden');
+                // Добавляем productId в список тех что имеют run вне фильтра
+                setProductIdsWithRunOutsideFilter(prev => new Set([...prev, selectedRun.productId]));
                 setSelectedRun(null);
                 setWarning('Позиция перенесена в дату ' + new Date(editProductionDate).toLocaleDateString('ru-RU'));
             } else {
-                // Перезагружаем детали текущего run чтобы синхронизировать данные
-                await loadRunDetails(selectedRun.id);
+                // Обновляем selectedRun и runs ЛОКАЛЬНО с новой датой (без перезагрузки с сервера)
+                console.log('[DEBUG saveRunValues] Date in range, updating selectedRun locally');
+                const newProductionDate = editProductionDate;
+                setSelectedRun(prev => prev ? { ...prev, productionDate: newProductionDate } : null);
+                // Также обновляем runs массив
+                setRuns(prevRuns => prevRuns.map(r =>
+                    r.id === selectedRun.id ? { ...r, productionDate: newProductionDate } : r
+                ));
                 setWarning('Сохранено!');
             }
             setTimeout(() => setWarning(null), 2000);
@@ -615,6 +685,68 @@ export default function ProductionV3Page() {
             .reduce((sum, r) => sum + (Number(r.actualWeight) || 0), 0);
     };
 
+    // Фильтрация позиций по дате ВЫРАБОТКИ (не по дате закупки)
+    // - Если есть run с productionDate в текущем диапазоне — показываем
+    // - Если нет run и есть закуп/остаток в текущем диапазоне — показываем
+    // - Если run есть, но его дата ВНЕ диапазона — НЕ показываем
+    // - Также добавляем runs из других дат, перенесённые в текущий диапазон
+    const displayedItems = (() => {
+        const fromDate = new Date(dateFrom);
+        fromDate.setHours(0, 0, 0, 0);
+        const toDate = new Date(dateTo);
+        toDate.setHours(23, 59, 59, 999);
+
+        // Фильтруем существующие combinedItems
+        const filteredItems = combinedItems.filter(item => {
+            // Если productId в списке "имеет run вне фильтра" — не показываем
+            if (productIdsWithRunOutsideFilter.has(item.productId)) {
+                return false;
+            }
+            // Ищем run для этого товара В ПРЕДЕЛАХ текущего диапазона дат
+            const productRunInRange = runs.find(r => {
+                if (r.productId !== item.productId || r.isHidden) return false;
+                const runDate = new Date(r.productionDate);
+                return runDate >= fromDate && runDate <= toDate;
+            });
+            // Если есть run в диапазоне — показываем
+            if (productRunInRange) {
+                return true;
+            }
+            // Если есть run ВНЕ диапазона — не показываем (он будет видим при другом фильтре)
+            const anyRun = runs.find(r => r.productId === item.productId && !r.isHidden);
+            if (anyRun) {
+                return false; // Есть run, но вне диапазона
+            }
+            return true; // Нет run — показываем по дате закупки
+        });
+
+        // Добавляем runs из других дат, у которых productionDate в текущем диапазоне
+        // но они ещё не в списке combinedItems
+        const existingProductIds = new Set(filteredItems.map(i => i.productId));
+
+        const runsInRange = runs.filter(r => {
+            if (r.isHidden) return false;
+            const runDate = new Date(r.productionDate);
+            const inRange = runDate >= fromDate && runDate <= toDate;
+            const notInList = !existingProductIds.has(r.productId);
+            return inRange && notInList;
+        });
+
+        // Создаём виртуальные CombinedItem из этих runs
+        const virtualItems: CombinedItem[] = runsInRange.map(run => ({
+            productId: run.productId,
+            productCode: run.product.code,
+            productName: run.product.name,
+            category: run.product.category,
+            purchaseQty: 0, // Закуп на другой дате
+            balanceQty: 0,
+            totalQty: Number(run.actualWeight) || 0,
+            purchaseDetails: []
+        }));
+
+        return [...filteredItems, ...virtualItems];
+    })();
+
     // Получить узлы активной категории
     const activeCategoryNodes = categories.find(c => c.category === activeCategory)?.nodes || [];
 
@@ -702,14 +834,14 @@ export default function ProductionV3Page() {
                             <>
                                 {/* Счётчик */}
                                 <div className="p-2 border-b bg-gray-50 text-sm text-gray-600">
-                                    Найдено: <span className="font-semibold">{combinedItems.filter(item =>
+                                    Найдено: <span className="font-semibold">{displayedItems.filter(item =>
                                         item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
                                         item.productCode.toLowerCase().includes(productSearch.toLowerCase())
                                     ).length}</span> позиций
                                 </div>
 
                                 {/* Список позиций */}
-                                {combinedItems
+                                {displayedItems
                                     .filter(item =>
                                         item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
                                         item.productCode.toLowerCase().includes(productSearch.toLowerCase())
@@ -723,10 +855,34 @@ export default function ProductionV3Page() {
                                                     : 'hover:bg-gray-50'
                                                 }`}
                                             onClick={async () => {
+                                                // Фильтр дат для поиска run'а
+                                                const fromDate = new Date(dateFrom);
+                                                fromDate.setHours(0, 0, 0, 0);
+                                                const toDate = new Date(dateTo);
+                                                toDate.setHours(23, 59, 59, 999);
+
+                                                // Ищем run для этого товара В ПРЕДЕЛАХ текущего фильтра дат
+                                                const existingRun = runs.find(r => {
+                                                    if (r.productId !== item.productId || r.isHidden) return false;
+                                                    const runDate = new Date(r.productionDate);
+                                                    return runDate >= fromDate && runDate <= toDate;
+                                                });
+
+                                                // Проверяем: если товар уже выбран — не перезагружаем вообще
+                                                console.log('[DEBUG onClick] CHECK productId:', {
+                                                    selectedRunProductId: selectedRun?.productId,
+                                                    itemProductId: item.productId,
+                                                    areEqual: selectedRun?.productId === item.productId
+                                                });
+
+                                                if (selectedRun?.productId === item.productId) {
+                                                    console.log('[DEBUG onClick] SAME product already selected, skipping reload entirely');
+                                                    return;
+                                                }
+
                                                 setSelectedCombinedItem(item);
 
-                                                // Сначала проверяем, есть ли уже выработка для этого товара
-                                                const existingRun = runs.find(r => r.productId === item.productId && !r.isHidden);
+                                                console.log('[DEBUG onClick] item:', item.productName, 'existingRun:', existingRun?.id, 'productionDate:', existingRun?.productionDate);
 
                                                 if (existingRun) {
                                                     // Загружаем существующую выработку
@@ -786,10 +942,34 @@ export default function ProductionV3Page() {
                                                             </span>
                                                         )}
                                                         {(() => {
-                                                            const productRun = runs.find(r => r.productId === item.productId && !r.isHidden);
-                                                            return productRun ? (
+                                                            // Приоритет: если есть выбранный run для этого товара — показываем РЕДАКТИРУЕМУЮ дату
+                                                            const isSelected = selectedRun?.productId === item.productId;
+
+                                                            // Ищем run в пределах текущего фильтра дат
+                                                            const fromDate = new Date(dateFrom);
+                                                            fromDate.setHours(0, 0, 0, 0);
+                                                            const toDateObj = new Date(dateTo);
+                                                            toDateObj.setHours(23, 59, 59, 999);
+
+                                                            const productRun = isSelected
+                                                                ? selectedRun
+                                                                : runs.find(r => {
+                                                                    if (r.productId !== item.productId || r.isHidden) return false;
+                                                                    const runDate = new Date(r.productionDate);
+                                                                    return runDate >= fromDate && runDate <= toDateObj;
+                                                                });
+
+                                                            // Если это выбранный товар - показываем editProductionDate (то что в инпуте справа)
+                                                            // Иначе - показываем дату из productRun
+                                                            const displayDate = isSelected && editProductionDate
+                                                                ? editProductionDate
+                                                                : productRun?.productionDate;
+
+                                                            console.log('[DEBUG LEFT PANEL] item:', item.productName, 'isSelected:', isSelected, 'editProductionDate:', editProductionDate, 'productRun.productionDate:', productRun?.productionDate, 'displayDate:', displayDate);
+
+                                                            return displayDate ? (
                                                                 <span className="text-gray-500">
-                                                                    🏭 Выработка: {new Date(productRun.productionDate).toLocaleDateString('ru-RU')}
+                                                                    🏭 Выработка: {new Date(displayDate).toLocaleDateString('ru-RU')}
                                                                 </span>
                                                             ) : null;
                                                         })()}

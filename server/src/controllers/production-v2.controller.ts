@@ -532,7 +532,59 @@ export const getProductionRuns = async (req: Request, res: Response) => {
             orderBy: { productionDate: 'desc' }
         });
 
-        res.json(runs);
+        console.log('[DEBUG getProductionRuns] Filter:', { dateFrom, dateTo }, 'where:', JSON.stringify(where));
+        console.log('[DEBUG getProductionRuns] Returned', runs.length, 'runs:',
+            runs.map(r => ({ id: r.id, productId: r.productId, productName: r.product?.name?.substring(0, 30), productionDate: r.productionDate })));
+
+        // Если запрошено — найти productIds что имеют runs ВНЕ диапазона дат
+        const { includeProductsWithRunsOutside } = req.query;
+        let productIdsWithRunsOutsideRange: number[] = [];
+
+        if (includeProductsWithRunsOutside === 'true' && dateFrom && dateTo) {
+            const fromDate = new Date(String(dateFrom));
+            const toDate = new Date(String(dateTo));
+            toDate.setHours(23, 59, 59, 999);
+
+            // Найти ВСЕ productIds, у которых есть runs (не скрытые)
+            const allProductsWithRuns = await prisma.productionRun.findMany({
+                where: { isHidden: false },
+                select: { productId: true, productionDate: true },
+                distinct: ['productId']
+            });
+
+            // Найти productIds, у которых ВСЕ runs вне диапазона
+            const productRunCounts: Map<number, { inRange: number; outOfRange: number }> = new Map();
+
+            const allRuns = await prisma.productionRun.findMany({
+                where: { isHidden: false },
+                select: { productId: true, productionDate: true }
+            });
+
+            for (const run of allRuns) {
+                const pid = run.productId;
+                const runDate = new Date(run.productionDate);
+                const inRange = runDate >= fromDate && runDate <= toDate;
+
+                if (!productRunCounts.has(pid)) {
+                    productRunCounts.set(pid, { inRange: 0, outOfRange: 0 });
+                }
+                const counts = productRunCounts.get(pid)!;
+                if (inRange) counts.inRange++;
+                else counts.outOfRange++;
+            }
+
+            // ProductIds, у которых есть runs ВНЕ диапазона И НЕТ runs ВНУТРИ диапазона
+            productIdsWithRunsOutsideRange = Array.from(productRunCounts.entries())
+                .filter(([_, counts]) => counts.outOfRange > 0 && counts.inRange === 0)
+                .map(([pid, _]) => pid);
+
+            console.log('[DEBUG getProductionRuns] ProductIds with runs outside range:', productIdsWithRunsOutsideRange);
+        }
+
+        res.json({
+            runs,
+            productIdsWithRunsOutsideRange
+        });
     } catch (error) {
         console.error('getProductionRuns error:', error);
         res.status(500).json({ error: 'Failed to fetch production runs' });
@@ -763,14 +815,18 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
         const updateData: any = {
             actualWeight: calculatedActualWeight
         };
+
+        console.log('[DEBUG saveRunValues] productionDate from request:', productionDate, 'typeof:', typeof productionDate);
+
         if (productionDate !== undefined) {
             updateData.productionDate = new Date(productionDate);
+            console.log('[DEBUG saveRunValues] Setting productionDate to:', updateData.productionDate);
         }
         if (plannedWeight !== undefined) {
             updateData.plannedWeight = plannedWeight !== null ? Number(plannedWeight) : null;
         }
 
-        console.log('Updating run with data:', updateData);
+        console.log('[DEBUG saveRunValues] Final updateData:', updateData);
 
         await prisma.productionRun.update({
             where: { id: runId },
@@ -806,6 +862,8 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
         if (!run) {
             return res.status(404).json({ error: 'Production run not found' });
         }
+
+        console.log('[DEBUG saveRunValues] VERIFICATION - DB returned productionDate:', run.productionDate);
 
         // Построение дерева с значениями
         const valuesMap = new Map(run.values.map(v => [v.mmlNodeId, v.value]));
