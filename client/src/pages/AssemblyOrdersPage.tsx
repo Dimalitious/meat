@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import { io, Socket } from 'socket.io-client';
 import { API_URL } from '../config/api';
-import { Check, Edit2, Search, Save, Undo2, X } from 'lucide-react';
+import { Check, Edit2, Search, Save, Undo2, X, ChevronLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface AssemblyItem {
@@ -19,9 +20,11 @@ interface AssemblyItem {
     status: string;  // Added to track forming/synced
     weightToShip?: number | null; // Необходимо отгрузить - из Свода
     recommendedQty?: number | null; // Рекомендуемое кол-во - из столбца "Вес" сводки заказов
+    confirmedBy?: string | null; // Кто подтвердил
 }
 
 interface Customer {
+    key: string;      // Unique key for selection (id_X or name_X)
     id: number;
     name: string;
     items: AssemblyItem[];
@@ -49,7 +52,8 @@ const RETURN_REASONS = [
 export default function AssemblyOrdersPage() {
     const { user } = useAuth();
     const [customers, setCustomers] = useState<Customer[]>([]);
-    const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+    const [selectedCustomerKey, setSelectedCustomerKey] = useState<string | null>(null);
+    const [mobileView, setMobileView] = useState<'customers' | 'products'>('customers');
     const [searchCustomer, setSearchCustomer] = useState('');
     const [loading, setLoading] = useState(true);
     const [currentIdn, setCurrentIdn] = useState<string>('');
@@ -65,6 +69,42 @@ export default function AssemblyOrdersPage() {
     useEffect(() => {
         loadAssemblyData();
     }, [assemblyDate]);
+
+    // Real-time updates via Socket.IO
+    useEffect(() => {
+        // API_URL is like "http://localhost:5000/api" - we need "http://localhost:5000"
+        const socketUrl = API_URL.replace('/api', '');
+        const socket: Socket = io(socketUrl, {
+            transports: ['websocket', 'polling']
+        });
+
+        socket.on('connect', () => {
+            console.log('[Socket] Connected for assembly updates');
+        });
+
+        socket.on('assembly:itemUpdated', (data: { itemId: number; status: string; shippedQty: number; confirmedBy: string }) => {
+            console.log('[Socket] Item updated:', data);
+            // Update local state with new data
+            setCustomers(prev => prev.map(c => ({
+                ...c,
+                items: c.items.map(item =>
+                    item.id === data.itemId
+                        ? {
+                            ...item,
+                            status: data.status,
+                            confirmed: data.status === 'synced',
+                            loadedQty: data.shippedQty,
+                            confirmedBy: data.confirmedBy
+                        }
+                        : item
+                )
+            })));
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, []);
 
     const loadAssemblyData = async () => {
         try {
@@ -82,8 +122,7 @@ export default function AssemblyOrdersPage() {
                 }).catch(() => ({ data: { svod: null } })) // Если свода нет - не ломаем загрузку
             ]);
 
-            console.log('[ASSEMBLY] Orders Response:', ordersRes.data);
-            console.log('[ASSEMBLY] Svod Response:', svodRes.data);
+
 
             // Handle both old format (array) and new format ({ data, pagination })
             const allEntries = Array.isArray(ordersRes.data) ? ordersRes.data : (ordersRes.data.data || []);
@@ -100,20 +139,23 @@ export default function AssemblyOrdersPage() {
 
             // All returned entries should already be filtered by status
             const relevantEntries = allEntries;
-            const customerMap: { [key: number]: Customer } = {};
+            const customerMap: { [key: string]: Customer } = {};  // Changed to string key for customerName fallback
 
             for (const entry of relevantEntries) {
-                if (!entry.customerId) continue;
+                // Use customerId if available, otherwise use customerName as key
+                const customerKey = entry.customerId ? `id_${entry.customerId}` : `name_${entry.customerName}`;
+                if (!customerKey || customerKey === 'name_' || customerKey === 'name_null') continue;
 
-                if (!customerMap[entry.customerId]) {
-                    customerMap[entry.customerId] = {
-                        id: entry.customerId,
-                        name: entry.customerName,
+                if (!customerMap[customerKey]) {
+                    customerMap[customerKey] = {
+                        key: customerKey,
+                        id: entry.customerId || 0,  // Use 0 if no customerId
+                        name: entry.customerName || 'Неизвестный клиент',
                         items: []
                     };
                 }
 
-                customerMap[entry.customerId].items.push({
+                customerMap[customerKey].items.push({
                     id: entry.id,
                     idn: entry.idn || '',
                     productId: entry.productId,
@@ -122,12 +164,13 @@ export default function AssemblyOrdersPage() {
                     orderedQty: entry.orderQty || entry.shippedQty,
                     loadedQty: entry.shippedQty || 0,
                     confirmed: entry.status === 'synced',
-                    customerId: entry.customerId,
-                    customerName: entry.customerName,
+                    customerId: entry.customerId || 0,
+                    customerName: entry.customerName || 'Неизвестный клиент',
                     price: Number(entry.price) || 0,
                     status: entry.status,
                     weightToShip: weightToShipMap.get(entry.productId) ?? null,
-                    recommendedQty: entry.weightToDistribute ?? null
+                    recommendedQty: entry.weightToDistribute ?? null,
+                    confirmedBy: entry.confirmedBy || null
                 });
             }
 
@@ -139,8 +182,8 @@ export default function AssemblyOrdersPage() {
                 setCurrentIdn(relevantEntries[0].idn);
             }
 
-            if (customerList.length > 0 && !selectedCustomerId) {
-                setSelectedCustomerId(customerList[0].id);
+            if (customerList.length > 0 && !selectedCustomerKey) {
+                setSelectedCustomerKey(customerList[0].key);
             }
         } catch (err) {
             console.error('Failed to load assembly data:', err);
@@ -195,7 +238,7 @@ export default function AssemblyOrdersPage() {
             setCustomers(customers.map(c => ({
                 ...c,
                 items: c.items.map(item =>
-                    item.id === itemId ? { ...item, confirmed: true, status: 'synced' } : item
+                    item.id === itemId ? { ...item, confirmed: true, status: 'synced', confirmedBy: user?.username || 'Unknown' } : item
                 )
             })));
 
@@ -294,46 +337,74 @@ export default function AssemblyOrdersPage() {
         }
     };
 
+    const [savingCustomer, setSavingCustomer] = useState<string | null>(null);
+
+    const saveCustomerToJournal = async (customerKey: string) => {
+        const customer = customers.find(c => c.key === customerKey);
+        if (!customer) return;
+
+        setSavingCustomer(customerKey);
+        try {
+            const token = localStorage.getItem('token');
+            await axios.post(`${API_URL}/api/journals/assembly`, {
+                assemblyDate,
+                createdBy: user?.username || 'Unknown',
+                sourceSummaryId: null,
+                data: [customer]  // Save only this customer
+            }, { headers: { Authorization: `Bearer ${token}` } });
+            alert(`Заказ "${customer.name}" сохранён`);
+        } catch (err) {
+            console.error('Save error:', err);
+            alert('Ошибка сохранения');
+        } finally {
+            setSavingCustomer(null);
+        }
+    };
+
     const filteredCustomers = customers.filter(c =>
         c.name.toLowerCase().includes(searchCustomer.toLowerCase())
     );
 
-    const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+    const selectedCustomer = customers.find(c => c.key === selectedCustomerKey);
 
     if (loading) return <div className="p-8 text-center">Загрузка...</div>;
 
     return (
         <div className="flex flex-col h-[calc(100vh-80px)] gap-4">
             {/* Header with date and save button */}
-            <div className="bg-white rounded-lg shadow p-4 flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                    <h1 className="text-xl font-bold">Сборка заказов</h1>
-                    {currentIdn && (
-                        <span className="text-sm text-gray-500">
+            <div className="bg-white rounded-lg shadow p-3 md:p-4 flex items-center justify-between">
+                <div className="flex items-center gap-2 md:gap-4">
+                    {/* Mobile back button */}
+                    {mobileView === 'products' && (
+                        <button
+                            onClick={() => setMobileView('customers')}
+                            className="md:hidden p-2 -ml-2 text-gray-600"
+                        >
+                            <ChevronLeft size={24} />
+                        </button>
+                    )}
+                    <h1 className="text-lg md:text-xl font-bold">
+                        {mobileView === 'products' && selectedCustomer ? selectedCustomer.name : 'Сборка заказов'}
+                    </h1>
+                    {currentIdn && mobileView === 'customers' && (
+                        <span className="text-xs md:text-sm text-gray-500 hidden sm:inline">
                             № Сводки: <span className="font-mono font-medium">{currentIdn}</span>
                         </span>
                     )}
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 md:gap-4">
                     <input
                         type="date"
                         value={assemblyDate}
                         onChange={e => setAssemblyDate(e.target.value)}
-                        className="border rounded px-3 py-2"
+                        className="border rounded px-2 md:px-3 py-2 text-sm"
                     />
-                    <button
-                        onClick={saveToJournal}
-                        className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-purple-700"
-                    >
-                        <Save size={18} />
-                        Сохранить
-                    </button>
                 </div>
             </div>
 
-            <div className="flex flex-1 gap-4">
-                {/* Left Panel - Customers */}
-                <div className="w-80 bg-white rounded-lg shadow flex flex-col">
+            <div className="flex flex-1 gap-4 overflow-hidden">
+                {/* Left Panel - Customers (hidden on mobile when viewing products) */}
+                <div className={`${mobileView === 'products' ? 'hidden' : 'flex'} md:flex w-full md:w-80 bg-white rounded-lg shadow flex-col`}>
                     <div className="p-4 border-b">
                         <h2 className="text-lg font-bold mb-3">Клиенты</h2>
                         <div className="relative">
@@ -358,23 +429,48 @@ export default function AssemblyOrdersPage() {
                                 const allConfirmed = confirmedCount === c.items.length;
                                 return (
                                     <button
-                                        key={c.id}
-                                        onClick={() => setSelectedCustomerId(c.id)}
-                                        className={`w-full text-left p-4 border-b hover:bg-gray-50 flex justify-between items-center
-                                            ${selectedCustomerId === c.id ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''}
+                                        key={c.key}
+                                        onClick={() => {
+                                            setSelectedCustomerKey(c.key);
+                                            setMobileView('products');
+                                        }}
+                                        className={`w-full text-left p-4 border-b hover:bg-gray-50 transition-colors
+                                            ${selectedCustomerKey === c.key ? 'bg-purple-50 border-l-4 border-l-purple-500' : ''}
                                         `}
                                     >
-                                        <div>
-                                            <div className="font-medium">{c.name}</div>
-                                            <div className="text-sm text-gray-500">
-                                                {c.items.length} позиций ({confirmedCount || '-'} ✓)
-                                            </div>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="font-medium text-gray-900">{c.name}</div>
+                                            {allConfirmed && (
+                                                <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">
+                                                    ✓ Готово
+                                                </span>
+                                            )}
                                         </div>
-                                        {allConfirmed && (
-                                            <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded">
-                                                ✓ Готово
+                                        {/* Progress bar */}
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                                <div
+                                                    className="h-full bg-green-500 transition-all"
+                                                    style={{ width: `${(confirmedCount / c.items.length) * 100}%` }}
+                                                />
+                                            </div>
+                                            <span className="text-xs text-gray-500 min-w-[40px]">
+                                                {confirmedCount}/{c.items.length}
                                             </span>
-                                        )}
+                                        </div>
+                                        {/* Item checkmarks */}
+                                        <div className="flex gap-1 flex-wrap">
+                                            {c.items.map((item, idx) => (
+                                                <span
+                                                    key={idx}
+                                                    className={`w-5 h-5 rounded-full flex items-center justify-center text-xs
+                                                        ${item.confirmed ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-400'}
+                                                    `}
+                                                >
+                                                    ✓
+                                                </span>
+                                            ))}
+                                        </div>
                                     </button>
                                 );
                             })
@@ -382,18 +478,38 @@ export default function AssemblyOrdersPage() {
                     </div>
                 </div>
 
-                {/* Right Panel - Order Items */}
-                <div className="flex-1 bg-white rounded-lg shadow overflow-auto p-4">
+                {/* Right Panel - Order Items (hidden on mobile when viewing customers) */}
+                <div className={`${mobileView === 'customers' ? 'hidden' : 'flex'} md:flex flex-1 bg-white rounded-lg shadow overflow-auto p-4 flex-col`}>
                     {!selectedCustomer ? (
                         <div className="h-full flex items-center justify-center text-gray-500">
                             Выберите клиента слева
                         </div>
                     ) : (
                         <>
-                            <div className="mb-4">
+                            {/* Header with save button - hidden on mobile as name is in top bar */}
+                            <div className="mb-4 hidden md:flex md:justify-between md:items-center">
                                 <h2 className="text-xl font-bold">
                                     {selectedCustomer.name}
                                 </h2>
+                                <button
+                                    onClick={() => saveCustomerToJournal(selectedCustomer.key)}
+                                    disabled={savingCustomer === selectedCustomer.key}
+                                    className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-purple-700 disabled:opacity-50"
+                                >
+                                    <Save size={18} />
+                                    {savingCustomer === selectedCustomer.key ? 'Сохранение...' : 'Сохранить клиента'}
+                                </button>
+                            </div>
+                            {/* Mobile save button at bottom */}
+                            <div className="md:hidden fixed bottom-4 left-4 right-4 z-10">
+                                <button
+                                    onClick={() => saveCustomerToJournal(selectedCustomer.key)}
+                                    disabled={savingCustomer === selectedCustomer.key}
+                                    className="w-full bg-purple-600 text-white py-3 rounded-lg flex items-center justify-center gap-2 shadow-lg"
+                                >
+                                    <Save size={20} />
+                                    {savingCustomer === selectedCustomer.key ? 'Сохранение...' : 'Сохранить заказ'}
+                                </button>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                 {selectedCustomer.items.map(item => (
@@ -466,7 +582,8 @@ export default function AssemblyOrdersPage() {
                                                     type="number"
                                                     step="0.1"
                                                     className={`w-24 border rounded px-2 py-1 text-right font-medium ${item.confirmed ? 'bg-gray-100' : ''}`}
-                                                    value={item.loadedQty}
+                                                    value={item.loadedQty === 0 ? '' : item.loadedQty}
+                                                    placeholder="—"
                                                     onChange={e => updateLoadedQty(item.id, parseFloat(e.target.value) || 0)}
                                                     disabled={item.confirmed}
                                                 />
@@ -477,9 +594,16 @@ export default function AssemblyOrdersPage() {
                                         {/* Card Footer - Confirm Button */}
                                         <div className="p-3 border-t">
                                             {item.confirmed ? (
-                                                <div className="w-full bg-green-100 text-green-700 py-2 rounded-lg flex items-center justify-center gap-2">
-                                                    <Check size={18} />
-                                                    Подтверждено
+                                                <div className="space-y-1">
+                                                    <div className="w-full bg-green-100 text-green-700 py-2 rounded-lg flex items-center justify-center gap-2">
+                                                        <Check size={18} />
+                                                        Подтверждено
+                                                    </div>
+                                                    {item.confirmedBy && (
+                                                        <div className="text-xs text-gray-500 text-center">
+                                                            Собрал: {item.confirmedBy}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             ) : (
                                                 <button

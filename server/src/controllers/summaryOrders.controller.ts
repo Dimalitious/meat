@@ -48,6 +48,8 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
         if (district) where.district = district;
         if (managerId) where.managerId = managerId;
 
+
+
         // Выполняем count и findMany ПАРАЛЛЕЛЬНО
         const [total, orders] = await Promise.all([
             prisma.summaryOrderJournal.count({ where }),
@@ -78,6 +80,8 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
                     district: true,
                     pointAddress: true,
                     status: true,
+                    confirmedBy: true,
+                    confirmedAt: true,
                     createdAt: true
                 },
                 orderBy: { createdAt: 'desc' },
@@ -85,6 +89,7 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
                 take: limitNum
             })
         ]);
+
 
         res.json({
             data: orders,
@@ -349,6 +354,7 @@ export const updateSummaryOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const data: any = { ...req.body };
+        const user = (req as any).user;
 
         // Convert numeric fields
         if (data.price !== undefined) data.price = Number(data.price);
@@ -367,11 +373,30 @@ export const updateSummaryOrder = async (req: Request, res: Response) => {
             }
         }
 
+        // If status is being changed to 'synced', record who confirmed it
+        if (data.status === 'synced') {
+            data.confirmedBy = user?.username || 'Unknown';
+            data.confirmedAt = new Date();
+        }
+
         // Оптимизация: убираем include при update для ускорения
         const entry = await prisma.summaryOrderJournal.update({
             where: { id: Number(id) },
             data
         });
+
+        // Emit socket event for real-time updates
+        const io = (req as any).io;
+        if (io) {
+            io.emit('assembly:itemUpdated', {
+                itemId: Number(id),
+                status: entry.status,
+                shippedQty: entry.shippedQty,
+                confirmedBy: entry.confirmedBy,
+                confirmedAt: entry.confirmedAt
+            });
+        }
+
         res.json(entry);
     } catch (error) {
         console.error('Update summary order error:', error);

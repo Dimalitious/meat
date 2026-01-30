@@ -338,6 +338,10 @@ model SummaryOrderJournal {
   assemblyReturnReason  String?   // Причина возврата
   assemblyReturnComment String?   // Комментарий к возврату
   
+  // Confirmation tracking (кто подтвердил/сохранил позицию)
+  confirmedBy           String?   // Username кто подтвердил
+  confirmedAt           DateTime? // Когда подтверждено
+  
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
   customer            Customer? @relation(fields: [customerId], references: [id])
