@@ -161,6 +161,7 @@ export default function ProductionV3Page() {
     const [warning, setWarning] = useState<string | null>(null);
     const [selectedMmlNodeIds, setSelectedMmlNodeIds] = useState<Set<number>>(new Set());
     const [isSubmitting, setIsSubmitting] = useState(false); // Защита от двойного клика
+    const [activeMainTab, setActiveMainTab] = useState<'production' | 'writeoff'>('production'); // Выработка / Списание
 
     // Inline редактирование значений
     const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
@@ -172,6 +173,21 @@ export default function ProductionV3Page() {
     const [combinedLoading, setCombinedLoading] = useState(false);
     const [selectedCombinedItem, setSelectedCombinedItem] = useState<CombinedItem | null>(null);
     const [selectedCombinedIds, setSelectedCombinedIds] = useState<Set<number>>(new Set());
+    // Мягкое удаление: скрытые productIds и показ скрытых
+    const [markedForDeletion, setMarkedForDeletion] = useState<Set<number>>(new Set());
+    const [showMarkedItems, setShowMarkedItems] = useState(false);
+
+    // Мобильная навигация: 1=список товаров, 2=категории/детали, 3=редактирование
+    const [mobileLevel, setMobileLevel] = useState<1 | 2 | 3>(1);
+    const [isMobile, setIsMobile] = useState(false);
+
+    // Определение мобильного режима
+    useEffect(() => {
+        const checkMobile = () => setIsMobile(window.innerWidth < 768);
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
 
     // MML модальное окно для закупок/остатков
     const [showMmlModal, setShowMmlModal] = useState(false);
@@ -244,8 +260,6 @@ export default function ProductionV3Page() {
             params.append('dateFrom', dateFrom);
             params.append('dateTo', dateTo);
             params.append('includeProductsWithRunsOutside', 'true');
-
-            console.log('[DEBUG fetchRunsAuto] Fetching runs with filter:', { dateFrom, dateTo });
             const res = await axios.get(`${API_URL}/api/production-v2/runs?${params.toString()}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -253,11 +267,7 @@ export default function ProductionV3Page() {
             // Новый формат ответа: { runs, productIdsWithRunsOutsideRange }
             const { runs: runsData, productIdsWithRunsOutsideRange } = res.data;
 
-            console.log('[DEBUG fetchRunsAuto] Server returned:', runsData?.length || 0, 'runs');
-            console.log('[DEBUG fetchRunsAuto] Products with runs outside range:', productIdsWithRunsOutsideRange);
-
             if (runsData && runsData.length > 0) {
-                console.log('[DEBUG fetchRunsAuto] Runs productionDates:', runsData.map((r: any) => ({ id: r.id, productId: r.productId, productionDate: r.productionDate })));
             }
             setRuns(runsData || []);
 
@@ -275,19 +285,12 @@ export default function ProductionV3Page() {
     };
 
     const loadRunDetails = async (runId: number, skipDateOverwrite: boolean = false) => {
-        console.log('[DEBUG loadRunDetails] START runId:', runId, 'skipDateOverwrite:', skipDateOverwrite);
         console.trace('[DEBUG loadRunDetails] Called from:');
         try {
             const res = await axios.get(`${API_URL}/api/production-v2/runs/${runId}`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             const run = res.data as ProductionRun;
-            console.log('[DEBUG loadRunDetails] Loaded run:', {
-                id: run.id,
-                productId: run.productId,
-                productionDate: run.productionDate,
-                productName: run.product?.name
-            });
             setSelectedRun(run);
 
             // Загружаем значения с информацией о сотрудниках
@@ -313,11 +316,9 @@ export default function ProductionV3Page() {
             // Устанавливаем дату ТОЛЬКО если не пропускаем перезапись
             if (!skipDateOverwrite) {
                 const parsedDate = run.productionDate ? run.productionDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
-                console.log('[DEBUG loadRunDetails] Setting editProductionDate to:', parsedDate);
                 setEditPlannedWeight(run.plannedWeight !== null ? String(run.plannedWeight) : '');
                 setEditProductionDate(parsedDate);
             } else {
-                console.log('[DEBUG loadRunDetails] SKIPPING date overwrite, keeping current editProductionDate');
             }
         } catch (err) {
             console.error('Failed to load run details:', err);
@@ -419,15 +420,12 @@ export default function ProductionV3Page() {
 
     // Создать выработку из закупки/остатка с MML значениями
     const createRunFromSource = async () => {
-        console.log('createRunFromSource called', { mmlModalData, mmlId, mmlValues: Array.from(mmlValues.entries()) });
         if (!mmlModalData || !mmlId) {
-            console.log('Early return - missing data', { mmlModalData: !!mmlModalData, mmlId });
             return;
         }
 
         try {
             // Создаём выработку
-            console.log('Creating run...');
             const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
                 productId: mmlModalData.productId,
                 sourceType: mmlModalData.sourceType,
@@ -436,10 +434,8 @@ export default function ProductionV3Page() {
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            console.log('Run created:', res.data);
 
             const newRun = res.data.run || res.data;
-            console.log('newRun:', newRun);
 
             // Сохраняем значения MML
             const values: { mmlNodeId: number; value: number }[] = [];
@@ -448,10 +444,8 @@ export default function ProductionV3Page() {
                     values.push({ mmlNodeId: nodeId, value });
                 }
             });
-            console.log('Values to save:', values);
 
             if (values.length > 0) {
-                console.log('Saving values...');
                 const valRes = await axios.put(`${API_URL}/api/production-v2/runs/${newRun.id}/values`, {
                     values,
                     productionDate: dateFrom,
@@ -459,7 +453,6 @@ export default function ProductionV3Page() {
                 }, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
-                console.log('Values saved:', valRes.data);
             }
 
             // Обновляем список runs (actualWeight обновляется на сервере)
@@ -519,9 +512,6 @@ export default function ProductionV3Page() {
     };
 
     const saveRunValues = async () => {
-        console.log('[DEBUG saveRunValues] START');
-        console.log('[DEBUG saveRunValues] selectedRun:', selectedRun?.id, 'productionDate:', selectedRun?.productionDate);
-        console.log('[DEBUG saveRunValues] editProductionDate:', editProductionDate);
         if (!selectedRun) return;
 
         // Сохраняем значения в локальные переменные (чтобы избежать stale closure)
@@ -536,17 +526,10 @@ export default function ProductionV3Page() {
                 allValues.push({ mmlNodeId: nodeId, value: total });
             });
 
-            console.log('[DEBUG saveRunValues] Sending to server:', {
-                runId: savedRunId,
-                productionDate: savedProductionDate,
-                valuesCount: allValues.length
-            });
-
             const saveRes = await axios.put(`${API_URL}/api/production-v2/runs/${savedRunId}/values`,
                 { values: allValues, productionDate: savedProductionDate, plannedWeight: editPlannedWeight ? Number(editPlannedWeight) : null },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
-            console.log('[DEBUG saveRunValues] Server response:', saveRes.data);
 
             // Проверяем: дата попадает в текущий фильтр?
             const savedRunDate = new Date(savedProductionDate);
@@ -556,22 +539,13 @@ export default function ProductionV3Page() {
             const filterToDateObj = new Date(dateTo);
             filterToDateObj.setHours(23, 59, 59, 999);
 
-            console.log('[DEBUG saveRunValues] Date comparison:', {
-                savedRunDate: savedRunDate.toISOString(),
-                filterFrom: filterFromDateObj.toISOString(),
-                filterTo: filterToDateObj.toISOString(),
-                isOutOfRange: savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj
-            });
-
             if (savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj) {
                 // Позиция перенесена в другую дату - очищаем выбор
-                console.log('[DEBUG saveRunValues] Date out of range, clearing selectedRun');
                 setProductIdsWithRunOutsideFilter(prev => new Set([...prev, savedProductId]));
                 setSelectedRun(null);
                 setWarning('Позиция перенесена в дату ' + new Date(savedProductionDate).toLocaleDateString('ru-RU'));
             } else {
                 // Дата в пределах фильтра - СНАЧАЛА обновляем selectedRun локально
-                console.log('[DEBUG saveRunValues] Date in range, updating selectedRun with date:', savedProductionDate);
                 setSelectedRun(prev => prev ? { ...prev, productionDate: savedProductionDate } : null);
                 setWarning('Сохранено!');
             }
@@ -694,13 +668,6 @@ export default function ProductionV3Page() {
         const toDate = new Date(dateTo);
         toDate.setHours(23, 59, 59, 999);
 
-        console.log('[DEBUG displayedItems] Input:', {
-            combinedItemsCount: combinedItems.length,
-            runsCount: runs.length,
-            productIdsWithRunOutsideFilter: Array.from(productIdsWithRunOutsideFilter),
-            dateFrom, dateTo
-        });
-
         // Фильтруем существующие combinedItems
         const filteredItems = combinedItems.filter(item => {
             // Если productId в списке "имеет run вне фильтра" — не показываем
@@ -753,13 +720,13 @@ export default function ProductionV3Page() {
             purchaseDetails: []
         }));
 
-        console.log('[DEBUG displayedItems] Result:', {
-            filteredItemsCount: filteredItems.length,
-            virtualItemsCount: virtualItems.length,
-            runsInRangeByProduct: Array.from(runsInRangeByProduct.keys())
-        });
-
-        return [...filteredItems, ...virtualItems];
+        const allItems = [...filteredItems, ...virtualItems];
+        // Фильтруем по мягкому удалению
+        if (showMarkedItems) {
+            return allItems.filter(item => markedForDeletion.has(item.productId));
+        } else {
+            return allItems.filter(item => !markedForDeletion.has(item.productId));
+        }
     })();
 
     // Получить узлы активной категории
@@ -789,9 +756,54 @@ export default function ProductionV3Page() {
                 </h1>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-[22%_18%_60%] gap-4 flex-1 overflow-hidden">
+            {/* Табы: Выработка / Списание */}
+            <div className="flex gap-2 mb-4">
+                <button
+                    onClick={() => setActiveMainTab('production')}
+                    className={`px-4 py-2 rounded-lg font-medium transition-all ${activeMainTab === 'production'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                >
+                    🏭 Выработка
+                </button>
+                <button
+                    onClick={() => setActiveMainTab('writeoff')}
+                    className={`px-4 py-2 rounded-lg font-medium transition-all ${activeMainTab === 'writeoff'
+                        ? 'bg-red-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                >
+                    📤 Списание
+                </button>
+            </div>
+
+            {/* Мобильная навигация */}
+            {isMobile && mobileLevel > 1 && (
+                <div className="flex items-center gap-2 mb-3 md:hidden">
+                    <button
+                        onClick={() => {
+                            if (mobileLevel === 3) setMobileLevel(2);
+                            else if (mobileLevel === 2) {
+                                setMobileLevel(1);
+                                setSelectedCombinedItem(null);
+                                setSelectedRun(null);
+                            }
+                        }}
+                        className="flex items-center gap-1 px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700"
+                    >
+                        <X size={16} /> Назад
+                    </button>
+                    <span className="text-sm text-gray-500">
+                        {mobileLevel === 2 && selectedCombinedItem?.productName}
+                        {mobileLevel === 3 && 'Редактирование'}
+                    </span>
+                </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-[20%_15%_1fr] gap-3 flex-1 overflow-hidden">
                 {/* Левая панель - Журнал */}
-                <div className="bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden">
+                <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 1 ? 'hidden' : ''}`}>
                     <div className="p-4 border-b border-gray-200">
                         <h2 className="font-semibold mb-2 flex items-center justify-between text-gray-800">
                             Журнал производства
@@ -820,16 +832,33 @@ export default function ProductionV3Page() {
                         </div>
 
                         {/* Кнопки действий */}
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-wrap">
                             <Button onClick={loadCombinedItems} className="flex-1 bg-indigo-600 hover:bg-indigo-700">
-                                <Download size={16} className="mr-1" /> Загрузить данные
+                                <Download size={16} className="mr-1" /> Загрузить
                             </Button>
                             {selectedCombinedIds.size > 0 && (
-                                <Button variant="outline" onClick={() => setSelectedCombinedIds(new Set())} className="text-red-600 border-red-300 hover:bg-red-50">
-                                    <Trash2 size={16} className="mr-1" /> Снять ({selectedCombinedIds.size})
+                                <Button
+                                    variant="outline"
+                                    onClick={() => {
+                                        const newMarked = new Set(markedForDeletion);
+                                        selectedCombinedIds.forEach(id => newMarked.add(id));
+                                        setMarkedForDeletion(newMarked);
+                                        setSelectedCombinedIds(new Set());
+                                    }}
+                                    className="text-red-600 border-red-300 hover:bg-red-50"
+                                >
+                                    <Trash2 size={16} className="mr-1" /> Скрыть ({selectedCombinedIds.size})
                                 </Button>
                             )}
                         </div>
+                        {markedForDeletion.size > 0 && (
+                            <button
+                                onClick={() => setShowMarkedItems(!showMarkedItems)}
+                                className="text-xs text-gray-500 hover:text-gray-700 underline mt-2"
+                            >
+                                {showMarkedItems ? 'Скрыть помеченные' : `Показать помеченные (${markedForDeletion.size})`}
+                            </button>
+                        )}
                     </div>
 
                     {/* Объединённый список (закуп + остатки) */}
@@ -884,20 +913,13 @@ export default function ProductionV3Page() {
                                                 });
 
                                                 // Проверяем: если товар уже выбран — не перезагружаем вообще
-                                                console.log('[DEBUG onClick] CHECK productId:', {
-                                                    selectedRunProductId: selectedRun?.productId,
-                                                    itemProductId: item.productId,
-                                                    areEqual: selectedRun?.productId === item.productId
-                                                });
 
                                                 if (selectedRun?.productId === item.productId) {
-                                                    console.log('[DEBUG onClick] SAME product already selected, skipping reload entirely');
                                                     return;
                                                 }
 
                                                 setSelectedCombinedItem(item);
-
-                                                console.log('[DEBUG onClick] item:', item.productName, 'existingRun:', existingRun?.id, 'productionDate:', existingRun?.productionDate);
+                                                if (isMobile) setMobileLevel(2);
 
                                                 if (existingRun) {
                                                     // Загружаем существующую выработку
@@ -980,8 +1002,6 @@ export default function ProductionV3Page() {
                                                                 ? editProductionDate
                                                                 : productRun?.productionDate;
 
-                                                            console.log('[DEBUG LEFT PANEL] item:', item.productName, 'isSelected:', isSelected, 'editProductionDate:', editProductionDate, 'productRun.productionDate:', productRun?.productionDate, 'displayDate:', displayDate);
-
                                                             return displayDate ? (
                                                                 <span className="text-gray-500">
                                                                     🏭 Выработка: {new Date(displayDate).toLocaleDateString('ru-RU')}
@@ -989,25 +1009,39 @@ export default function ProductionV3Page() {
                                                             ) : null;
                                                         })()}
                                                     </div>
-                                                    {/* Маркеры количества */}
-                                                    <div className="flex flex-wrap gap-2 text-xs">
+                                                    {/* Маркеры количества - ВЕРТИКАЛЬНЫЙ LAYOUT */}
+                                                    <div className="flex flex-col gap-1 text-xs">
                                                         {item.purchaseQty > 0 && (
-                                                            <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded">
-                                                                📥 Закуп: {formatNumber(item.purchaseQty, 2)}
-                                                            </span>
+                                                            <div className="flex items-center gap-1">
+                                                                <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                                                <span className="text-gray-600">Закуп:</span>
+                                                                <span className="font-medium text-green-700">{formatNumber(item.purchaseQty, 1)} кг</span>
+                                                            </div>
                                                         )}
                                                         {item.balanceQty > 0 && (
-                                                            <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
-                                                                📊 Остаток: {formatNumber(item.balanceQty, 2)}
-                                                            </span>
+                                                            <div className="flex items-center gap-1">
+                                                                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                                                <span className="text-gray-600">Остаток:</span>
+                                                                <span className="font-medium text-blue-700">{formatNumber(item.balanceQty, 1)} кг</span>
+                                                            </div>
                                                         )}
-                                                        {/* Маркер выработки - сумма всех runs для этого товара */}
-                                                        <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded">
-                                                            🏭 Выработка: {formatNumber(getYieldByProductId(item.productId), 2)}
-                                                        </span>
-                                                        <span className="bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">
-                                                            Итого: {formatNumber(item.totalQty, 2)} кг
-                                                        </span>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                            <span className="text-gray-600">Выработано:</span>
+                                                            <span className="font-medium text-orange-700">{formatNumber(getYieldByProductId(item.productId), 1)} кг</span>
+                                                        </div>
+                                                        {(() => {
+                                                            const remaining = (item.purchaseQty || 0) + (item.balanceQty || 0) - getYieldByProductId(item.productId);
+                                                            return (
+                                                                <div className="flex items-center gap-1">
+                                                                    <span className={`w-2 h-2 rounded-full ${remaining > 0 ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                                                                    <span className="text-gray-600">Осталось:</span>
+                                                                    <span className={`font-semibold ${remaining > 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                                                                        {formatNumber(Math.max(0, remaining), 1)} кг
+                                                                    </span>
+                                                                </div>
+                                                            );
+                                                        })()}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1021,7 +1055,7 @@ export default function ProductionV3Page() {
                 </div>
 
                 {/* СРЕДНЯЯ ПАНЕЛЬ - Вертикальные табы категорий */}
-                <div className="bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden">
+                <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 2 ? 'hidden' : ''}`}>
                     <div className="p-3 border-b bg-gradient-to-r from-indigo-50 to-purple-50">
                         <h3 className="font-semibold text-gray-800 flex items-center gap-2">
                             <List size={16} className="text-indigo-600" />
@@ -1050,15 +1084,20 @@ export default function ProductionV3Page() {
                                 return (
                                     <button
                                         key={cat.category}
-                                        onClick={() => setActiveCategory(cat.category)}
+                                        onClick={() => { setActiveCategory(cat.category); if (isMobile) setMobileLevel(3); }}
                                         className={`w-full text-left px-3 py-3 rounded-lg transition-all ${isActive
                                             ? 'bg-indigo-600 text-white shadow-md'
                                             : 'bg-gray-50 hover:bg-gray-100 text-gray-700'
                                             }`}
                                     >
                                         <div className="font-medium text-sm truncate">{cat.category}</div>
-                                        <div className={`text-xs mt-1 ${isActive ? 'text-indigo-200' : 'text-gray-500'}`}>
-                                            {cat.nodes.length} позиций • {formatNumber(catTotal, 1)} кг
+                                        <div className={`text-xs mt-1 flex gap-1 ${isActive ? 'text-indigo-200' : ''}`}>
+                                            <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-green-100 text-green-700'}`}>
+                                                {cat.nodes.length} поз.
+                                            </span>
+                                            <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-purple-100 text-purple-700'}`}>
+                                                {formatNumber(catTotal, 1)} кг
+                                            </span>
                                         </div>
                                     </button>
                                 );
@@ -1077,7 +1116,7 @@ export default function ProductionV3Page() {
                 </div>
 
                 {/* ПРАВАЯ ПАНЕЛЬ - Детали */}
-                <div className="bg-white rounded-lg shadow flex flex-col overflow-hidden">
+                <div className={`bg-white rounded-lg shadow flex flex-col overflow-hidden ${isMobile && mobileLevel !== 3 ? 'hidden' : ''}`}>
                     {/* Placeholder когда нет выбранной выработки */}
                     {!selectedRun && (
                         <div className="flex-1 flex items-center justify-center text-gray-400">
@@ -1171,21 +1210,12 @@ export default function ProductionV3Page() {
                                         <button
                                             className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
                                             onClick={() => {
-                                                // Пункт 7 ТЗ: Всегда позволять добавлять/редактировать
                                                 if (activeCategoryNodes.length > 0) {
-                                                    // Сначала ищем узел без значения
-                                                    let targetNode = activeCategoryNodes.find(n => {
-                                                        const entries = runValues.get(n.id) || [];
-                                                        return entries.reduce((s, e) => s + (Number(e.value) || 0), 0) === 0;
-                                                    });
-                                                    // Если все заполнены - открываем первый для редактирования
-                                                    if (!targetNode) {
-                                                        targetNode = activeCategoryNodes[0];
-                                                    }
-                                                    const entries = runValues.get(targetNode.id) || [];
-                                                    const currentTotal = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                                    setEditingNodeId(targetNode.id);
-                                                    setEditingValue(currentTotal > 0 ? currentTotal.toString() : '');
+                                                    // Открываем модальное окно для добавления новой записи
+                                                    setSelectedNodeForValue(activeCategoryNodes[0]);
+                                                    setNewValueAmount('');
+                                                    setEditingValueId(null);
+                                                    setShowAddValueModal(true);
                                                 } else {
                                                     setWarning('Сначала выберите категорию');
                                                     setTimeout(() => setWarning(null), 2000);
@@ -1722,7 +1752,6 @@ export default function ProductionV3Page() {
                                             <button
                                                 className={`px-4 py-2 rounded-lg text-white flex items-center ${mmlModalData.sourceType === 'PURCHASE' ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'} ${mmlTotalValue === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
                                                 onClick={() => {
-                                                    console.log('Button clicked!');
                                                     createRunFromSource();
                                                 }}
                                                 disabled={mmlTotalValue === 0}
