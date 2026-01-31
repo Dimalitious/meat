@@ -23,6 +23,7 @@ interface Product {
     status: string;
     coefficient?: number;
     lossNorm?: number;
+    participatesInProduction?: boolean; // Участие в производстве
 }
 
 const ProductsPage = () => {
@@ -45,6 +46,7 @@ const ProductsPage = () => {
         status: 'active',
         coefficient: 1.0,
         lossNorm: 0.0,
+        participatesInProduction: false,
     });
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -80,6 +82,7 @@ const ProductsPage = () => {
             status: 'active',
             coefficient: 1.0,
             lossNorm: 0.0,
+            participatesInProduction: false,
         });
         setIsModalOpen(true);
     };
@@ -151,7 +154,8 @@ const ProductsPage = () => {
             const payload = {
                 ...formData,
                 coefficient: Number(formData.coefficient),
-                lossNorm: Number(formData.lossNorm)
+                lossNorm: Number(formData.lossNorm),
+                participatesInProduction: Boolean(formData.participatesInProduction)
             };
 
             if (editingProduct) {
@@ -329,6 +333,7 @@ const ProductsPage = () => {
                                 <TableHead className="text-slate-400 font-normal">Название прайс-листа</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Категория</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Статус</TableHead>
+                                <TableHead className="text-slate-200 font-semibold text-center" title="Участие в производстве">Пр-во</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Коэфф.</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Потери%</TableHead>
                                 <TableHead className="w-[50px]"></TableHead>
@@ -361,13 +366,13 @@ const ProductsPage = () => {
                                         onChange={e => setFilterCategory(e.target.value)}
                                     />
                                 </TableHead>
-                                <TableHead colSpan={4}></TableHead>
+                                <TableHead colSpan={5}></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filteredProducts.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={10} className="h-24 text-center text-slate-500">
+                                    <TableCell colSpan={11} className="h-24 text-center text-slate-500">
                                         Нет данных
                                     </TableCell>
                                 </TableRow>
@@ -396,6 +401,13 @@ const ProductsPage = () => {
                                                 }`}>
                                                 {p.status}
                                             </span>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            {p.participatesInProduction ? (
+                                                <span className="inline-block w-4 h-4 bg-green-500 rounded text-white text-xs font-bold leading-4">✓</span>
+                                            ) : (
+                                                <span className="inline-block w-4 h-4 bg-slate-200 rounded"></span>
+                                            )}
                                         </TableCell>
                                         <TableCell className="text-slate-600 text-xs">{p.coefficient}</TableCell>
                                         <TableCell className="text-slate-600 text-xs">{p.lossNorm}%</TableCell>
@@ -504,6 +516,18 @@ const ProductsPage = () => {
                                             onChange={e => setFormData({ ...formData, lossNorm: Number(e.target.value) })}
                                         />
                                     </div>
+                                </div>
+                                <div className="mt-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={formData.participatesInProduction || false}
+                                            onChange={e => setFormData({ ...formData, participatesInProduction: e.target.checked })}
+                                            className="w-4 h-4 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                                        />
+                                        <span className="text-sm font-medium text-slate-700">Участие в производстве</span>
+                                        <span className="text-xs text-slate-400">(загружается в производство при закупе)</span>
+                                    </label>
                                 </div>
                             </div>
 

@@ -1205,9 +1205,14 @@ export const loadPurchasesToProduction = async (req: Request, res: Response) => 
             },
             include: {
                 items: {
+                    where: {
+                        product: {
+                            participatesInProduction: true  // Только товары с флагом "участие в производстве"
+                        }
+                    },
                     include: {
                         product: {
-                            select: { id: true, code: true, name: true, category: true }
+                            select: { id: true, code: true, name: true, category: true, participatesInProduction: true }
                         },
                         supplier: {
                             select: { id: true, name: true }
@@ -1406,6 +1411,11 @@ export const loadUnfinishedItems = async (req: Request, res: Response) => {
             },
             include: {
                 items: {
+                    where: {
+                        product: {
+                            participatesInProduction: true  // Только товары с флагом "участие в производстве"
+                        }
+                    },
                     include: {
                         product: {
                             select: { id: true, code: true, name: true, category: true }

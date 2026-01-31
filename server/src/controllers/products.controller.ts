@@ -102,7 +102,7 @@ export const deactivateProduct = async (req: Request, res: Response) => {
 // Upsert: создать или обновить товар по коду
 export const upsertProduct = async (req: Request, res: Response) => {
     try {
-        const { code, name, altName, priceListName, category, status, coefficient, lossNorm } = req.body;
+        const { code, name, altName, priceListName, category, status, coefficient, lossNorm, participatesInProduction } = req.body;
 
         if (!code || !name) {
             return res.status(400).json({ error: 'Code and name are required' });
@@ -118,6 +118,7 @@ export const upsertProduct = async (req: Request, res: Response) => {
                 status: status || 'active',
                 coefficient: coefficient ?? 1.0,
                 lossNorm: lossNorm ?? 0.0,
+                participatesInProduction: participatesInProduction ?? false,
             },
             create: {
                 code,
@@ -128,6 +129,7 @@ export const upsertProduct = async (req: Request, res: Response) => {
                 status: status || 'active',
                 coefficient: coefficient ?? 1.0,
                 lossNorm: lossNorm ?? 0.0,
+                participatesInProduction: participatesInProduction ?? false,
             }
         });
         res.json(product);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
@@ -794,6 +794,12 @@ export default function ProductionV3Page() {
     // Получить узлы активной категории
     const activeCategoryNodes = categories.find(c => c.category === activeCategory)?.nodes || [];
 
+    // FIX: Динамически ищем combinedItem по productId вместо использования устаревшего selectedCombinedItem
+    const currentCombinedItem = useMemo(() => {
+        if (!selectedRun) return null;
+        return combinedItems.find(item => item.productId === selectedRun.productId) || selectedCombinedItem;
+    }, [selectedRun?.productId, combinedItems, selectedCombinedItem]);
+
 
 
     // ============================================
@@ -1235,7 +1241,7 @@ export default function ProductionV3Page() {
                                             <span className="inline-block w-1 h-1 bg-green-500 rounded-full mr-0.5"></span>Закуп
                                         </label>
                                         <div className="border rounded px-1 py-0.5 text-xs bg-green-50 font-medium text-green-700">
-                                            {formatNumber(selectedCombinedItem?.purchaseQty || 0, 1)}
+                                            {formatNumber(currentCombinedItem?.purchaseQty || 0, 1)}
                                         </div>
                                     </div>
                                     <div>
@@ -1243,7 +1249,7 @@ export default function ProductionV3Page() {
                                             <span className="inline-block w-1 h-1 bg-blue-500 rounded-full mr-0.5"></span>Остаток
                                         </label>
                                         <div className="border rounded px-1 py-0.5 text-xs bg-blue-50 font-medium text-blue-700">
-                                            {formatNumber(selectedCombinedItem?.balanceQty || 0, 1)}
+                                            {formatNumber(currentCombinedItem?.balanceQty || 0, 1)}
                                         </div>
                                     </div>
                                     <div>
@@ -1251,7 +1257,7 @@ export default function ProductionV3Page() {
                                             <span className="inline-block w-1 h-1 bg-purple-500 rounded-full mr-0.5"></span>Итого
                                         </label>
                                         <div className="border rounded px-1 py-0.5 text-xs bg-purple-50 font-bold text-purple-700">
-                                            {formatNumber(selectedCombinedItem?.totalQty || 0, 1)}
+                                            {formatNumber(currentCombinedItem?.totalQty || 0, 1)}
                                         </div>
                                     </div>
                                     <div>
