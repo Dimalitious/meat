@@ -26,6 +26,7 @@ import {
     // Extended functionality
     loadPurchasesToProduction,
     loadOpeningBalances,
+    loadUnfinishedItems,
     getCurrentProductionStaff,
     getRunValuesWithStaff,
     addRunValueEntry,
@@ -131,6 +132,9 @@ router.get('/purchases', loadPurchasesToProduction);
 
 // Загрузить остатки на начало
 router.get('/opening-balances', loadOpeningBalances);
+
+// Загрузить невыработанные позиции с предыдущих дат
+router.get('/unfinished', loadUnfinishedItems);
 
 // Получить производственного сотрудника для текущего пользователя
 router.get('/staff/me', getCurrentProductionStaff);

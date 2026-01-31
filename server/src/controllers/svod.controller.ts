@@ -76,11 +76,68 @@ export const getSvodByDate = async (req: Request, res: Response) => {
 };
 
 /**
+ * Получить EOD (остаток на конец дня) из ближайшего предыдущего Material Report
+ * Если отчёт за D-1 не существует, ищем D-2, D-3 и т.д. (до 30 дней назад)
+ * Возвращает Map<productId, closingBalance>
+ */
+async function getClosestPreviousEOD(svodDate: Date): Promise<Map<number, number>> {
+    const stockByProduct = new Map<number, number>();
+
+    // Ищем ближайший Material Report за последние 30 дней
+    const searchStartDate = new Date(svodDate);
+    searchStartDate.setDate(searchStartDate.getDate() - 30);
+    searchStartDate.setUTCHours(0, 0, 0, 0);
+
+    const previousDate = new Date(svodDate);
+    previousDate.setDate(previousDate.getDate() - 1);
+    previousDate.setUTCHours(23, 59, 59, 999);
+
+    // Находим самый последний отчёт до указанной даты
+    const latestReport = await prisma.materialReport.findFirst({
+        where: {
+            reportDate: {
+                gte: searchStartDate,
+                lte: previousDate
+            },
+            warehouseId: null
+        },
+        orderBy: { reportDate: 'desc' },
+        include: {
+            lines: {
+                select: {
+                    productId: true,
+                    closingBalanceCalc: true,
+                    closingBalanceFact: true
+                }
+            }
+        }
+    });
+
+    if (latestReport) {
+        console.log(`[SVOD] Using Material Report from ${latestReport.reportDate.toISOString().split('T')[0]} as EOD source`);
+        for (const line of latestReport.lines) {
+            // Используем фактический остаток если введён, иначе расчётный
+            const balance = line.closingBalanceFact !== null
+                ? Number(line.closingBalanceFact)
+                : Number(line.closingBalanceCalc);
+            if (balance !== 0) { // Не добавляем нулевые позиции
+                stockByProduct.set(line.productId, balance);
+            }
+        }
+    } else {
+        console.log(`[SVOD] No Material Report found before ${svodDate.toISOString().split('T')[0]}`);
+    }
+
+    return stockByProduct;
+}
+
+/**
  * Сформировать данные для предпросмотра СВОД (без сохранения)
  * ОПТИМИЗИРОВАНО: 
  * - SQL агрегация для заказов (вместо загрузки всех записей)
  * - Параллельные запросы к БД
  * - Сортировка убрана (делается на клиенте)
+ * - Fallback на ближайший Material Report если D-1 не существует
  */
 async function buildSvodPreview(svodDate: Date) {
     console.time('buildSvodPreview:total');
@@ -96,13 +153,9 @@ async function buildSvodPreview(svodDate: Date) {
     // ============================================
     console.time('buildSvodPreview:fetchSources');
 
-    // Дата предыдущего дня для остатков
-    const previousDate = new Date(svodDate);
-    previousDate.setDate(previousDate.getDate() - 1);
-    previousDate.setUTCHours(0, 0, 0, 0);
-
     // ОПТИМИЗАЦИЯ: Используем SQL агрегацию для заказов вместо загрузки всех записей
-    const [orderAggregates, ordersCountResult, previousReportLines, purchases, productionValues] = await Promise.all([
+    // Получаем EOD из ближайшего Material Report параллельно с другими запросами
+    const [orderAggregates, ordersCountResult, stockByProduct, purchases, productionValues] = await Promise.all([
         // A1: Агрегация заказов по товарам через SQL
         prisma.$queryRaw<{ productId: number; totalQty: number }[]>`
             SELECT "productId", SUM("orderQty") as "totalQty"
@@ -123,21 +176,8 @@ async function buildSvodPreview(svodDate: Date) {
               AND "status" IN ('draft', 'forming', 'synced')
         `,
 
-        // B: Остатки на начало дня из материального отчёта за предыдущий день
-        // Берём closingBalanceFact (если введён) или closingBalanceCalc
-        prisma.materialReportLine.findMany({
-            where: {
-                materialReport: {
-                    reportDate: previousDate,
-                    warehouseId: null
-                }
-            },
-            select: {
-                productId: true,
-                closingBalanceCalc: true,
-                closingBalanceFact: true
-            }
-        }),
+        // B: EOD из ближайшего Material Report (с fallback)
+        getClosestPreviousEOD(svodDate),
 
         // C: Товары из закупок на дату
         prisma.purchaseItem.findMany({
@@ -195,15 +235,8 @@ async function buildSvodPreview(svodDate: Date) {
     console.log('[SVOD DEBUG] ordersCount:', ordersCount, 'totalOrderKg:', totalOrderKg);
     console.log('[SVOD DEBUG] ordersByProduct size:', ordersByProduct.size);
 
-    // B: Агрегируем остатки из материального отчёта за предыдущий день
-    const stockByProduct = new Map<number, number>();
-    for (const line of previousReportLines) {
-        // Используем фактический остаток если введён, иначе расчётный
-        const balance = line.closingBalanceFact !== null
-            ? Number(line.closingBalanceFact)
-            : Number(line.closingBalanceCalc);
-        stockByProduct.set(line.productId, balance);
-    }
+    // B: stockByProduct уже получен из getClosestPreviousEOD (с fallback на ближайший отчёт)
+    console.log('[SVOD DEBUG] stockByProduct size:', stockByProduct.size);
 
     // C: Агрегируем закупки по товарам и поставщикам
     const purchasesByProduct = new Map<number, Map<number, number>>();

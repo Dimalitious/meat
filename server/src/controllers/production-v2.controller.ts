@@ -798,6 +798,89 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
             });
         }
 
+        // ============================================
+        // TZ2: ВАЛИДАЦИЯ - проверка превышения доступного количества
+        // Допустимая погрешность: 300г (0.3 кг)
+        // ============================================
+        const TOLERANCE_KG = 0.3;
+        const productId = existingRun.productId;
+        const runDate = productionDate ? new Date(productionDate) : existingRun.productionDate;
+
+        // Устанавливаем диапазон дат для поиска закупок и остатков
+        const dateStart = new Date(runDate);
+        dateStart.setUTCHours(0, 0, 0, 0);
+        const dateEnd = new Date(runDate);
+        dateEnd.setUTCHours(23, 59, 59, 999);
+        const previousDate = new Date(runDate);
+        previousDate.setDate(previousDate.getDate() - 1);
+        previousDate.setUTCHours(23, 59, 59, 999);
+
+        // Параллельно получаем: закупки на дату + остаток из материального отчёта
+        const [purchaseTotal, openingBalanceResult] = await Promise.all([
+            // Сумма закупок продукта на дату
+            prisma.purchaseItem.aggregate({
+                where: {
+                    productId,
+                    purchase: {
+                        purchaseDate: { gte: dateStart, lte: dateEnd },
+                        isDisabled: false
+                    }
+                },
+                _sum: { qty: true }
+            }),
+            // Остаток из материального отчёта за предыдущий день
+            prisma.materialReportLine.findFirst({
+                where: {
+                    productId,
+                    materialReport: {
+                        reportDate: { lte: previousDate },
+                        warehouseId: null
+                    }
+                },
+                orderBy: { materialReport: { reportDate: 'desc' } },
+                select: {
+                    closingBalanceCalc: true,
+                    closingBalanceFact: true
+                }
+            })
+        ]);
+
+        const purchaseQty = Number(purchaseTotal._sum.qty || 0);
+        const openingBalance = openingBalanceResult
+            ? (openingBalanceResult.closingBalanceFact !== null
+                ? Number(openingBalanceResult.closingBalanceFact)
+                : Number(openingBalanceResult.closingBalanceCalc || 0))
+            : 0;
+
+        const availableQty = purchaseQty + openingBalance;
+        const producedQty = calculatedActualWeight;
+
+        console.log('[PRODUCTION VALIDATION]', {
+            productId,
+            producedQty,
+            availableQty,
+            purchaseQty,
+            openingBalance,
+            tolerance: TOLERANCE_KG,
+            exceeded: producedQty > availableQty + TOLERANCE_KG
+        });
+
+        // Проверка: если превышено более чем на допуск — отклоняем
+        if (producedQty > availableQty + TOLERANCE_KG) {
+            return res.status(400).json({
+                error: 'Количество выработки превышает доступное количество (закупка + остаток). Проверьте данные.',
+                details: {
+                    produced: Math.round(producedQty * 1000) / 1000,
+                    available: Math.round(availableQty * 1000) / 1000,
+                    purchase: Math.round(purchaseQty * 1000) / 1000,
+                    openingBalance: Math.round(openingBalance * 1000) / 1000,
+                    tolerance: TOLERANCE_KG,
+                    exceeded: Math.round((producedQty - availableQty - TOLERANCE_KG) * 1000) / 1000
+                }
+            });
+        }
+        // ============================================
+
         // Атомарная транзакция: удаляем старые значения и создаём новые одним batch
         await prisma.$transaction([
             prisma.productionRunValue.deleteMany({
@@ -1273,6 +1356,181 @@ export const loadOpeningBalances = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('loadOpeningBalances error:', error);
         res.status(500).json({ error: 'Failed to load opening balances' });
+    }
+};
+
+/**
+ * Загрузить невыработанные позиции с предыдущих дат
+ * Возвращает товары где (закупка + остаток - выработка) > 0
+ */
+export const loadUnfinishedItems = async (req: Request, res: Response) => {
+    try {
+        const { beforeDate, daysBack = 30 } = req.query;
+
+        if (!beforeDate) {
+            return res.status(400).json({ error: 'beforeDate is required' });
+        }
+
+        const toDate = new Date(String(beforeDate));
+        toDate.setUTCHours(0, 0, 0, 0);
+
+        const fromDate = new Date(toDate);
+        fromDate.setDate(fromDate.getDate() - Number(daysBack));
+        fromDate.setUTCHours(0, 0, 0, 0);
+
+        // Получаем все Production Runs за период
+        const runs = await prisma.productionRun.findMany({
+            where: {
+                productionDate: {
+                    gte: fromDate,
+                    lt: toDate  // До, но не включая текущую дату
+                },
+                isHidden: false
+            },
+            include: {
+                product: {
+                    select: { id: true, code: true, name: true, category: true }
+                },
+                values: true
+            }
+        });
+
+        // Получаем закупки за тот же период
+        const purchases = await prisma.purchase.findMany({
+            where: {
+                purchaseDate: {
+                    gte: fromDate,
+                    lt: toDate
+                },
+                isDisabled: false
+            },
+            include: {
+                items: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, category: true }
+                        },
+                        supplier: {
+                            select: { id: true, name: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Агрегируем закупки по productId
+        const purchaseByProduct = new Map<number, { qty: number; date: Date; idn: string }>();
+        for (const purchase of purchases) {
+            for (const item of purchase.items) {
+                const existing = purchaseByProduct.get(item.productId);
+                const idn = item.supplier.name.substring(0, 6) + purchase.purchaseDate.toISOString().substring(2, 10).replace(/-/g, '');
+                if (!existing || purchase.purchaseDate > existing.date) {
+                    purchaseByProduct.set(item.productId, {
+                        qty: (existing?.qty || 0) + Number(item.qty),
+                        date: purchase.purchaseDate,
+                        idn
+                    });
+                } else {
+                    purchaseByProduct.set(item.productId, {
+                        ...existing,
+                        qty: existing.qty + Number(item.qty)
+                    });
+                }
+            }
+        }
+
+        // Агрегируем выработку по productId
+        const producedByProduct = new Map<number, number>();
+        for (const run of runs) {
+            const total = run.values.reduce((sum, v) => sum + Number(v.value), 0);
+            producedByProduct.set(run.productId, (producedByProduct.get(run.productId) || 0) + total);
+        }
+
+        // Получаем последний МатОтчёт для остатков
+        const lastReport = await prisma.materialReport.findFirst({
+            where: {
+                reportDate: {
+                    gte: fromDate,
+                    lt: toDate
+                }
+            },
+            orderBy: { reportDate: 'desc' },
+            include: {
+                lines: {
+                    include: {
+                        product: {
+                            select: { id: true, code: true, name: true, category: true }
+                        }
+                    }
+                }
+            }
+        });
+
+        const balanceByProduct = new Map<number, number>();
+        if (lastReport) {
+            for (const line of lastReport.lines) {
+                balanceByProduct.set(line.productId, Number(line.openingBalance));
+            }
+        }
+
+        // Формируем список невыработанных позиций
+        const unfinishedItems: Array<{
+            productId: number;
+            productCode: string;
+            productName: string;
+            category: string | null;
+            purchaseQty: number;
+            balanceQty: number;
+            producedQty: number;
+            remainingQty: number;
+            purchaseDate: Date | null;
+            idn: string | null;
+        }> = [];
+
+        // Объединяем все productId
+        const allProductIds = new Set<number>([
+            ...purchaseByProduct.keys(),
+            ...balanceByProduct.keys()
+        ]);
+
+        for (const productId of allProductIds) {
+            const purchase = purchaseByProduct.get(productId);
+            const balance = balanceByProduct.get(productId) || 0;
+            const produced = producedByProduct.get(productId) || 0;
+            const remaining = (purchase?.qty || 0) + balance - produced;
+
+            // Только если осталось > 0
+            if (remaining > 0) {
+                // Получаем данные о продукте
+                const run = runs.find(r => r.productId === productId);
+                const purchaseItem = purchases.flatMap(p => p.items).find(i => i.productId === productId);
+
+                const product = run?.product || purchaseItem?.product;
+                if (product) {
+                    unfinishedItems.push({
+                        productId,
+                        productCode: product.code,
+                        productName: product.name,
+                        category: product.category,
+                        purchaseQty: purchase?.qty || 0,
+                        balanceQty: balance,
+                        producedQty: produced,
+                        remainingQty: remaining,
+                        purchaseDate: purchase?.date || null,
+                        idn: purchase?.idn || null
+                    });
+                }
+            }
+        }
+
+        res.json({
+            items: unfinishedItems,
+            count: unfinishedItems.length,
+            dateRange: { from: fromDate, to: toDate }
+        });
+    } catch (error) {
+        console.error('loadUnfinishedItems error:', error);
+        res.status(500).json({ error: 'Failed to load unfinished items' });
     }
 };
 

@@ -121,6 +121,7 @@ interface CombinedItem {
     purchaseItemId?: number;  // ID позиции закупки (если есть)
     supplierName?: string;    // поставщик (если есть)
     purchaseDetails?: PurchaseDetail[]; // Пункт 13: детализация по IDN
+    isCarryover?: boolean;    // TZ7: маркер переноса с прошлых дат
 }
 
 export default function ProductionV3Page() {
@@ -325,7 +326,7 @@ export default function ProductionV3Page() {
         }
     };
 
-    // Загрузка объединённых данных (закуп + остатки)
+    // Загрузка объединённых данных (закуп + остатки + невыработанные)
     const loadCombinedItems = async () => {
         if (!dateFrom || !dateTo) {
             setWarning('Сначала укажите период');
@@ -334,8 +335,8 @@ export default function ProductionV3Page() {
         }
         setCombinedLoading(true);
         try {
-            // Загружаем оба источника параллельно
-            const [purchaseRes, balanceRes] = await Promise.all([
+            // Загружаем все источники параллельно
+            const [purchaseRes, balanceRes, unfinishedRes] = await Promise.all([
                 axios.get(`${API_URL}/api/production-v2/purchases`, {
                     params: { dateFrom, dateTo },
                     headers: { Authorization: `Bearer ${token}` }
@@ -343,11 +344,26 @@ export default function ProductionV3Page() {
                 axios.get(`${API_URL}/api/production-v2/opening-balances`, {
                     params: { date: dateFrom },
                     headers: { Authorization: `Bearer ${token}` }
+                }),
+                axios.get(`${API_URL}/api/production-v2/unfinished`, {
+                    params: { beforeDate: dateFrom, daysBack: 30 },
+                    headers: { Authorization: `Bearer ${token}` }
                 })
             ]);
 
             const purchases: PurchaseItem[] = purchaseRes.data.items || [];
             const balances: OpeningBalanceItem[] = balanceRes.data.items || [];
+            const unfinished: Array<{
+                productId: number;
+                productCode: string;
+                productName: string;
+                category: string | null;
+                purchaseQty: number;
+                balanceQty: number;
+                remainingQty: number;
+                purchaseDate: string | null;
+                idn: string | null;
+            }> = unfinishedRes.data.items || [];
 
             // Объединяем по productId
             const map = new Map<number, CombinedItem>();
@@ -403,6 +419,29 @@ export default function ProductionV3Page() {
                         purchaseQty: 0,
                         balanceQty: b.openingBalance,
                         totalQty: b.openingBalance
+                    });
+                }
+            }
+
+            // TZ7: Добавляем невыработанные позиции с предыдущих дат
+            for (const u of unfinished) {
+                if (!map.has(u.productId)) {
+                    // Товар из прошлых дат, который не полностью выработан
+                    map.set(u.productId, {
+                        productId: u.productId,
+                        productCode: u.productCode,
+                        productName: u.productName,
+                        category: u.category,
+                        purchaseQty: 0, // Закупка была на другой дате
+                        balanceQty: u.remainingQty, // Остаток = невыработанное количество
+                        totalQty: u.remainingQty,
+                        purchaseDetails: u.purchaseDate ? [{
+                            idn: u.idn || `IDN carryover${u.purchaseDate.substring(2, 10).replace(/-/g, '')}`,
+                            qty: u.remainingQty,
+                            supplierName: 'Перенос',
+                            date: u.purchaseDate
+                        }] : undefined,
+                        isCarryover: true // Маркер переноса
                     });
                 }
             }
@@ -514,6 +553,10 @@ export default function ProductionV3Page() {
     const saveRunValues = async () => {
         if (!selectedRun) return;
 
+        // TZ2: Сохраняем снапшот для отката при ошибке
+        const snapshotRunValues = new Map(runValues);
+        const snapshotSelectedRun = { ...selectedRun };
+
         // Сохраняем значения в локальные переменные (чтобы избежать stale closure)
         const savedProductionDate = editProductionDate;
         const savedRunId = selectedRun.id;
@@ -555,9 +598,28 @@ export default function ProductionV3Page() {
             await loadCombinedItems();
 
             setTimeout(() => setWarning(null), 2000);
-        } catch (err) {
+        } catch (err: any) {
             console.error('Failed to save:', err);
-            alert('Ошибка сохранения');
+
+            // TZ2: Откатываем UI к состоянию ДО попытки сохранения
+            setRunValues(snapshotRunValues);
+            setSelectedRun(snapshotSelectedRun);
+
+            // Перезагружаем данные run с сервера для синхронизации
+            try {
+                await loadRunDetails(savedRunId);
+            } catch (reloadErr) {
+                console.error('Failed to reload run details:', reloadErr);
+            }
+
+            // Показываем детальную причину ошибки
+            const errorData = err.response?.data;
+            if (errorData?.error && errorData?.details) {
+                const d = errorData.details;
+                alert(`${errorData.error}\n\nВыработка: ${d.produced} кг\nДоступно: ${d.available} кг\nЗакуп: ${d.purchase} кг\nОстаток: ${d.openingBalance} кг\nПревышение: ${d.exceeded} кг`);
+            } else {
+                alert(errorData?.error || 'Ошибка сохранения');
+            }
         }
     };
 
@@ -970,9 +1032,13 @@ export default function ProductionV3Page() {
                                                     {/* Название товара */}
                                                     <div className="font-medium text-sm truncate text-gray-800">{item.productName}</div>
                                                     {/* Код товара */}
-                                                    <div className="text-xs text-gray-400 mb-1">Код: {item.productCode}</div>
+                                                    <div className="text-xs text-gray-400">Код: {item.productCode}</div>
+                                                    {/* IDN закупки */}
+                                                    {item.purchaseDetails && item.purchaseDetails.length > 0 && (
+                                                        <div className="text-xs text-indigo-500 font-mono">{item.purchaseDetails[0].idn}</div>
+                                                    )}
                                                     {/* Пункт 8 ТЗ: Даты закупки и выработки */}
-                                                    <div className="flex flex-wrap gap-2 text-xs mb-1">
+                                                    <div className="flex flex-wrap gap-2 text-xs mb-1 mt-1">
                                                         {item.purchaseDetails && item.purchaseDetails.length > 0 && (
                                                             <span className="text-gray-500">
                                                                 📅 Закуп: {new Date(item.purchaseDetails[0].date).toLocaleDateString('ru-RU')}
@@ -1034,10 +1100,10 @@ export default function ProductionV3Page() {
                                                             const remaining = (item.purchaseQty || 0) + (item.balanceQty || 0) - getYieldByProductId(item.productId);
                                                             return (
                                                                 <div className="flex items-center gap-1">
-                                                                    <span className={`w-2 h-2 rounded-full ${remaining > 0 ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                                                                    <span className={`w-2 h-2 rounded-full ${remaining < 0 ? 'bg-red-600' : remaining > 0 ? 'bg-amber-500' : 'bg-gray-400'}`}></span>
                                                                     <span className="text-gray-600">Осталось:</span>
-                                                                    <span className={`font-semibold ${remaining > 0 ? 'text-red-600' : 'text-gray-500'}`}>
-                                                                        {formatNumber(Math.max(0, remaining), 1)} кг
+                                                                    <span className={`font-semibold ${remaining < 0 ? 'text-red-600' : remaining > 0 ? 'text-amber-600' : 'text-gray-500'}`}>
+                                                                        {formatNumber(remaining, 1)} кг
                                                                     </span>
                                                                 </div>
                                                             );
@@ -1234,7 +1300,7 @@ export default function ProductionV3Page() {
                                 </div>
                                 {activeCategoryNodes.length > 0 && (
                                     <div className="border rounded-lg overflow-hidden shadow-sm">
-                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center text-xs font-semibold text-gray-700 border-b">
+                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center text-xs font-semibold text-gray-700 border-b">
                                             <input
                                                 type="checkbox"
                                                 checked={activeCategoryNodes.every(n => selectedMmlNodeIds.has(n.id))}
@@ -1252,6 +1318,7 @@ export default function ProductionV3Page() {
                                             <span>Позиция</span>
                                             <span className="text-center text-gray-500">Код</span>
                                             <span className="text-center text-gray-500">Пользователь</span>
+                                            <span className="text-center text-gray-500">Время</span>
                                             <span className="text-center">Итого (кг)</span>
                                             <span className="text-center">
                                                 {selectedMmlNodeIds.size > 0 ? (
@@ -1280,97 +1347,103 @@ export default function ProductionV3Page() {
                                             const total = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
                                             // Пункт 3: не показывать пустые строки, КРОМЕ тех что редактируются
                                             if (total === 0 && editingNodeId !== node.id) return null;
+
+                                            // TZ4: Показываем каждую запись как отдельную строку
                                             return (
-                                                <div key={node.id} className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center px-4 py-2 border-b last:border-b-0 hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selectedMmlNodeIds.has(node.id)}
-                                                        onChange={(e) => {
-                                                            const newSet = new Set(selectedMmlNodeIds);
-                                                            if (e.target.checked) {
-                                                                newSet.add(node.id);
-                                                            } else {
-                                                                newSet.delete(node.id);
-                                                            }
-                                                            setSelectedMmlNodeIds(newSet);
-                                                        }}
-                                                        className="w-4 h-4 accent-indigo-600"
-                                                    />
-                                                    <span className="text-sm truncate" title={node.product.name}>{node.product.name}</span>
-                                                    <span className="text-xs text-gray-400 text-center">{node.product.code}</span>
-                                                    <span className="text-xs text-gray-500 truncate text-center" title={entries.map(e => e.staff?.fullName).filter(Boolean).join(', ')}>
-                                                        {entries.length > 0 && entries[0].staff?.fullName ? entries[0].staff.fullName : '—'}
-                                                    </span>
-                                                    {/* Inline редактирование значения */}
-                                                    <div className="flex justify-center">
-                                                        {editingNodeId === node.id ? (
-                                                            <input
-                                                                type="number"
-                                                                step="0.001"
-                                                                className="w-16 text-sm font-semibold tabular-nums text-indigo-700 border-2 border-blue-500 rounded px-1 py-0.5 bg-white focus:outline-none text-center"
-                                                                value={editingValue}
-                                                                onChange={(e) => setEditingValue(e.target.value)}
-                                                                onBlur={() => {
-                                                                    const numValue = parseFloat(editingValue) || 0;
-                                                                    if (numValue > 0) {
-                                                                        const newValues = new Map(runValues);
-                                                                        const existingEntries = newValues.get(node.id) || [];
-                                                                        if (existingEntries.length > 0) {
-                                                                            existingEntries[0].value = numValue;
-                                                                        } else {
-                                                                            const staffObj = currentStaff ? { id: currentStaff.id || 0, fullName: currentStaff.fullName } : null;
-                                                                            newValues.set(node.id, [{ id: Date.now(), mmlNodeId: node.id, value: numValue, staff: staffObj }]);
-                                                                        }
-                                                                        setRunValues(newValues);
-                                                                    }
-                                                                    setEditingNodeId(null);
-                                                                    setEditingValue('');
-                                                                }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter') {
-                                                                        (e.target as HTMLInputElement).blur();
-                                                                    } else if (e.key === 'Escape') {
-                                                                        setEditingNodeId(null);
-                                                                        setEditingValue('');
-                                                                    }
-                                                                }}
-                                                                autoFocus
-                                                            />
-                                                        ) : (
-                                                            <span
-                                                                className={`text-sm font-semibold tabular-nums cursor-pointer hover:bg-blue-50 px-1 py-0.5 rounded ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}
-                                                                onClick={() => {
-                                                                    setEditingNodeId(node.id);
-                                                                    setEditingValue(total > 0 ? total.toString() : '');
-                                                                }}
-                                                                title="Кликните для редактирования"
-                                                            >
+                                                <div key={node.id}>
+                                                    {/* Заголовок позиции */}
+                                                    <div className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-2 border-b hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={selectedMmlNodeIds.has(node.id)}
+                                                            onChange={(e) => {
+                                                                const newSet = new Set(selectedMmlNodeIds);
+                                                                if (e.target.checked) {
+                                                                    newSet.add(node.id);
+                                                                } else {
+                                                                    newSet.delete(node.id);
+                                                                }
+                                                                setSelectedMmlNodeIds(newSet);
+                                                            }}
+                                                            className="w-4 h-4 accent-indigo-600"
+                                                        />
+                                                        <span className="text-sm truncate font-medium" title={node.product.name}>{node.product.name}</span>
+                                                        <span className="text-xs text-gray-400 text-center">{node.product.code}</span>
+                                                        {/* Показываем первого пользователя или количество записей */}
+                                                        <span className="text-xs text-gray-500 truncate text-center">
+                                                            {entries.length > 1
+                                                                ? `${entries.length} записей`
+                                                                : entries.length > 0 && entries[0].staff?.fullName
+                                                                    ? entries[0].staff.fullName
+                                                                    : '—'}
+                                                        </span>
+                                                        <span className="text-xs text-gray-400 text-center">
+                                                            {entries.length === 1 && entries[0].recordedAt
+                                                                ? new Date(entries[0].recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                                                                : entries.length > 1 ? '—' : '—'}
+                                                        </span>
+                                                        {/* Итого по позиции */}
+                                                        <div className="flex justify-center">
+                                                            <span className={`text-sm font-bold tabular-nums ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
                                                                 {total > 0 ? formatNumber(total, 3) : '—'}
                                                             </span>
-                                                        )}
-                                                    </div>
-                                                    {/* Кнопки действий */}
-                                                    <div className="flex items-center gap-1 justify-center">
-                                                        <button
-                                                            onClick={() => {
-                                                                setEditingNodeId(node.id);
-                                                                setEditingValue(total > 0 ? total.toString() : '');
-                                                            }}
-                                                            className="text-blue-400 hover:text-blue-600 p-0.5"
-                                                            title="Редактировать"
-                                                        >
-                                                            <Edit2 size={14} />
-                                                        </button>
-                                                        {total > 0 && (
+                                                        </div>
+                                                        {/* Кнопка добавления */}
+                                                        <div className="flex items-center gap-1 justify-center">
                                                             <button
-                                                                onClick={() => setDeleteConfirmNode(node)}
-                                                                className="text-red-400 hover:text-red-600 p-0.5"
-                                                                title="Удалить"
+                                                                onClick={() => {
+                                                                    setSelectedNodeForValue(node);
+                                                                    setNewValueAmount('');
+                                                                    setEditingValueId(null);
+                                                                    setShowAddValueModal(true);
+                                                                }}
+                                                                className="text-green-500 hover:text-green-700 p-0.5"
+                                                                title="Добавить запись"
                                                             >
-                                                                <Trash2 size={14} />
+                                                                <Plus size={14} />
                                                             </button>
-                                                        )}
+                                                        </div>
                                                     </div>
+                                                    {/* TZ4: Отдельные строки для каждой записи */}
+                                                    {entries.map((entry, entryIdx) => (
+                                                        <div key={entry.id} className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-1.5 border-b bg-gray-50/80 text-sm`}>
+                                                            <span className="w-4"></span>
+                                                            <span className="text-xs text-gray-400 pl-4">└ Запись #{entryIdx + 1}</span>
+                                                            <span className="text-xs text-gray-400 text-center">—</span>
+                                                            <span className="text-xs text-blue-600 truncate text-center" title={entry.staff?.fullName || ''}>
+                                                                {entry.staff?.fullName || '—'}
+                                                            </span>
+                                                            <span className="text-xs text-gray-400 text-center">
+                                                                {entry.recordedAt
+                                                                    ? new Date(entry.recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                                                                    : '—'}
+                                                            </span>
+                                                            <span className="text-xs text-indigo-600 font-medium text-center">
+                                                                {formatNumber(Number(entry.value) || 0, 3)}
+                                                            </span>
+                                                            <div className="flex items-center gap-1 justify-center">
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setSelectedNodeForValue(node);
+                                                                        setEditingValueId(entry.id);
+                                                                        setNewValueAmount(String(entry.value));
+                                                                        setShowAddValueModal(true);
+                                                                    }}
+                                                                    className="text-blue-400 hover:text-blue-600 p-0.5"
+                                                                    title="Редактировать"
+                                                                >
+                                                                    <Edit2 size={12} />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => deleteValueEntry(entry.id)}
+                                                                    className="text-red-400 hover:text-red-600 p-0.5"
+                                                                    title="Удалить"
+                                                                >
+                                                                    <Trash2 size={12} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             );
                                         })}
