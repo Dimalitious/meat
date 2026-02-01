@@ -294,6 +294,10 @@ export default function ProductionV3Page() {
             const run = res.data as ProductionRun;
             setSelectedRun(run);
 
+            // CRITICAL: Sync the runs array with the updated actualWeight from server
+            // This fixes the discrepancy between left (runs array) and right (selectedRun) panel values
+            setRuns(prevRuns => prevRuns.map(r => r.id === runId ? { ...r, actualWeight: run.actualWeight } : r));
+
             // Загружаем значения с информацией о сотрудниках
             const valuesRes = await axios.get(`${API_URL}/api/production-v2/runs/${runId}/values-staff`, {
                 headers: { Authorization: `Bearer ${token}` }
