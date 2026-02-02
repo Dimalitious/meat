@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
@@ -9,11 +9,16 @@ import {
     User,
     Calendar,
     Eye,
+    EyeOff,
     RefreshCw,
     CheckCircle2,
     AlertCircle,
-    Edit2
+    Edit2,
+    Save,
+    Trash2,
+    RotateCcw
 } from 'lucide-react';
+import { getStatusLabel, getStatusColor } from '../constants/orderStatus';
 
 interface OrderItem {
     id: number;
@@ -62,7 +67,14 @@ export default function DispatchPage() {
     const [filterDate, setFilterDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedExpeditor, setSelectedExpeditor] = useState<{ [orderId: number]: number }>({});
     const [successMessage, setSuccessMessage] = useState('');
-    const [editingOrderId, setEditingOrderId] = useState<number | null>(null); // Режим редактирования
+    const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
+
+    // Checkboxes and soft delete
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [disabledIds, setDisabledIds] = useState<Set<number>>(new Set());
+    const [showDeleted, setShowDeleted] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [saved, setSaved] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -177,25 +189,146 @@ export default function DispatchPage() {
         }
     };
 
-    // Filter orders by customer search
-    const filteredOrders = orders.filter(o =>
-        o.customer.name.toLowerCase().includes(searchCustomer.toLowerCase()) ||
-        o.idn?.includes(searchCustomer) ||
-        String(o.id).includes(searchCustomer)
-    );
+    // Filter orders by customer search and soft delete
+    const filteredOrders = useMemo(() => {
+        return orders.filter(o => {
+            // Hide disabled orders unless showDeleted is true
+            if (disabledIds.has(o.id) && !showDeleted) return false;
+
+            return o.customer.name.toLowerCase().includes(searchCustomer.toLowerCase()) ||
+                o.idn?.includes(searchCustomer) ||
+                String(o.id).includes(searchCustomer);
+        });
+    }, [orders, searchCustomer, disabledIds, showDeleted]);
 
     // Group orders by customer for better overview
-    const ordersByCustomer = filteredOrders.reduce((acc, order) => {
-        const customerId = order.customer.id;
-        if (!acc[customerId]) {
-            acc[customerId] = {
-                customer: order.customer,
-                orders: []
-            };
+    const ordersByCustomer = useMemo(() => {
+        return filteredOrders.reduce((acc, order) => {
+            const customerId = order.customer.id;
+            if (!acc[customerId]) {
+                acc[customerId] = {
+                    customer: order.customer,
+                    orders: []
+                };
+            }
+            acc[customerId].orders.push(order);
+            return acc;
+        }, {} as { [key: number]: { customer: Order['customer']; orders: Order[] } });
+    }, [filteredOrders]);
+
+    // Checkbox handlers
+    const toggleSelect = (orderId: number) => {
+        setSelectedIds(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(orderId)) {
+                newSet.delete(orderId);
+            } else {
+                newSet.add(orderId);
+            }
+            return newSet;
+        });
+    };
+
+    const toggleSelectAll = () => {
+        const visibleOrderIds = filteredOrders.filter(o => !disabledIds.has(o.id)).map(o => o.id);
+        if (selectedIds.size === visibleOrderIds.length && visibleOrderIds.length > 0) {
+            setSelectedIds(new Set());
+        } else {
+            setSelectedIds(new Set(visibleOrderIds));
         }
-        acc[customerId].orders.push(order);
-        return acc;
-    }, {} as { [key: number]: { customer: Order['customer']; orders: Order[] } });
+    };
+
+    // Soft delete - mark orders as disabled
+    const softDeleteSelected = async () => {
+        if (selectedIds.size === 0) {
+            alert('Выберите заказы для удаления');
+            return;
+        }
+
+        try {
+            const token = localStorage.getItem('token');
+            await axios.post(
+                `${API_URL}/api/orders/disable`,
+                { ids: Array.from(selectedIds) },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            // Update local state
+            setDisabledIds(prev => {
+                const newSet = new Set(prev);
+                selectedIds.forEach(id => newSet.add(id));
+                return newSet;
+            });
+            setSelectedIds(new Set());
+            setSuccessMessage(`${selectedIds.size} заказ(ов) удалено`);
+            setTimeout(() => setSuccessMessage(''), 3000);
+        } catch (err) {
+            console.error('Soft delete failed:', err);
+            alert('Ошибка удаления заказов');
+        }
+    };
+
+    // Restore - remove from disabled
+    const restoreOrder = async (orderId: number) => {
+        try {
+            const token = localStorage.getItem('token');
+            await axios.patch(
+                `${API_URL}/api/orders/${orderId}`,
+                { isDisabled: false },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            setDisabledIds(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(orderId);
+                return newSet;
+            });
+            setSuccessMessage(`Заказ #${orderId} восстановлен`);
+            setTimeout(() => setSuccessMessage(''), 3000);
+        } catch (err) {
+            console.error('Restore failed:', err);
+            alert('Ошибка восстановления заказа');
+        }
+    };
+
+    // Save distribution to journal
+    const saveDistribution = async () => {
+        setSaving(true);
+        try {
+            const token = localStorage.getItem('token');
+            const activeOrders = orders.filter(o => !disabledIds.has(o.id));
+
+            const distributionData = {
+                date: filterDate,
+                savedAt: new Date().toISOString(),
+                ordersCount: activeOrders.length,
+                orders: activeOrders.map(o => ({
+                    id: o.id,
+                    idn: o.idn,
+                    customerId: o.customer.id,
+                    customerName: o.customer.name,
+                    expeditorId: o.expeditor?.id || null,
+                    expeditorName: o.expeditor?.name || null,
+                    totalAmount: o.totalAmount,
+                    totalWeight: o.totalWeight,
+                    itemsCount: o.items.length
+                }))
+            };
+
+            await axios.post(`${API_URL}/api/journals/distribution`, distributionData, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            setSaved(true);
+            setSuccessMessage('Распределение сохранено');
+            setTimeout(() => setSuccessMessage(''), 3000);
+        } catch (err) {
+            console.error('Save distribution failed:', err);
+            alert('Ошибка сохранения распределения');
+        } finally {
+            setSaving(false);
+        }
+    };
 
     return (
         <div className="max-w-7xl mx-auto">
@@ -284,6 +417,67 @@ export default function DispatchPage() {
                 </div>
             </div>
 
+            {/* Action Toolbar */}
+            <div className="bg-white rounded-lg shadow p-4 mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    {/* Left side - Checkbox controls */}
+                    <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={selectedIds.size > 0 && selectedIds.size === filteredOrders.filter(o => !disabledIds.has(o.id)).length}
+                                onChange={toggleSelectAll}
+                                className="w-4 h-4 rounded"
+                            />
+                            <span className="text-sm">Выбрать все</span>
+                        </label>
+
+                        {selectedIds.size > 0 && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={softDeleteSelected}
+                                className="flex items-center gap-2 text-red-600 border-red-300 hover:bg-red-50"
+                            >
+                                <Trash2 size={14} />
+                                Удалить выбранные ({selectedIds.size})
+                            </Button>
+                        )}
+
+                        <button
+                            onClick={() => setShowDeleted(!showDeleted)}
+                            className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg transition ${showDeleted
+                                ? 'bg-gray-200 text-gray-700'
+                                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                }`}
+                        >
+                            {showDeleted ? <Eye size={14} /> : <EyeOff size={14} />}
+                            {showDeleted ? 'Скрыть удалённые' : 'Показать удалённые'}
+                            {disabledIds.size > 0 && ` (${disabledIds.size})`}
+                        </button>
+                    </div>
+
+                    {/* Right side - Save button */}
+                    <div className="flex items-center gap-3">
+                        {saved && (
+                            <span className="text-green-600 flex items-center gap-1 text-sm">
+                                <CheckCircle2 size={16} />
+                                Сохранено
+                            </span>
+                        )}
+                        <Button
+                            size="sm"
+                            onClick={saveDistribution}
+                            disabled={saving || filteredOrders.length === 0}
+                            className="flex items-center gap-2 bg-green-600 hover:bg-green-700"
+                        >
+                            <Save size={16} />
+                            {saving ? 'Сохранение...' : 'Сохранить распределение'}
+                        </Button>
+                    </div>
+                </div>
+            </div>
+
             {/* Bulk Assignment */}
             {filteredOrders.length > 0 && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
@@ -357,8 +551,34 @@ export default function DispatchPage() {
                             {/* Orders Grid */}
                             <div className="divide-y">
                                 {customerOrders.map(order => (
-                                    <div key={order.id} className="p-4 hover:bg-gray-50 transition">
+                                    <div
+                                        key={order.id}
+                                        className={`p-4 hover:bg-gray-50 transition ${disabledIds.has(order.id) ? 'opacity-50 bg-red-50' : ''}`}
+                                    >
                                         <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                                            {/* Checkbox */}
+                                            {!disabledIds.has(order.id) && (
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedIds.has(order.id)}
+                                                    onChange={() => toggleSelect(order.id)}
+                                                    className="w-5 h-5 rounded cursor-pointer flex-shrink-0"
+                                                />
+                                            )}
+
+                                            {/* Restore button for disabled orders */}
+                                            {disabledIds.has(order.id) && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => restoreOrder(order.id)}
+                                                    className="flex items-center gap-1 text-green-600 border-green-300 hover:bg-green-50 flex-shrink-0"
+                                                >
+                                                    <RotateCcw size={14} />
+                                                    Восстановить
+                                                </Button>
+                                            )}
+
                                             {/* Order Info */}
                                             <div className="flex-1">
                                                 <div className="flex items-center gap-3 mb-2">
@@ -368,11 +588,8 @@ export default function DispatchPage() {
                                                             IDN: {order.idn}
                                                         </span>
                                                     )}
-                                                    <span className={`text-xs px-2 py-0.5 rounded ${order.status === 'new'
-                                                        ? 'bg-blue-100 text-blue-700'
-                                                        : 'bg-gray-100 text-gray-600'
-                                                        }`}>
-                                                        {order.status}
+                                                    <span className={`text-xs px-2 py-0.5 rounded ${getStatusColor(order.status)}`}>
+                                                        {getStatusLabel(order.status)}
                                                     </span>
                                                 </div>
                                                 <div className="flex flex-wrap gap-4 text-sm text-gray-600">

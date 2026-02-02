@@ -17,6 +17,8 @@ model User {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   productionStaff ProductionStaff?
+  // Expeditor link (optional 1:1)
+  expeditor       Expeditor?
   // Production Module v2 relations
   createdMmls     ProductionMml[]   @relation("MmlCreator")
   productionRuns  ProductionRun[]   @relation("RunUser")
@@ -215,7 +217,7 @@ model Order {
   id                Int                @id @default(autoincrement())
   idn               String?            // Сквозной идентификатор из Сводки
   date              DateTime           @default(now())
-  status            String             @default("new") // new, assigned, in_delivery, delivered, cancelled
+  status            String             @default("NEW") // FSM: NEW → IN_ASSEMBLY → DISTRIBUTING → LOADED → SHIPPED
   paymentType       String?
   customerId        Int
   expeditorId       Int?
@@ -223,7 +225,20 @@ model Order {
   totalWeight       Float              @default(0.0)
   isDisabled        Boolean            @default(false)  // Отключенный заказ (soft-disable)
   
-  // Expedition fields
+  // FSM: Бизнес-дата распределения (календарный день в Asia/Tashkent)
+  dispatchDay       DateTime?          @db.Date
+  
+  // FSM: Timestamps событий (UTC)
+  assemblyStartedAt   DateTime?        // Когда начата сборка (NEW → IN_ASSEMBLY)
+  assemblyConfirmedAt DateTime?        // Когда подтверждена сборка (IN_ASSEMBLY → DISTRIBUTING)
+  loadedAt            DateTime?        // Когда погружен в машину (DISTRIBUTING → LOADED)
+  shippedAt           DateTime?        // Когда отгружен (LOADED → SHIPPED)
+  
+  // FSM: Кто выполнял действия (auditing)
+  assemblyStartedBy   String?          // Username кто начал сборку
+  assemblyConfirmedBy String?          // Username кто подтвердил сборку
+  
+  // Expedition fields (legacy, сохраняем для совместимости)
   deliveryAddress   String?            // Адрес доставки/точка
   assignedAt        DateTime?          // Когда назначен экспедитор
   deliveryStatus    String  @default("pending") // pending, in_delivery, delivered
@@ -242,6 +257,8 @@ model Order {
   @@index([date])
   @@index([isDisabled])
   @@index([isDisabled, date])
+  @@index([dispatchDay])
+  @@index([status, dispatchDay])
 }
 
 // Вложения к заказу (подписи, накладные, документы)
@@ -280,6 +297,8 @@ model Expeditor {
   name      String
   phone     String?
   isActive  Boolean  @default(true)
+  userId    Int?     @unique  // Optional 1:1 link to User
+  user      User?    @relation(fields: [userId], references: [id])
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   orders    Order[]
@@ -424,6 +443,20 @@ model ExpeditionJournal {
   @@index([isHidden])
 }
 
+// Журнал распределения - хранит снимки формы "Распределение"
+model DistributionJournal {
+  id              Int       @id @default(autoincrement())
+  date            DateTime  // Дата распределения
+  ordersCount     Int       @default(0)   // Количество заказов
+  totalWeight     Float     @default(0.0) // Общий вес
+  totalAmount     Decimal   @default(0.0) // Общая сумма
+  createdAt       DateTime  @default(now())
+  isHidden        Boolean   @default(false)
+  data            Json      // все данные заказов распределения
+  
+  @@index([date])
+  @@index([isHidden])
+}
 // ============================================
 // МОДУЛЬ ПРОИЗВОДСТВА (обновлённый)
 // ============================================

@@ -14,7 +14,11 @@ import {
     getExpeditionJournals,
     createExpeditionJournal,
     updateExpeditionJournal,
-    getExpeditionJournalById
+    getExpeditionJournalById,
+    getDistributionJournals,
+    createDistributionJournal,
+    updateDistributionJournal,
+    getDistributionJournalById
 } from '../controllers/journals.controller';
 
 const router = Router();
@@ -38,5 +42,11 @@ router.get('/expedition', authenticateToken, getExpeditionJournals);
 router.get('/expedition/:id', authenticateToken, getExpeditionJournalById);
 router.post('/expedition', authenticateToken, createExpeditionJournal);
 router.put('/expedition/:id', authenticateToken, updateExpeditionJournal);
+
+// Distribution Journal
+router.get('/distribution', authenticateToken, getDistributionJournals);
+router.get('/distribution/:id', authenticateToken, getDistributionJournalById);
+router.post('/distribution', authenticateToken, createDistributionJournal);
+router.put('/distribution/:id', authenticateToken, updateDistributionJournal);
 
 export default router;

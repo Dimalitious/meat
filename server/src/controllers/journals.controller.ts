@@ -517,3 +517,94 @@ export const getExpeditionJournalById = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to get journal' });
     }
 };
+
+// ============ DISTRIBUTION JOURNAL ============
+
+export const getDistributionJournals = async (req: Request, res: Response) => {
+    try {
+        const { dateFrom, dateTo, showHidden } = req.query;
+
+        const where: any = {};
+
+        if (dateFrom && dateTo) {
+            where.date = {
+                gte: new Date(dateFrom as string),
+                lte: new Date(dateTo as string)
+            };
+        }
+
+        if (showHidden !== 'true') {
+            where.isHidden = false;
+        }
+
+        const journals = await prisma.distributionJournal.findMany({
+            where,
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(journals);
+    } catch (error) {
+        console.error('Get distribution journals error:', error);
+        res.status(500).json({ error: 'Failed to get distribution journals' });
+    }
+};
+
+export const createDistributionJournal = async (req: Request, res: Response) => {
+    try {
+        const { date, savedAt, ordersCount, orders } = req.body;
+
+        const journal = await prisma.distributionJournal.create({
+            data: {
+                date: new Date(date),
+                ordersCount: orders?.length || ordersCount || 0,
+                totalWeight: orders?.reduce((sum: number, o: any) => sum + (o.totalWeight || 0), 0) || 0,
+                totalAmount: orders?.reduce((sum: number, o: any) => sum + (o.totalAmount || 0), 0) || 0,
+                data: orders || []
+            }
+        });
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Create distribution journal error:', error);
+        res.status(400).json({ error: 'Failed to create distribution journal' });
+    }
+};
+
+export const updateDistributionJournal = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { isHidden, data } = req.body;
+
+        const journal = await prisma.distributionJournal.update({
+            where: { id: Number(id) },
+            data: {
+                ...(isHidden !== undefined && { isHidden }),
+                ...(data !== undefined && { data })
+            }
+        });
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Update distribution journal error:', error);
+        res.status(400).json({ error: 'Failed to update distribution journal' });
+    }
+};
+
+export const getDistributionJournalById = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+
+        const journal = await prisma.distributionJournal.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!journal) {
+            return res.status(404).json({ error: 'Journal not found' });
+        }
+
+        res.json(journal);
+    } catch (error) {
+        console.error('Get distribution journal error:', error);
+        res.status(500).json({ error: 'Failed to get journal' });
+    }
+};

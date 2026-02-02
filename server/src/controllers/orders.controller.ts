@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
-import { ORDER_STATUS } from '../constants';
+import { ORDER_STATUS, isValidTransition, getStatusDisplayName } from '../constants';
+import { getDateRangeForTashkent, formatIdnFromDate } from '../utils/date.utils';
 
 // Get all orders (with optional filters) - Journal style
 export const getOrders = async (req: Request, res: Response) => {
@@ -10,15 +11,16 @@ export const getOrders = async (req: Request, res: Response) => {
 
         let where: any = {};
 
-        // Фильтрация по периоду дат
+        // Фильтрация по периоду дат (в таймзоне Asia/Tashkent)
         if (dateFrom || dateTo) {
             where.date = {};
-            if (dateFrom) where.date.gte = new Date(String(dateFrom));
+            if (dateFrom) {
+                const { start } = getDateRangeForTashkent(String(dateFrom));
+                where.date.gte = start;
+            }
             if (dateTo) {
-                // Устанавливаем конец дня для корректной фильтрации
-                const endDate = new Date(String(dateTo));
-                endDate.setHours(23, 59, 59, 999);
-                where.date.lte = endDate;
+                const { end } = getDateRangeForTashkent(String(dateTo));
+                where.date.lt = end;
             }
         }
 
@@ -341,20 +343,51 @@ export const getSummaryByIdn = async (req: Request, res: Response) => {
     }
 };
 
-// Assign Expeditor to Order
+// ============================================
+// FSM: Назначить экспедитора (DISTRIBUTING → LOADED)
+// ============================================
 export const assignExpeditor = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const { expeditorId, deliveryAddress } = req.body;
+        const { expeditorId, deliveryAddress, dispatchDay } = req.body;
+
+        // Получаем текущий заказ для проверки статуса
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+
+        // FSM: Назначение экспедитора разрешено только из статуса DISTRIBUTING
+        if (currentOrder.status !== ORDER_STATUS.DISTRIBUTING) {
+            return res.status(400).json({
+                error: `Невозможно назначить экспедитора из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Распределяется"`
+            });
+        }
+
+        if (!expeditorId) {
+            return res.status(400).json({ error: 'Не указан ID экспедитора' });
+        }
+
+        // Парсинг dispatchDay (бизнес-дата в Asia/Tashkent)
+        let dispatchDayDate: Date | null = null;
+        if (dispatchDay) {
+            const [y, m, d] = String(dispatchDay).slice(0, 10).split('-').map(Number);
+            dispatchDayDate = new Date(Date.UTC(y, m - 1, d));
+        }
 
         const order = await prisma.order.update({
             where: { id: Number(id) },
             data: {
-                expeditorId: expeditorId ? Number(expeditorId) : null,
+                expeditorId: Number(expeditorId),
                 deliveryAddress: deliveryAddress || undefined,
-                assignedAt: expeditorId ? new Date() : null,
-                status: expeditorId ? 'assigned' : 'new',
-                deliveryStatus: expeditorId ? 'pending' : 'pending'
+                dispatchDay: dispatchDayDate,
+                assignedAt: new Date(),
+                loadedAt: new Date(),
+                status: ORDER_STATUS.LOADED,
+                deliveryStatus: 'pending'
             },
             include: {
                 customer: true,
@@ -363,6 +396,7 @@ export const assignExpeditor = async (req: Request, res: Response) => {
             }
         });
 
+        console.log(`[FSM] Order #${id}: DISTRIBUTING → LOADED, expeditor=${expeditorId}, dispatchDay=${dispatchDay}`);
         res.json(order);
     } catch (error) {
         console.error('assignExpeditor error:', error);
@@ -377,7 +411,9 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
         const { status, dateFrom, dateTo } = req.query;
 
         let where: any = {
-            expeditorId: Number(expeditorId)
+            expeditorId: Number(expeditorId),
+            // Only show orders that have been assigned (passed through Distribution)
+            status: { in: ['assigned', 'in_delivery', 'delivered'] }
         };
 
         // Filter by delivery status if provided
@@ -386,18 +422,16 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
         }
         // Если статус не указан - показываем все статусы (включая delivered)
 
-        // Фильтр по дате
+        // Фильтр по дате (в таймзоне Asia/Tashkent)
         if (dateFrom || dateTo) {
             where.date = {};
             if (dateFrom) {
-                const start = new Date(String(dateFrom));
-                start.setHours(0, 0, 0, 0);
+                const { start } = getDateRangeForTashkent(String(dateFrom));
                 where.date.gte = start;
             }
             if (dateTo) {
-                const end = new Date(String(dateTo));
-                end.setHours(23, 59, 59, 999);
-                where.date.lte = end;
+                const { end } = getDateRangeForTashkent(String(dateTo));
+                where.date.lt = end;
             }
         }
 
@@ -419,17 +453,46 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
     }
 };
 
-// Complete Order with signature
+// ============================================
+// FSM: Завершить заказ (LOADED → SHIPPED)
+// ============================================
 export const completeOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { signatureUrl, signedInvoiceUrl } = req.body;
+        const currentUserId = (req as any).user?.id;
+
+        // Получаем текущий заказ для проверки
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: Number(id) },
+            include: { expeditor: true }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+
+        // FSM: Закрытие разрешено только из статуса LOADED
+        if (currentOrder.status !== ORDER_STATUS.LOADED) {
+            return res.status(400).json({
+                error: `Невозможно закрыть заказ из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Погружен"`
+            });
+        }
+
+        // Проверка: только назначенный экспедитор может закрыть заказ
+        // (пропускаем если currentUserId не определен - для обратной совместимости)
+        if (currentUserId && currentOrder.expeditor?.userId) {
+            if (currentOrder.expeditor.userId !== currentUserId) {
+                return res.status(403).json({ error: 'Только назначенный экспедитор может закрыть заказ' });
+            }
+        }
 
         const order = await prisma.order.update({
             where: { id: Number(id) },
             data: {
-                status: 'delivered',
+                status: ORDER_STATUS.SHIPPED,
                 deliveryStatus: 'delivered',
+                shippedAt: new Date(),
                 completedAt: new Date(),
                 signatureUrl: signatureUrl || undefined,
                 signedInvoiceUrl: signedInvoiceUrl || undefined
@@ -466,6 +529,7 @@ export const completeOrder = async (req: Request, res: Response) => {
             });
         }
 
+        console.log(`[FSM] Order #${id}: LOADED → SHIPPED`);
         res.json(order);
     } catch (error) {
         console.error('completeOrder error:', error);
@@ -473,29 +537,139 @@ export const completeOrder = async (req: Request, res: Response) => {
     }
 };
 
+// ============================================
+// FSM: Начать сборку заказа (NEW → IN_ASSEMBLY)
+// ============================================
+export const startAssemblyOrder = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+
+        // FSM: Начать сборку можно только из статуса NEW
+        if (currentOrder.status !== ORDER_STATUS.NEW) {
+            return res.status(400).json({
+                error: `Невозможно начать сборку из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Новый"`
+            });
+        }
+
+        const order = await prisma.order.update({
+            where: { id: Number(id) },
+            data: {
+                status: ORDER_STATUS.IN_ASSEMBLY,
+                assemblyStartedAt: new Date(),
+                assemblyStartedBy: username
+            },
+            include: {
+                customer: true,
+                items: { include: { product: true } }
+            }
+        });
+
+        console.log(`[FSM] Order #${id}: NEW → IN_ASSEMBLY by ${username}`);
+        res.json({
+            message: 'Сборка начата',
+            order
+        });
+    } catch (error) {
+        console.error('startAssemblyOrder error:', error);
+        res.status(500).json({ error: 'Ошибка начала сборки' });
+    }
+};
+
+// ============================================
+// FSM: Подтвердить сборку (IN_ASSEMBLY → DISTRIBUTING)
+// ============================================
+export const confirmAssemblyOrder = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const username = (req as any).user?.username || 'system';
+
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: Number(id) }
+        });
+
+        if (!currentOrder) {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+
+        // FSM: Подтвердить сборку можно только из статуса IN_ASSEMBLY
+        if (currentOrder.status !== ORDER_STATUS.IN_ASSEMBLY) {
+            return res.status(400).json({
+                error: `Невозможно подтвердить сборку из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "На сборке"`
+            });
+        }
+
+        const order = await prisma.order.update({
+            where: { id: Number(id) },
+            data: {
+                status: ORDER_STATUS.DISTRIBUTING,
+                assemblyConfirmedAt: new Date(),
+                assemblyConfirmedBy: username
+            },
+            include: {
+                customer: true,
+                items: { include: { product: true } }
+            }
+        });
+
+        console.log(`[FSM] Order #${id}: IN_ASSEMBLY → DISTRIBUTING by ${username}`);
+        res.json({
+            message: 'Сборка подтверждена, заказ передан на распределение',
+            order
+        });
+    } catch (error) {
+        console.error('confirmAssemblyOrder error:', error);
+        res.status(500).json({ error: 'Ошибка подтверждения сборки' });
+    }
+};
 // Get orders pending dispatch (ready for expeditor assignment)
+// По ТЗ: показывает заказы в статусе DISTRIBUTING для назначения экспедитора
 export const getOrdersPendingDispatch = async (req: Request, res: Response) => {
     try {
         const { date, includeAssigned } = req.query;
 
         const where: Prisma.OrderWhereInput = {
             isDisabled: false,
-            status: { in: [ORDER_STATUS.NEW, ORDER_STATUS.PROCESSING] }
+            // FSM: в распределение попадают только заказы со статусом DISTRIBUTING
+            // Если includeAssigned=true, также показываем LOADED (уже назначенные)
+            status: includeAssigned === 'true'
+                ? { in: [ORDER_STATUS.DISTRIBUTING, ORDER_STATUS.LOADED] }
+                : ORDER_STATUS.DISTRIBUTING
         };
 
-        // Если includeAssigned=true, возвращаем все заказы (включая назначенные)
-        // Иначе - только без экспедитора
+        // Если includeAssigned !== true, показываем только без экспедитора
         if (includeAssigned !== 'true') {
             where.expeditorId = null;
         }
 
+        // Фильтрация по бизнес-дате распределения (dispatchDay)
         if (date) {
-            const startDate = new Date(String(date));
-            startDate.setHours(0, 0, 0, 0);
-            const endDate = new Date(startDate);
-            endDate.setHours(23, 59, 59, 999);
-            where.date = { gte: startDate, lte: endDate };
+            const raw = String(date);
+            const day = raw.slice(0, 10); // YYYY-MM-DD
+            const [y, m, d] = day.split('-').map(Number);
+
+            if (!y || !m || !d) {
+                return res.status(400).json({ error: `Invalid date format: ${raw}` });
+            }
+
+            // dispatchDay хранится как DATE (без времени), поэтому просто сравниваем
+            const dispatchDate = new Date(Date.UTC(y, m - 1, d));
+            where.dispatchDay = dispatchDate;
         }
+
+        // ============ DIAGNOSTIC LOGGING ============
+        console.log('\n========== [pending-dispatch] DEBUG ==========');
+        console.log('Query params:', { date: req.query.date, includeAssigned: req.query.includeAssigned });
+        console.log('WHERE clause:', JSON.stringify(where, null, 2));
+        // ============ END DEBUG ============
 
         const orders = await prisma.order.findMany({
             where,
@@ -511,6 +685,9 @@ export const getOrdersPendingDispatch = async (req: Request, res: Response) => {
                 { id: 'asc' }
             ]
         });
+
+        console.log(`[pending-dispatch] RESULT: ${orders.length} orders found with all filters`);
+        console.log('==============================================\n');
 
         res.json(orders);
     } catch (error) {
@@ -565,12 +742,8 @@ export const sendOrderToRework = async (req: Request, res: Response) => {
                 throw new Error('ALREADY_IN_REWORK');
             }
 
-            // 4. Генерируем IDN из даты заказа
-            const dateObj = new Date(order.date);
-            const day = String(dateObj.getDate()).padStart(2, '0');
-            const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-            const year = dateObj.getFullYear();
-            const idn = `${day}${month}${year}`;
+            // 4. Генерируем IDN из даты заказа (в таймзоне Asia/Tashkent)
+            const idn = formatIdnFromDate(order.date);
 
             // 5. Создать записи в SummaryOrderJournal из позиций заказа
             const createdEntries = [];

@@ -32,6 +32,12 @@ router.post('/:id/assign-expeditor', orders.assignExpeditor);
 // Expedition: Complete order with signature
 router.post('/:id/complete', orders.completeOrder);
 
+// FSM: Начать сборку заказа (NEW → IN_ASSEMBLY)
+router.post('/:id/start-assembly', orders.startAssemblyOrder);
+
+// FSM: Подтвердить сборку заказа (IN_ASSEMBLY → DISTRIBUTING)
+router.post('/:id/confirm-assembly', orders.confirmAssemblyOrder);
+
 // Attachments: Get order attachments (signatures, invoices)
 router.get('/:id/attachments', orders.getOrderAttachments);
 

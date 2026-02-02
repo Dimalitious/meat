@@ -4,6 +4,7 @@ import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
+import { getStatusLabel, getStatusColor } from '../constants/orderStatus';
 
 interface Order {
     id: number;
@@ -70,13 +71,8 @@ export default function AssemblyPage() {
                                     <TableCell className="font-medium">{order.customer.name}</TableCell>
                                     <TableCell>{order.items.length}</TableCell>
                                     <TableCell>
-                                        <span className={`px-2 py-1 rounded text-xs ${order.status === 'new' ? 'bg-yellow-100 text-yellow-800' :
-                                                order.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                                                    'bg-emerald-100 text-emerald-800'
-                                            }`}>
-                                            {order.status === 'new' ? 'Новый' :
-                                                order.status === 'processing' ? 'В обработке' :
-                                                    order.status === 'delivered' ? 'Доставлен' : order.status}
+                                        <span className={`px-2 py-1 rounded text-xs ${getStatusColor(order.status)}`}>
+                                            {getStatusLabel(order.status)}
                                         </span>
                                     </TableCell>
                                     <TableCell className="text-right">

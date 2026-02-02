@@ -37,9 +37,11 @@ const PAYMENT_TYPES = [
 ];
 
 const STATUS_OPTIONS = [
-    { value: 'new', label: 'Новый' },
-    { value: 'processing', label: 'В обработке' },
-    { value: 'delivered', label: 'Доставлен' }
+    { value: 'NEW', label: 'Новый' },
+    { value: 'IN_ASSEMBLY', label: 'На сборке' },
+    { value: 'DISTRIBUTING', label: 'Распределяется' },
+    { value: 'LOADED', label: 'Погружен' },
+    { value: 'SHIPPED', label: 'Отгружен' }
 ];
 
 const OrderEditPage = () => {

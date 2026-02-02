@@ -4,6 +4,7 @@ import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
 import { Printer, UserPlus, Download, X } from 'lucide-react';
+import { getStatusLabel, getStatusColor } from '../constants/orderStatus';
 
 interface OrderItem {
     id: number;
@@ -67,14 +68,7 @@ interface Order {
     updatedAt: string;
 }
 
-const STATUS_LABELS: { [key: string]: string } = {
-    'new': 'Новый',
-    'assigned': 'Назначен экспедитору',
-    'processing': 'В обработке',
-    'in_delivery': 'В доставке',
-    'delivered': 'Доставлен',
-    'rework': 'На доработке'
-};
+
 
 const PAYMENT_LABELS: { [key: string]: string } = {
     'cash': 'Наличка',
@@ -213,13 +207,8 @@ export default function OrderViewPage() {
                     </div>
                     <div>
                         <div className="text-sm text-gray-500">Статус</div>
-                        <span className={`inline-block px-2 py-1 rounded text-sm font-medium ${order.status === 'new' ? 'bg-yellow-100 text-yellow-800' :
-                                order.status === 'assigned' ? 'bg-purple-100 text-purple-800' :
-                                    order.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                                        order.status === 'delivered' ? 'bg-green-100 text-green-800' :
-                                            'bg-gray-100 text-gray-800'
-                            }`}>
-                            {STATUS_LABELS[order.status] || order.status}
+                        <span className={`inline-block px-2 py-1 rounded text-sm font-medium ${getStatusColor(order.status)}`}>
+                            {getStatusLabel(order.status)}
                         </span>
                     </div>
                 </div>

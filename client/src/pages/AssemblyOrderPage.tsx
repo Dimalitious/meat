@@ -5,6 +5,7 @@ import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/Table';
+import { ORDER_STATUS } from '../constants/orderStatus';
 
 interface OrderItem {
     id: number;
@@ -96,7 +97,7 @@ export default function AssemblyOrderPage() {
             const token = localStorage.getItem('token');
             await axios.put(`${API_URL}/api/assembly/${order.id}`, {
                 items: itemsToUpdate,
-                status: 'delivered'
+                status: ORDER_STATUS.SHIPPED
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
