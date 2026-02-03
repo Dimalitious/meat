@@ -24,12 +24,19 @@ export const getSummaryOrders = async (req: Request, res: Response) => {
 
         const where: any = {};
 
-        // Date filter
+        // Date filter - with Asia/Tashkent timezone fix
         if (date) {
-            const startDate = new Date(date as string);
-            const endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + 1);
-            where.shipDate = { gte: startDate, lt: endDate };
+            const raw = String(date);
+            const day = raw.slice(0, 10); // YYYY-MM-DD
+            const [y, m, d] = day.split('-').map(Number);
+
+            if (y && m && d) {
+                // Asia/Tashkent = UTC+5
+                const offsetHours = 5;
+                const startDate = new Date(Date.UTC(y, m - 1, d, -offsetHours, 0, 0, 0));
+                const endDate = new Date(Date.UTC(y, m - 1, d + 1, -offsetHours, 0, 0, 0));
+                where.shipDate = { gte: startDate, lt: endDate };
+            }
         }
 
         // Status filter
@@ -188,12 +195,22 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
         // Get customer info for district if not provided
         let finalDistrict = district;
         let finalPointAddress = pointAddress;
-        if (customerId && !district) {
-            const customer = await prisma.customer.findUnique({
-                where: { id: Number(customerId) }
+
+        // Resolve customerId from customerName if not provided
+        let resolvedCustomerId = customerId ? Number(customerId) : null;
+        if (!resolvedCustomerId && customerName) {
+            const customer = await prisma.customer.findFirst({
+                where: { name: { equals: customerName, mode: 'insensitive' } }
             });
             if (customer) {
-                // Use districtId as district fallback
+                resolvedCustomerId = customer.id;
+                finalDistrict = district || customer.districtId || null;
+            }
+        } else if (resolvedCustomerId && !district) {
+            const customer = await prisma.customer.findUnique({
+                where: { id: resolvedCustomerId }
+            });
+            if (customer) {
                 finalDistrict = district || customer.districtId || null;
             }
         }
@@ -203,7 +220,7 @@ export const createSummaryOrder = async (req: Request, res: Response) => {
                 idn,
                 shipDate: new Date(shipDate),
                 paymentType: paymentType || 'bank', // "Перечисление" по умолчанию
-                customerId: customerId ? Number(customerId) : null,
+                customerId: resolvedCustomerId,
                 customerName: customerName || '',
                 productId: productId ? Number(productId) : null,
                 // productCode: productCode || null, // Uncomment after prisma generate
@@ -272,6 +289,33 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
         console.log(`[BULK IMPORT] Resolved ${productByCode.size} products by code`);
 
         // ============================================
+        // STEP 1.5: Collect unique customer names and resolve to customerIds
+        // ============================================
+        const customerNames = [...new Set(items
+            .filter((item: any) => !item.customerId && item.customerName)
+            .map((item: any) => (item.customerName || '').toLowerCase().trim())
+            .filter((name: string) => name !== '')
+        )] as string[];
+
+        console.log(`[BULK IMPORT] Resolving ${customerNames.length} unique customer names...`);
+
+        // Fetch customers by name (case-insensitive)
+        const customers = customerNames.length > 0
+            ? await prisma.customer.findMany({
+                select: { id: true, name: true }
+            })
+            : [];
+
+        // Build lowercase name -> customer map
+        const customerByName = new Map<string, number>();
+        for (const c of customers) {
+            if (c.name) {
+                customerByName.set(c.name.toLowerCase().trim(), c.id);
+            }
+        }
+        console.log(`[BULK IMPORT] Resolved ${customerByName.size} customers by name`);
+
+        // ============================================
         // STEP 2: Prepare data with resolved productIds
         // ============================================
         const dataToCreate = items.map((item: any) => {
@@ -300,11 +344,18 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
                 }
             }
 
+            // Resolve customerId from customerName if not provided
+            let resolvedCustomerId = item.customerId ? Number(item.customerId) : null;
+            if (!resolvedCustomerId && item.customerName) {
+                const customerNameLower = (item.customerName || '').toLowerCase().trim();
+                resolvedCustomerId = customerByName.get(customerNameLower) || null;
+            }
+
             return {
                 idn,
                 shipDate: dateObj,
                 paymentType: item.paymentType || 'bank',
-                customerId: item.customerId ? Number(item.customerId) : null,
+                customerId: resolvedCustomerId,
                 customerName: item.customerName || '',
                 productId: resolvedProductId,
                 productCode: item.productCode || null,
@@ -324,9 +375,11 @@ export const bulkCreateSummaryOrders = async (req: Request, res: Response) => {
             };
         });
 
-        // Log how many items have resolved productId
+        // Log how many items have resolved productId and customerId
         const withProductId = dataToCreate.filter(d => d.productId !== null).length;
+        const withCustomerId = dataToCreate.filter(d => d.customerId !== null).length;
         console.log(`[BULK IMPORT] Items with resolved productId: ${withProductId}/${dataToCreate.length}`);
+        console.log(`[BULK IMPORT] Items with resolved customerId: ${withCustomerId}/${dataToCreate.length}`);
 
         // Use createMany for maximum performance (single SQL INSERT)
         const result = await prisma.summaryOrderJournal.createMany({
@@ -443,9 +496,13 @@ export const bulkDeleteSummaryOrders = async (req: Request, res: Response) => {
 
         // If date provided - delete all for that date (optionally excluding synced)
         if (date) {
-            const startDate = new Date(date);
-            const endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + 1);
+            const raw = String(date);
+            const [y, m, d] = raw.slice(0, 10).split('-').map(Number);
+
+            // Asia/Tashkent = UTC+5
+            const offsetHours = 5;
+            const startDate = new Date(Date.UTC(y, m - 1, d, -offsetHours, 0, 0, 0));
+            const endDate = new Date(Date.UTC(y, m - 1, d + 1, -offsetHours, 0, 0, 0));
 
             const where: any = { shipDate: { gte: startDate, lt: endDate } };
 
@@ -551,13 +608,22 @@ export const syncToOrders = async (req: Request, res: Response) => {
                     results.push({ action: 'item_added', orderId: order.id, orderItemId });
                 }
             } else {
+                // Calculate dispatchDay in Asia/Tashkent timezone (UTC+5)
+                const now = new Date();
+                const tashkentOffset = 5 * 60; // UTC+5 in minutes
+                const tashkentTime = new Date(now.getTime() + (tashkentOffset + now.getTimezoneOffset()) * 60 * 1000);
+                const dispatchDay = new Date(tashkentTime.getFullYear(), tashkentTime.getMonth(), tashkentTime.getDate());
+
                 order = await prisma.order.create({
                     data: {
                         customerId: entry.customerId,
                         date: entry.shipDate,
                         idn: idn,
                         paymentType: entry.paymentType,
-                        status: 'new',
+                        // FSM: заказ из подтверждённой сборки сразу готов к распределению
+                        status: 'DISTRIBUTING',
+                        assemblyConfirmedAt: now,
+                        dispatchDay: dispatchDay,
                         totalAmount: Number(entry.price) * entry.orderQty,
                         totalWeight: entry.orderQty,
                         items: {

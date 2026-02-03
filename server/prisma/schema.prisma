@@ -237,6 +237,8 @@ model Order {
   // FSM: Кто выполнял действия (auditing)
   assemblyStartedBy   String?          // Username кто начал сборку
   assemblyConfirmedBy String?          // Username кто подтвердил сборку
+  loadedBy            String?          // Username кто погрузил (назначил экспедитора)
+  shippedBy           String?          // Username кто подтвердил отгрузку
   
   // Expedition fields (legacy, сохраняем для совместимости)
   deliveryAddress   String?            // Адрес доставки/точка

@@ -345,61 +345,92 @@ export const getSummaryByIdn = async (req: Request, res: Response) => {
 
 // ============================================
 // FSM: Назначить экспедитора (DISTRIBUTING → LOADED)
+// "Антиграв" паттерн: атомарная транзакция
 // ============================================
 export const assignExpeditor = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { expeditorId, deliveryAddress, dispatchDay } = req.body;
-
-        // Получаем текущий заказ для проверки статуса
-        const currentOrder = await prisma.order.findUnique({
-            where: { id: Number(id) }
-        });
-
-        if (!currentOrder) {
-            return res.status(404).json({ error: 'Заказ не найден' });
-        }
-
-        // FSM: Назначение экспедитора разрешено только из статуса DISTRIBUTING
-        if (currentOrder.status !== ORDER_STATUS.DISTRIBUTING) {
-            return res.status(400).json({
-                error: `Невозможно назначить экспедитора из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Распределяется"`
-            });
-        }
+        const username = (req as any).user?.username || 'system';
 
         if (!expeditorId) {
             return res.status(400).json({ error: 'Не указан ID экспедитора' });
         }
 
-        // Парсинг dispatchDay (бизнес-дата в Asia/Tashkent)
-        let dispatchDayDate: Date | null = null;
-        if (dispatchDay) {
-            const [y, m, d] = String(dispatchDay).slice(0, 10).split('-').map(Number);
-            dispatchDayDate = new Date(Date.UTC(y, m - 1, d));
-        }
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Получаем и лочим заказ
+            const currentOrder = await tx.order.findUnique({
+                where: { id: Number(id) }
+            });
 
-        const order = await prisma.order.update({
-            where: { id: Number(id) },
-            data: {
-                expeditorId: Number(expeditorId),
-                deliveryAddress: deliveryAddress || undefined,
-                dispatchDay: dispatchDayDate,
-                assignedAt: new Date(),
-                loadedAt: new Date(),
-                status: ORDER_STATUS.LOADED,
-                deliveryStatus: 'pending'
-            },
-            include: {
-                customer: true,
-                expeditor: true,
-                items: { include: { product: true } }
+            if (!currentOrder) {
+                throw new Error('ORDER_NOT_FOUND');
             }
+
+            // 2. FSM проверка: назначение только из DISTRIBUTING
+            if (currentOrder.status !== ORDER_STATUS.DISTRIBUTING) {
+                throw new Error(`INVALID_STATUS:${currentOrder.status}`);
+            }
+
+            // 3. Проверяем существование экспедитора
+            const expeditor = await tx.expeditor.findUnique({
+                where: { id: Number(expeditorId) }
+            });
+
+            if (!expeditor) {
+                throw new Error('EXPEDITOR_NOT_FOUND');
+            }
+
+            // 4. Парсинг dispatchDay (бизнес-дата в Asia/Tashkent)
+            let dispatchDayDate: Date | null = currentOrder.dispatchDay as Date | null;
+            if (dispatchDay) {
+                const [y, m, d] = String(dispatchDay).slice(0, 10).split('-').map(Number);
+                dispatchDayDate = new Date(Date.UTC(y, m - 1, d));
+            }
+
+            // 5. Обновляем заказ: назначаем экспедитора, меняем статус
+            const order = await tx.order.update({
+                where: { id: Number(id) },
+                data: {
+                    expeditorId: Number(expeditorId),
+                    deliveryAddress: deliveryAddress || undefined,
+                    dispatchDay: dispatchDayDate,
+                    assignedAt: new Date(),
+                    loadedAt: new Date(),
+                    loadedBy: username,
+                    status: ORDER_STATUS.LOADED,
+                    deliveryStatus: 'pending'
+                },
+                include: {
+                    customer: true,
+                    expeditor: true,
+                    items: { include: { product: true } }
+                }
+            });
+
+            // TODO: Добавить журнал событий FSM после создания правильной модели
+            // Сейчас журналы несовместимы с FSM-событиями (они хранят снимки, а не события)
+
+            console.log(`[FSM] Order #${id}: DISTRIBUTING → LOADED, expeditor=${expeditorId}, dispatchDay=${dispatchDayDate?.toISOString().slice(0, 10)}`);
+            return order;
         });
 
-        console.log(`[FSM] Order #${id}: DISTRIBUTING → LOADED, expeditor=${expeditorId}, dispatchDay=${dispatchDay}`);
-        res.json(order);
-    } catch (error) {
+        res.json(result);
+    } catch (error: any) {
         console.error('assignExpeditor error:', error);
+
+        if (error.message === 'ORDER_NOT_FOUND') {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        if (error.message === 'EXPEDITOR_NOT_FOUND') {
+            return res.status(404).json({ error: 'Экспедитор не найден' });
+        }
+        if (error.message?.startsWith('INVALID_STATUS:')) {
+            const currentStatus = error.message.split(':')[1];
+            return res.status(400).json({
+                error: `Невозможно назначить экспедитора из статуса "${getStatusDisplayName(currentStatus)}". Требуется статус "Распределяется"`
+            });
+        }
         res.status(400).json({ error: 'Failed to assign expeditor' });
     }
 };
@@ -412,8 +443,8 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
 
         let where: any = {
             expeditorId: Number(expeditorId),
-            // Only show orders that have been assigned (passed through Distribution)
-            status: { in: ['assigned', 'in_delivery', 'delivered'] }
+            // FSM + backwards compatibility: показываем как новые (LOADED, SHIPPED), так и старые статусы
+            status: { in: [ORDER_STATUS.LOADED, ORDER_STATUS.SHIPPED, 'assigned', 'in_delivery', 'delivered'] }
         };
 
         // Filter by delivery status if provided
@@ -455,178 +486,249 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
 
 // ============================================
 // FSM: Завершить заказ (LOADED → SHIPPED)
+// "Антиграв" паттерн: атомарная транзакция
 // ============================================
 export const completeOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { signatureUrl, signedInvoiceUrl } = req.body;
         const currentUserId = (req as any).user?.id;
+        const username = (req as any).user?.username || 'system';
 
-        // Получаем текущий заказ для проверки
-        const currentOrder = await prisma.order.findUnique({
-            where: { id: Number(id) },
-            include: { expeditor: true }
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Получаем и лочим заказ
+            const currentOrder = await tx.order.findUnique({
+                where: { id: Number(id) },
+                include: { expeditor: true }
+            });
+
+            if (!currentOrder) {
+                throw new Error('ORDER_NOT_FOUND');
+            }
+
+            // 2. FSM проверка: закрытие только из LOADED или in_delivery (backwards compat)
+            const allowedStatuses = [ORDER_STATUS.LOADED, 'in_delivery', 'assigned'];
+            if (!allowedStatuses.includes(currentOrder.status)) {
+                throw new Error(`INVALID_STATUS:${currentOrder.status}`);
+            }
+
+            // 3. Проверка прав: только назначенный экспедитор может закрыть
+            // (пропускаем если currentUserId не определен - для обратной совместимости)
+            if (currentUserId && (currentOrder.expeditor as any)?.userId) {
+                if ((currentOrder.expeditor as any).userId !== currentUserId) {
+                    throw new Error('FORBIDDEN');
+                }
+            }
+
+            // 4. Обновляем заказ
+            const order = await tx.order.update({
+                where: { id: Number(id) },
+                data: {
+                    status: ORDER_STATUS.SHIPPED,
+                    deliveryStatus: 'delivered',
+                    shippedAt: new Date(),
+                    completedAt: new Date(),
+                    shippedBy: username,
+                    signatureUrl: signatureUrl || undefined,
+                    signedInvoiceUrl: signedInvoiceUrl || undefined
+                },
+                include: {
+                    customer: true,
+                    expeditor: true,
+                    items: { include: { product: true } }
+                }
+            });
+
+            // 5. Создаём записи вложений (подписи) в той же транзакции
+            if (signatureUrl) {
+                await tx.orderAttachment.create({
+                    data: {
+                        orderId: Number(id),
+                        type: 'signature',
+                        filename: `signature_order_${id}.png`,
+                        url: signatureUrl,
+                        mimeType: 'image/png'
+                    }
+                });
+            }
+
+            if (signedInvoiceUrl) {
+                await tx.orderAttachment.create({
+                    data: {
+                        orderId: Number(id),
+                        type: 'signed_invoice',
+                        filename: `invoice_signed_order_${id}.png`,
+                        url: signedInvoiceUrl,
+                        mimeType: 'image/png'
+                    }
+                });
+            }
+
+            // TODO: Добавить журнал событий FSM после создания правильной модели
+            // Сейчас журналы несовместимы с FSM-событиями (они хранят снимки, а не события)
+
+            console.log(`[FSM] Order #${id}: LOADED → SHIPPED by ${username}`);
+            return order;
         });
 
-        if (!currentOrder) {
+        res.json(result);
+    } catch (error: any) {
+        console.error('completeOrder error:', error);
+
+        if (error.message === 'ORDER_NOT_FOUND') {
             return res.status(404).json({ error: 'Заказ не найден' });
         }
-
-        // FSM: Закрытие разрешено только из статуса LOADED
-        if (currentOrder.status !== ORDER_STATUS.LOADED) {
+        if (error.message === 'FORBIDDEN') {
+            return res.status(403).json({ error: 'Только назначенный экспедитор может закрыть заказ' });
+        }
+        if (error.message?.startsWith('INVALID_STATUS:')) {
+            const currentStatus = error.message.split(':')[1];
             return res.status(400).json({
-                error: `Невозможно закрыть заказ из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Погружен"`
+                error: `Невозможно закрыть заказ из статуса "${getStatusDisplayName(currentStatus)}". Требуется статус "Погружен"`
             });
         }
-
-        // Проверка: только назначенный экспедитор может закрыть заказ
-        // (пропускаем если currentUserId не определен - для обратной совместимости)
-        if (currentUserId && currentOrder.expeditor?.userId) {
-            if (currentOrder.expeditor.userId !== currentUserId) {
-                return res.status(403).json({ error: 'Только назначенный экспедитор может закрыть заказ' });
-            }
-        }
-
-        const order = await prisma.order.update({
-            where: { id: Number(id) },
-            data: {
-                status: ORDER_STATUS.SHIPPED,
-                deliveryStatus: 'delivered',
-                shippedAt: new Date(),
-                completedAt: new Date(),
-                signatureUrl: signatureUrl || undefined,
-                signedInvoiceUrl: signedInvoiceUrl || undefined
-            },
-            include: {
-                customer: true,
-                expeditor: true,
-                items: { include: { product: true } }
-            }
-        });
-
-        // Create attachment record if signature provided
-        if (signatureUrl) {
-            await prisma.orderAttachment.create({
-                data: {
-                    orderId: Number(id),
-                    type: 'signature',
-                    filename: `signature_order_${id}.png`,
-                    url: signatureUrl,
-                    mimeType: 'image/png'
-                }
-            });
-        }
-
-        if (signedInvoiceUrl) {
-            await prisma.orderAttachment.create({
-                data: {
-                    orderId: Number(id),
-                    type: 'signed_invoice',
-                    filename: `invoice_signed_order_${id}.png`,
-                    url: signedInvoiceUrl,
-                    mimeType: 'image/png'
-                }
-            });
-        }
-
-        console.log(`[FSM] Order #${id}: LOADED → SHIPPED`);
-        res.json(order);
-    } catch (error) {
-        console.error('completeOrder error:', error);
         res.status(400).json({ error: 'Failed to complete order' });
     }
 };
 
 // ============================================
 // FSM: Начать сборку заказа (NEW → IN_ASSEMBLY)
+// "Антиграв" паттерн: атомарная транзакция
 // ============================================
 export const startAssemblyOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const username = (req as any).user?.username || 'system';
 
-        const currentOrder = await prisma.order.findUnique({
-            where: { id: Number(id) }
-        });
-
-        if (!currentOrder) {
-            return res.status(404).json({ error: 'Заказ не найден' });
-        }
-
-        // FSM: Начать сборку можно только из статуса NEW
-        if (currentOrder.status !== ORDER_STATUS.NEW) {
-            return res.status(400).json({
-                error: `Невозможно начать сборку из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "Новый"`
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Лочим заказ (SELECT FOR UPDATE через findFirst + order)
+            const currentOrder = await tx.order.findUnique({
+                where: { id: Number(id) }
             });
-        }
 
-        const order = await prisma.order.update({
-            where: { id: Number(id) },
-            data: {
-                status: ORDER_STATUS.IN_ASSEMBLY,
-                assemblyStartedAt: new Date(),
-                assemblyStartedBy: username
-            },
-            include: {
-                customer: true,
-                items: { include: { product: true } }
+            if (!currentOrder) {
+                throw new Error('ORDER_NOT_FOUND');
             }
+
+            // 2. FSM проверка: начать сборку можно только из NEW
+            if (currentOrder.status !== ORDER_STATUS.NEW) {
+                throw new Error(`INVALID_STATUS:${currentOrder.status}`);
+            }
+
+            // 3. Обновляем статус заказа
+            const order = await tx.order.update({
+                where: { id: Number(id) },
+                data: {
+                    status: ORDER_STATUS.IN_ASSEMBLY,
+                    assemblyStartedAt: new Date(),
+                    assemblyStartedBy: username
+                },
+                include: {
+                    customer: true,
+                    items: { include: { product: true } }
+                }
+            });
+
+            // TODO: Добавить журнал событий FSM после создания правильной модели
+            // Сейчас журналы несовместимы с FSM-событиями (они хранят снимки, а не события)
+
+            console.log(`[FSM] Order #${id}: NEW → IN_ASSEMBLY by ${username}`);
+            return order;
         });
 
-        console.log(`[FSM] Order #${id}: NEW → IN_ASSEMBLY by ${username}`);
         res.json({
             message: 'Сборка начата',
-            order
+            order: result
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error('startAssemblyOrder error:', error);
+
+        if (error.message === 'ORDER_NOT_FOUND') {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        if (error.message?.startsWith('INVALID_STATUS:')) {
+            const currentStatus = error.message.split(':')[1];
+            return res.status(400).json({
+                error: `Невозможно начать сборку из статуса "${getStatusDisplayName(currentStatus)}". Требуется статус "Новый"`
+            });
+        }
         res.status(500).json({ error: 'Ошибка начала сборки' });
     }
 };
 
 // ============================================
 // FSM: Подтвердить сборку (IN_ASSEMBLY → DISTRIBUTING)
+// "Антиграв" паттерн: атомарная транзакция + dispatchDay
 // ============================================
 export const confirmAssemblyOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const username = (req as any).user?.username || 'system';
 
-        const currentOrder = await prisma.order.findUnique({
-            where: { id: Number(id) }
-        });
-
-        if (!currentOrder) {
-            return res.status(404).json({ error: 'Заказ не найден' });
-        }
-
-        // FSM: Подтвердить сборку можно только из статуса IN_ASSEMBLY
-        if (currentOrder.status !== ORDER_STATUS.IN_ASSEMBLY) {
-            return res.status(400).json({
-                error: `Невозможно подтвердить сборку из статуса "${getStatusDisplayName(currentOrder.status)}". Требуется статус "На сборке"`
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Получаем и лочим заказ
+            const currentOrder = await tx.order.findUnique({
+                where: { id: Number(id) }
             });
-        }
 
-        const order = await prisma.order.update({
-            where: { id: Number(id) },
-            data: {
-                status: ORDER_STATUS.DISTRIBUTING,
-                assemblyConfirmedAt: new Date(),
-                assemblyConfirmedBy: username
-            },
-            include: {
-                customer: true,
-                items: { include: { product: true } }
+            if (!currentOrder) {
+                throw new Error('ORDER_NOT_FOUND');
             }
+
+            // 2. FSM проверка: подтвердить можно только из IN_ASSEMBLY
+            if (currentOrder.status !== ORDER_STATUS.IN_ASSEMBLY) {
+                throw new Error(`INVALID_STATUS:${currentOrder.status}`);
+            }
+
+            // 3. Вычисляем dispatchDay (сегодня в Asia/Tashkent)
+            const now = new Date();
+            // Asia/Tashkent = UTC+5
+            const tashkentOffset = 5 * 60 * 60 * 1000;
+            const tashkentNow = new Date(now.getTime() + tashkentOffset);
+            const dispatchDay = new Date(Date.UTC(
+                tashkentNow.getUTCFullYear(),
+                tashkentNow.getUTCMonth(),
+                tashkentNow.getUTCDate()
+            ));
+
+            // 4. Обновляем статус заказа + устанавливаем dispatchDay
+            const order = await tx.order.update({
+                where: { id: Number(id) },
+                data: {
+                    status: ORDER_STATUS.DISTRIBUTING,
+                    dispatchDay: dispatchDay,
+                    assemblyConfirmedAt: new Date(),
+                    assemblyConfirmedBy: username
+                },
+                include: {
+                    customer: true,
+                    items: { include: { product: true } }
+                }
+            });
+
+            // TODO: Добавить журнал событий FSM после создания правильной модели
+            // Сейчас журналы несовместимы с FSM-событиями (они хранят снимки, а не события)
+
+            console.log(`[FSM] Order #${id}: IN_ASSEMBLY → DISTRIBUTING by ${username}, dispatchDay=${dispatchDay.toISOString().slice(0, 10)}`);
+            return order;
         });
 
-        console.log(`[FSM] Order #${id}: IN_ASSEMBLY → DISTRIBUTING by ${username}`);
         res.json({
             message: 'Сборка подтверждена, заказ передан на распределение',
-            order
+            order: result
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error('confirmAssemblyOrder error:', error);
+
+        if (error.message === 'ORDER_NOT_FOUND') {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        if (error.message?.startsWith('INVALID_STATUS:')) {
+            const currentStatus = error.message.split(':')[1];
+            return res.status(400).json({
+                error: `Невозможно подтвердить сборку из статуса "${getStatusDisplayName(currentStatus)}". Требуется статус "На сборке"`
+            });
+        }
         res.status(500).json({ error: 'Ошибка подтверждения сборки' });
     }
 };
