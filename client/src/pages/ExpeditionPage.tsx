@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
-import { Eye, Check, Truck, Edit2, EyeOff, Calendar, RefreshCw, Save, X, RotateCcw } from 'lucide-react';
+import { Eye, Check, Truck, Edit2, Calendar, RefreshCw, RotateCcw } from 'lucide-react';
 import { ReturnModal } from '../components/ReturnModal';
 
 interface OrderItem {
@@ -32,7 +32,6 @@ interface ExpeditionOrder {
     assignedAt: string;
     totalAmount: number;
     totalWeight: number;
-    // ТЗ §1.1: expeditionId и expeditionStatus всегда присутствуют (но могут быть null/open)
     expeditionId: number | null;
     expeditionStatus: ExpeditionStatus;
     customer: {
@@ -41,7 +40,6 @@ interface ExpeditionOrder {
         code: string;
     };
     items: OrderItem[];
-    isHidden?: boolean;
 }
 
 interface Expeditor {
@@ -67,19 +65,6 @@ export default function ExpeditionPage() {
     const today = new Date().toISOString().split('T')[0];
     const [dateFrom, setDateFrom] = useState(today);
     const [dateTo, setDateTo] = useState(today);
-
-    // Режим редактирования
-    const [isEditing, setIsEditing] = useState(false);
-
-    // Выбранные заказы (чекбоксы)
-    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-
-    // Скрытые заказы
-    const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
-
-    // Статус сохранения
-    const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState(false);
 
     // Модалка возврата
     const [returnModalOrder, setReturnModalOrder] = useState<ExpeditionOrder | null>(null);
@@ -127,11 +112,6 @@ export default function ExpeditionPage() {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setOrders(res.data);
-
-            // ТЗ §6.1: сброс UI state при загрузке нового списка
-            setSelectedIds(new Set());
-            setHiddenIds(new Set());
-            setSaved(false);
         } catch (err) {
             console.error('Failed to fetch orders:', err);
         } finally {
@@ -162,107 +142,16 @@ export default function ExpeditionPage() {
         navigate(url);
     };
 
-    // ТЗ §5: "Подпись и завершение" - отдельный роут /complete, не /invoice
-    const goToComplete = (orderId: number, expeditionId: number | null) => {
-        const url = expeditionId !== null
-            ? `/expedition/${orderId}/complete?expeditionId=${expeditionId}`
-            : `/expedition/${orderId}/complete`;
-        navigate(url);
-    };
-
-    // Чекбоксы
-    const toggleSelect = (orderId: number) => {
-        const newSet = new Set(selectedIds);
-        if (newSet.has(orderId)) {
-            newSet.delete(orderId);
-        } else {
-            newSet.add(orderId);
-        }
-        setSelectedIds(newSet);
-    };
-
-    const toggleSelectAll = () => {
-        const visibleOrders = orders.filter(o => !hiddenIds.has(o.id));
-        if (selectedIds.size === visibleOrders.length) {
-            setSelectedIds(new Set());
-        } else {
-            setSelectedIds(new Set(visibleOrders.map(o => o.id)));
-        }
-    };
-
-    // Скрыть выделенные
-    const hideSelected = () => {
-        setHiddenIds(prev => {
-            const newSet = new Set(prev);
-            selectedIds.forEach(id => newSet.add(id));
-            return newSet;
-        });
-        setSelectedIds(new Set());
-    };
-
-    // Показать все скрытые
-    const showAllHidden = () => {
-        setHiddenIds(new Set());
-    };
-
-    // Сохранить данные экспедиции в журнал
-    const saveExpeditionData = async () => {
-        setSaving(true);
-        try {
-            const token = localStorage.getItem('token');
-
-            // Подготовка данных для сохранения
-            const expeditionData = {
-                expeditorId: selectedExpeditor,
-                expeditorName: expeditors.find(e => e.id === selectedExpeditor)?.name || '',
-                dateFrom,
-                dateTo,
-                savedAt: new Date().toISOString(),
-                orders: orders.filter(o => !hiddenIds.has(o.id)).map(o => ({
-                    id: o.id,
-                    idn: o.idn,
-                    date: o.date,
-                    customerId: o.customer.id,
-                    customerName: o.customer.name,
-                    deliveryStatus: o.deliveryStatus,
-                    totalAmount: o.totalAmount,
-                    totalWeight: o.totalWeight,
-                    itemsCount: o.items.length,
-                    assignedAt: o.assignedAt
-                }))
-            };
-
-            await axios.post(`${API_URL}/api/journals/expedition`, expeditionData, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-
-            setSaved(true);
-            setIsEditing(false);
-            alert('Данные экспедиции сохранены');
-        } catch (err) {
-            console.error('Failed to save expedition data:', err);
-            alert('Ошибка сохранения');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    // Видимые заказы (исключая скрытые)
-    const visibleOrders = useMemo(() => {
-        return orders.filter(o => !hiddenIds.has(o.id));
-    }, [orders, hiddenIds]);
-
-    const pendingOrders = visibleOrders.filter(o => o.deliveryStatus === 'pending');
-    const inDeliveryOrders = visibleOrders.filter(o => o.deliveryStatus === 'in_delivery');
-    const deliveredOrders = visibleOrders.filter(o => o.deliveryStatus === 'delivered');
-
     // Статистика
     const stats = useMemo(() => ({
-        totalOrders: visibleOrders.length,
-        totalWeight: visibleOrders.reduce((sum, o) => sum + (o.totalWeight || 0), 0),
-        totalAmount: visibleOrders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0),
-        hiddenCount: hiddenIds.size
-    }), [visibleOrders, hiddenIds]);
+        totalOrders: orders.length,
+        totalWeight: orders.reduce((sum, o) => sum + (o.totalWeight || 0), 0),
+        totalAmount: orders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0)
+    }), [orders]);
+
+    const pendingOrders = orders.filter(o => o.deliveryStatus === 'pending');
+    const inDeliveryOrders = orders.filter(o => o.deliveryStatus === 'in_delivery');
+    const deliveredOrders = orders.filter(o => o.deliveryStatus === 'delivered');
 
     return (
         <div className="max-w-6xl mx-auto">
@@ -331,107 +220,11 @@ export default function ExpeditionPage() {
                     </div>
                 </div>
 
-                {/* Панель действий */}
-                <div className="mt-4 pt-4 border-t flex flex-wrap items-center justify-between gap-3">
-                    {/* Левая часть - чекбоксы и действия */}
-                    <div className="flex items-center gap-3">
-                        {isEditing && visibleOrders.length > 0 && (
-                            <>
-                                <label className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedIds.size === visibleOrders.length && visibleOrders.length > 0}
-                                        onChange={toggleSelectAll}
-                                        className="w-4 h-4"
-                                    />
-                                    <span className="text-sm">Выбрать все</span>
-                                </label>
-
-                                {selectedIds.size > 0 && (
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={hideSelected}
-                                        className="flex items-center gap-1 text-orange-600 border-orange-300 hover:bg-orange-50"
-                                    >
-                                        <EyeOff size={14} />
-                                        Скрыть выделенные ({selectedIds.size})
-                                    </Button>
-                                )}
-
-                                {hiddenIds.size > 0 && (
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={showAllHidden}
-                                        className="flex items-center gap-1 text-blue-600"
-                                    >
-                                        <Eye size={14} />
-                                        Показать скрытые ({hiddenIds.size})
-                                    </Button>
-                                )}
-                            </>
-                        )}
-                    </div>
-
-                    {/* Правая часть - статистика и кнопки */}
-                    <div className="flex items-center gap-4">
-                        {/* Статистика */}
-                        <div className="flex items-center gap-4 text-sm text-gray-600">
-                            <span>Заказов: <strong>{stats.totalOrders}</strong></span>
-                            <span>Вес: <strong>{stats.totalWeight.toFixed(1)} кг</strong></span>
-                            <span>Сумма: <strong className="text-green-600">{stats.totalAmount.toLocaleString('ru-RU')} ₽</strong></span>
-                        </div>
-
-                        {/* Кнопки редактирования и сохранения */}
-                        {saved ? (
-                            <div className="flex items-center gap-2">
-                                <span className="text-green-600 flex items-center gap-1 text-sm">
-                                    <Check size={16} /> Сохранено
-                                </span>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => { setSaved(false); setIsEditing(true); }}
-                                    className="flex items-center gap-1"
-                                >
-                                    <Edit2 size={14} />
-                                    Редактировать
-                                </Button>
-                            </div>
-                        ) : isEditing ? (
-                            <div className="flex items-center gap-2">
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => { setIsEditing(false); setSelectedIds(new Set()); setHiddenIds(new Set()); }}
-                                    className="flex items-center gap-1"
-                                >
-                                    <X size={14} />
-                                    Отмена
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    onClick={saveExpeditionData}
-                                    disabled={saving}
-                                    className="flex items-center gap-1 bg-green-600 hover:bg-green-700"
-                                >
-                                    <Save size={14} />
-                                    {saving ? 'Сохранение...' : 'Сохранить'}
-                                </Button>
-                            </div>
-                        ) : (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setIsEditing(true)}
-                                className="flex items-center gap-1"
-                            >
-                                <Edit2 size={14} />
-                                Редактировать
-                            </Button>
-                        )}
-                    </div>
+                {/* Статистика */}
+                <div className="mt-4 pt-4 border-t flex items-center gap-4 text-sm text-gray-600">
+                    <span>Заказов: <strong>{stats.totalOrders}</strong></span>
+                    <span>Вес: <strong>{stats.totalWeight.toFixed(1)} кг</strong></span>
+                    <span>Сумма: <strong className="text-green-600">{stats.totalAmount.toLocaleString('ru-RU')} ₽</strong></span>
                 </div>
             </div>
 
@@ -441,24 +234,9 @@ export default function ExpeditionPage() {
                 </div>
             ) : loading ? (
                 <div className="p-8 text-center">Загрузка...</div>
-            ) : visibleOrders.length === 0 ? (
+            ) : orders.length === 0 ? (
                 <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-                    {hiddenIds.size > 0 ? (
-                        <div>
-                            <p>Все заказы скрыты</p>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={showAllHidden}
-                                className="mt-3"
-                            >
-                                <Eye size={14} className="mr-1" />
-                                Показать скрытые ({hiddenIds.size})
-                            </Button>
-                        </div>
-                    ) : (
-                        'Нет назначенных заказов за выбранный период'
-                    )}
+                    Нет назначенных заказов за выбранный период
                 </div>
             ) : (
                 <div className="space-y-6">
@@ -479,9 +257,6 @@ export default function ExpeditionPage() {
                                         onReturn={() => setReturnModalOrder(order)}
                                         onEdit={() => navigate(`/orders/${order.id}`)}
                                         expeditionStatus={order.expeditionStatus}
-                                        isEditing={isEditing}
-                                        isSelected={selectedIds.has(order.id)}
-                                        onToggleSelect={() => toggleSelect(order.id)}
                                     />
                                 ))}
                             </div>
@@ -503,12 +278,7 @@ export default function ExpeditionPage() {
                                         onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
                                         onReturn={() => setReturnModalOrder(order)}
                                         onEdit={() => navigate(`/orders/${order.id}`)}
-                                        onComplete={() => goToComplete(order.id, order.expeditionId)}
-                                        showCompleteButton
                                         expeditionStatus={order.expeditionStatus}
-                                        isEditing={isEditing}
-                                        isSelected={selectedIds.has(order.id)}
-                                        onToggleSelect={() => toggleSelect(order.id)}
                                     />
                                 ))}
                             </div>
@@ -529,9 +299,6 @@ export default function ExpeditionPage() {
                                         order={order}
                                         onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
                                         isCompleted
-                                        isEditing={isEditing}
-                                        isSelected={selectedIds.has(order.id)}
-                                        onToggleSelect={() => toggleSelect(order.id)}
                                     />
                                 ))}
                             </div>
@@ -540,7 +307,7 @@ export default function ExpeditionPage() {
                 </div>
             )}
 
-            {/* Модалка возврата: используем expeditionId из заказа, не из state */}
+            {/* Модалка возврата: используем expeditionId из заказа */}
             {returnModalOrder && returnModalOrder.expeditionId != null && (
                 <ReturnModal
                     orderId={returnModalOrder.id}
@@ -560,12 +327,7 @@ interface OrderCardProps {
     order: ExpeditionOrder;
     onViewInvoice: () => void;
     onStartDelivery?: () => void;
-    onComplete?: () => void; // ТЗ: callback для "Подпись и завершение" с expeditionId
-    showCompleteButton?: boolean;
     isCompleted?: boolean;
-    isEditing?: boolean;
-    isSelected?: boolean;
-    onToggleSelect?: () => void;
     onReturn?: () => void;
     onEdit?: () => void;
     expeditionStatus?: string; // open | closed
@@ -575,12 +337,7 @@ function OrderCard({
     order,
     onViewInvoice,
     onStartDelivery,
-    onComplete,
-    showCompleteButton,
     isCompleted,
-    isEditing,
-    isSelected,
-    onToggleSelect,
     onReturn,
     onEdit,
     expeditionStatus = 'open'
@@ -588,31 +345,20 @@ function OrderCard({
     const statusInfo = DELIVERY_STATUS_LABELS[order.deliveryStatus] || { label: order.deliveryStatus, color: 'bg-gray-100' };
 
     return (
-        <div className={`bg-white rounded-lg shadow p-4 ${isCompleted ? 'opacity-75' : ''} ${isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : ''}`}>
+        <div className={`bg-white rounded-lg shadow p-4 ${isCompleted ? 'opacity-75' : ''}`}>
             <div className="flex justify-between items-start mb-3">
-                <div className="flex items-start gap-3">
-                    {/* Чекбокс */}
-                    {isEditing && (
-                        <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={onToggleSelect}
-                            className="w-5 h-5 mt-1 cursor-pointer"
-                        />
+                <div>
+                    <div className="flex items-center gap-2">
+                        <span className="font-bold text-lg">#{order.id}</span>
+                        {order.idn && <span className="text-gray-500 text-sm font-mono">IDN: {order.idn}</span>}
+                    </div>
+                    <div className="text-gray-600">{order.customer.name}</div>
+                    {order.deliveryAddress && (
+                        <div className="text-sm text-gray-500 mt-1">📍 {order.deliveryAddress}</div>
                     )}
-                    <div>
-                        <div className="flex items-center gap-2">
-                            <span className="font-bold text-lg">#{order.id}</span>
-                            {order.idn && <span className="text-gray-500 text-sm font-mono">IDN: {order.idn}</span>}
-                        </div>
-                        <div className="text-gray-600">{order.customer.name}</div>
-                        {order.deliveryAddress && (
-                            <div className="text-sm text-gray-500 mt-1">📍 {order.deliveryAddress}</div>
-                        )}
-                        {/* Дата заказа */}
-                        <div className="text-xs text-gray-400 mt-1">
-                            📅 Дата: {new Date(order.date).toLocaleDateString('ru-RU')}
-                        </div>
+                    {/* Дата заказа */}
+                    <div className="text-xs text-gray-400 mt-1">
+                        📅 Дата: {new Date(order.date).toLocaleDateString('ru-RU')}
                     </div>
                 </div>
                 <div className="text-right">
@@ -639,35 +385,24 @@ function OrderCard({
                     <Eye size={14} /> Накладная
                 </Button>
 
-                {/* Кнопка Редактировать (ТЗ §3.2) - скрываем при closed */}
+                {/* Кнопка Редактировать - только при open и не завершён */}
                 {onEdit && !isCompleted && expeditionStatus === 'open' && (
                     <Button variant="outline" size="sm" onClick={onEdit} className="flex items-center gap-1">
                         <Edit2 size={14} /> Редактировать
                     </Button>
                 )}
 
-                {/* ТЗ §4.2: "Начать доставку" показывается только при pending и open */}
+                {/* "Начать доставку" показывается только при pending и open */}
                 {onStartDelivery && order.deliveryStatus === 'pending' && expeditionStatus === 'open' && (
                     <Button size="sm" onClick={onStartDelivery} className="flex items-center gap-1">
                         <Truck size={14} /> Начать доставку
                     </Button>
                 )}
 
-                {/* ТЗ §3.1: "Возврат" только при expeditionId !== null и open */}
+                {/* "Возврат" только при expeditionId !== null и open */}
                 {onReturn && !isCompleted && order.expeditionId !== null && expeditionStatus === 'open' && (
                     <Button variant="outline" size="sm" onClick={onReturn} className="flex items-center gap-1 text-orange-600 border-orange-300 hover:bg-orange-50">
                         <RotateCcw size={14} /> Возврат
-                    </Button>
-                )}
-
-                {/* ТЗ §5.2: "Подпись и завершение" только при expeditionId !== null, open, in_delivery */}
-                {showCompleteButton && onComplete && order.expeditionId !== null && expeditionStatus === 'open' && order.deliveryStatus === 'in_delivery' && !isCompleted && (
-                    <Button
-                        size="sm"
-                        onClick={onComplete}
-                        className="flex items-center gap-1 bg-green-600 hover:bg-green-700"
-                    >
-                        <Check size={14} /> Подпись и завершение
                     </Button>
                 )}
 

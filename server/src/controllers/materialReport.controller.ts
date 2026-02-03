@@ -136,6 +136,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
         purchases,
         production,
         productionWriteoffs,
+        customerReturns,
         previousReport
     ] = await Promise.all([
         // Все активные товары
@@ -201,6 +202,21 @@ async function buildMaterialReportPreview(reportDate: Date) {
                 }
             }
         }),
+        // ТЗ v2 §6: Возвраты от покупателей = агрегация OrderItem.qtyReturn за дату
+        prisma.orderItem.findMany({
+            where: {
+                order: {
+                    date: { gte: dateStart, lte: dateEnd },
+                    isDisabled: false
+                },
+                qtyReturn: { gt: 0 }
+            },
+            select: {
+                productId: true,
+                qtyReturn: true,
+                price: true
+            }
+        }),
         // Предыдущий отчёт (для остатка на начало)
         getPreviousDayReport(reportDate)
     ]);
@@ -248,6 +264,13 @@ async function buildMaterialReportPreview(reportDate: Date) {
         });
     }
 
+    // ТЗ v2 §6: Возвраты от покупателей (агрегация qtyReturn)
+    const customerReturnsByProduct = new Map<number, number>();
+    customerReturns.forEach(r => {
+        const current = customerReturnsByProduct.get(r.productId) || 0;
+        customerReturnsByProduct.set(r.productId, current + Number(r.qtyReturn || 0));
+    });
+
     const previousBalances = new Map<number, number>();
     if (previousReport?.lines) {
         previousReport.lines.forEach(l => {
@@ -266,6 +289,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
     productionWriteoffByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     svodByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     previousBalances.forEach((_, id) => productIdsWithMovements.add(id));
+    customerReturnsByProduct.forEach((_, id) => productIdsWithMovements.add(id));
 
     // Строим строки отчёта
     const lines: any[] = [];
@@ -278,14 +302,17 @@ async function buildMaterialReportPreview(reportDate: Date) {
         const openingBalance = previousBalances.get(productId) || 0;
         const inPurchase = purchasesByProduct.get(productId) || 0;
         const inProduction = productionByProduct.get(productId) || 0;
+        const inCustomerReturn = customerReturnsByProduct.get(productId) || 0; // ТЗ v2 §6
         const outProductionWriteoff = productionWriteoffByProduct.get(productId) || 0;
         const svodData = svodByProduct.get(productId);
         const outSale = svodData?.weightToShip || 0;
 
         // Формула расчётного остатка на конец
+        // ТЗ v2 §6: добавляем inCustomerReturn
         const closingBalanceCalc = openingBalance
             + inPurchase
             + inProduction
+            + inCustomerReturn
             - outSale
             - outProductionWriteoff;
 
@@ -297,6 +324,7 @@ async function buildMaterialReportPreview(reportDate: Date) {
             openingBalance,
             inPurchase,
             inProduction,
+            inCustomerReturn,  // ТЗ v2 §6: Возврат от покупателя
             outSale,
             outWaste: 0,
             outBundle: 0,

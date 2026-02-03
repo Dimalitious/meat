@@ -280,6 +280,217 @@ export const deleteOrder = async (req: Request, res: Response) => {
     }
 };
 
+/**
+ * PATCH-05: Переназначение экспедитора
+ * PATCH /api/orders/:id/expeditor
+ * 
+ * FSM не меняется, только expeditorId
+ */
+export const reassignExpeditor = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { expeditorId } = req.body;
+        const username = (req as any).user?.username || 'system';
+
+        if (expeditorId === undefined || expeditorId === null) {
+            return res.status(400).json({ error: 'Не указан expeditorId' });
+        }
+
+        const order = await prisma.order.update({
+            where: { id: Number(id) },
+            data: {
+                expeditorId: Number(expeditorId),
+                // FIX-05: assignedAt убран (не перезаписываем первоначальное назначение)
+            },
+            include: {
+                customer: true,
+                expeditor: true,
+                items: { include: { product: true } }
+            },
+        });
+
+        console.log(`[PATCH-05] Expeditor reassigned: order=${id}, expeditorId=${expeditorId}, by=${username}`);
+        res.json(order);
+    } catch (error: any) {
+        console.error('reassignExpeditor error:', error);
+        res.status(400).json({ error: 'Ошибка переназначения экспедитора' });
+    }
+};
+
+/**
+ * ТЗ v2 §8: Безопасное редактирование заказа
+ * PUT /api/orders/:id/edit
+ * 
+ * НЕ ЗАТИРАЕТ: signatureUrl, signedInvoiceUrl, completedAt, attachments
+ * Устанавливает isEdited=true и editedAt при успешном редактировании
+ */
+export const editOrder = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        // PATCH-03: expeditorId убран из whitelist
+        const { customerId, date, paymentType, items, deliveryAddress } = req.body;
+        const userId = (req as any).user?.id;
+        const username = (req as any).user?.username || 'system';
+
+        // PATCH-03: Расширенный список запрещённых полей
+        const forbiddenFields = [
+            'signatureUrl',
+            'signedInvoiceUrl',
+            'completedAt',
+            'shippedAt',
+            'status',
+            'deliveryStatus',
+            'attachments',
+            'orderAttachments',
+        ];
+        for (const field of forbiddenFields) {
+            if (req.body[field] !== undefined) {
+                return res.status(400).json({
+                    error: `Поле "${field}" нельзя изменять через editOrder.`
+                });
+            }
+        }
+
+        // PATCH-03: Отдельно запретить expeditorId через editOrder
+        if (req.body.expeditorId !== undefined) {
+            return res.status(400).json({
+                error: `Поле "expeditorId" нельзя изменять через editOrder. Используй PATCH /orders/:id/expeditor.`
+            });
+        }
+
+
+        const result = await prisma.$transaction(async (tx) => {
+            // Получаем текущий заказ для проверки
+            const existingOrder = await tx.order.findUnique({
+                where: { id: Number(id) },
+                include: { items: { include: { summaryEntry: true } } }
+            });
+
+            if (!existingOrder) {
+                throw new Error('Order not found');
+            }
+
+            // Если есть items - полное обновление
+            if (items && Array.isArray(items)) {
+                // Маппинг: productId -> SummaryOrderJournal id (для восстановления связи)
+                const productToSummaryMap = new Map<number, number>();
+                for (const oldItem of existingOrder.items) {
+                    if (oldItem.summaryEntry) {
+                        productToSummaryMap.set(oldItem.productId, oldItem.summaryEntry.id);
+                    }
+                }
+
+                // Удаляем старые items
+                await tx.orderItem.deleteMany({
+                    where: { orderId: Number(id) }
+                });
+
+                // Считаем новые тоталы
+                let totalAmount = 0;
+                let totalWeight = 0;
+                const validItems = [];
+
+                for (const item of items) {
+                    const qty = Number(item.quantity);
+                    const price = Number(item.price);
+                    const amount = price * qty;
+                    totalAmount += amount;
+                    totalWeight += qty;
+                    validItems.push({
+                        productId: Number(item.productId),
+                        quantity: qty,
+                        price: price,
+                        amount: amount,
+                        shippedQty: item.shippedQty == null ? 0 : Number(item.shippedQty),
+                        sumWithRevaluation: item.sumWithRevaluation == null ? amount : Number(item.sumWithRevaluation),
+                        distributionCoef: item.distributionCoef == null ? 0 : Number(item.distributionCoef),
+                        weightToDistribute: item.weightToDistribute == null ? 0 : Number(item.weightToDistribute),
+                    });
+                }
+
+                // Обновляем заказ с isEdited=true
+                const order = await tx.order.update({
+                    where: { id: Number(id) },
+                    data: {
+                        customerId: customerId ? Number(customerId) : undefined,
+                        date: date ? new Date(date) : undefined,
+                        paymentType: paymentType !== undefined ? paymentType : undefined,
+                        // PATCH-03: expeditorId убран
+                        deliveryAddress: deliveryAddress !== undefined ? deliveryAddress : undefined,
+                        totalAmount,
+                        totalWeight,
+                        isEdited: true,
+                        editedAt: new Date(),
+                        // ТЗ §8: НЕ трогаем signatureUrl, signedInvoiceUrl, completedAt
+                        items: {
+                            create: validItems
+                        }
+                    },
+                    include: {
+                        items: { include: { product: true } },
+                        customer: true
+                    }
+                });
+
+                // Восстанавливаем связь SummaryOrderJournal
+                for (const newItem of order.items) {
+                    const summaryId = productToSummaryMap.get(newItem.productId);
+                    if (summaryId) {
+                        await tx.summaryOrderJournal.update({
+                            where: { id: summaryId },
+                            data: {
+                                orderItemId: newItem.id,
+                                orderQty: newItem.quantity,
+                                shippedQty: newItem.shippedQty,
+                                price: newItem.price,
+                                sumWithRevaluation: newItem.sumWithRevaluation,
+                                productId: newItem.productId,
+                                productFullName: newItem.product?.name || '',
+                                productCode: newItem.product?.code || null,
+                                customerId: order.customerId,
+                                customerName: order.customer?.name || ''
+                            }
+                        });
+                    }
+                }
+
+                return order;
+            } else {
+                // Простое обновление (без items) - только разрешённые поля
+                const data: any = {
+                    isEdited: true,
+                    editedAt: new Date()
+                };
+
+                if (customerId !== undefined) data.customerId = Number(customerId);
+                if (date !== undefined) data.date = new Date(date);
+                if (paymentType !== undefined) data.paymentType = paymentType;
+                if (deliveryAddress !== undefined) data.deliveryAddress = deliveryAddress;
+                // PATCH-03: expeditorId убран из editOrder
+
+                const order = await tx.order.update({
+                    where: { id: Number(id) },
+                    data,
+                    include: {
+                        items: { include: { product: true } },
+                        customer: true
+                    }
+                });
+
+                return order;
+            }
+        });
+
+        res.json(result);
+    } catch (error: any) {
+        console.error('editOrder error:', error);
+        if (error.message === 'Order not found') {
+            return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        res.status(400).json({ error: 'Failed to edit order' });
+    }
+};
+
 // Disable Orders (массовое отключение заказов - soft disable)
 export const disableOrders = async (req: Request, res: Response) => {
     try {
@@ -545,6 +756,10 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
 // ============================================
 // FSM: Завершить заказ (LOADED → SHIPPED)
 // "Антиграв" паттерн: атомарная транзакция
+// 
+// TODO ТЗ v2 §5: signatureUrl и signedInvoiceUrl сейчас хранятся как base64 в БД.
+// Это неоптимально. Рекомендуется перейти на файловое хранилище (S3/MinIO),
+// сохраняя в БД только URL/путь к файлу.
 // ============================================
 export const completeOrder = async (req: Request, res: Response) => {
     try {

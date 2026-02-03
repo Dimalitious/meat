@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, requireRole } from '../middleware/auth.middleware';
 import * as orders from '../controllers/orders.controller';
 
 const router = Router();
@@ -25,6 +25,13 @@ router.get('/:id', orders.getOrder);                       // GET /api/orders/:i
 router.patch('/:id', orders.updateOrder);
 router.put('/:id', orders.updateOrder);
 router.delete('/:id', orders.deleteOrder);
+
+// FIX-04: Safe Edit с авторизацией и ролевой защитой (admin/manager)
+router.put('/:id/edit', authenticateToken, requireRole(['admin', 'manager']), orders.editOrder);
+
+// FIX-05: Переназначение экспедитора (отдельный endpoint)
+router.patch('/:id/expeditor', authenticateToken, requireRole(['admin', 'manager']), orders.reassignExpeditor);
+
 
 // Expedition: Assign expeditor to order
 router.post('/:id/assign-expeditor', orders.assignExpeditor);

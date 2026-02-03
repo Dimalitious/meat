@@ -149,11 +149,13 @@ const OrderEditPage = () => {
         e.preventDefault();
         try {
             const token = localStorage.getItem('token');
-            await axios.put(`${API_URL}/api/orders/${id}`, {
+            // PATCH-01: Безопасный endpoint /edit, без status
+            const payload = {
                 customerId: Number(formData.customerId),
                 date: formData.date,
                 paymentType: formData.paymentType,
-                status: formData.status,
+                deliveryAddress: (formData as any).deliveryAddress ?? undefined,
+                // expeditorId НЕ отправлять через editOrder, см. PATCH-03
                 items: formData.items.map(i => ({
                     id: i.id,
                     productId: Number(i.productId),
@@ -162,10 +164,12 @@ const OrderEditPage = () => {
                     shippedQty: Number(i.shippedQty),
                     sumWithRevaluation: Number(i.sumWithRevaluation),
                     distributionCoef: Number(i.distributionCoef),
-                    weightToDistribute: Number(i.weightToDistribute)
-                }))
-            }, {
-                headers: { Authorization: `Bearer ${token}` }
+                    weightToDistribute: Number(i.weightToDistribute),
+                })),
+            };
+
+            await axios.put(`${API_URL}/api/orders/${id}/edit`, payload, {
+                headers: { Authorization: `Bearer ${token}` },
             });
             navigate('/orders');
         } catch (err) {

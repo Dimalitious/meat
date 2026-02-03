@@ -31,6 +31,7 @@ interface MaterialReportLine {
     outProductionWriteoff: number;  // Списано в производство
     outWeightLoss: number;
     outSupplierReturn: number;
+    inCustomerReturn?: number;  // ТЗ v2 §6: Возврат от покупателя
     closingBalanceCalc: number;
     closingBalanceFact: number | null;
     product?: Product;
@@ -403,7 +404,7 @@ export default function MaterialReportTab({ selectedDate }: MaterialReportTabPro
                                                 {formatNumber(line.inProduction)}
                                             </td>
                                             <td className="border px-2 py-1 text-right bg-blue-50/30">
-                                                {formatNumber(0)}{/* Возврат от покупателя - TODO */}
+                                                {formatNumber(line.inCustomerReturn ?? 0)}
                                             </td>
                                             <td className="border px-2 py-1 text-right bg-red-50/30">
                                                 {formatNumber(line.outSale)}
