@@ -93,6 +93,10 @@ app.use('/api/material-report', materialReportRoutes);
 import customerCardsRoutes from './routes/customerCards.routes';
 app.use('/api/customer-cards', customerCardsRoutes);
 
+// Returns Module (Возвраты из точек)
+import returnsRoutes from './routes/returns.routes';
+app.use('/api', returnsRoutes);  // /api/orders/:orderId/returns
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // Health check (also for telegram agent)

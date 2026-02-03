@@ -3,17 +3,24 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
-import { Eye, Check, Truck, Edit2, EyeOff, Calendar, RefreshCw, Save, X } from 'lucide-react';
+import { Eye, Check, Truck, Edit2, EyeOff, Calendar, RefreshCw, Save, X, RotateCcw } from 'lucide-react';
+import { ReturnModal } from '../components/ReturnModal';
 
 interface OrderItem {
     id: number;
     quantity: number;
     shippedQty: number;
+    price: number;
+    qtyReturn?: number;
     product: {
+        id: number;
         name: string;
         code: string;
     };
 }
+
+// ТЗ §1: ExpeditionStatus тип
+type ExpeditionStatus = 'open' | 'closed';
 
 interface ExpeditionOrder {
     id: number;
@@ -25,13 +32,16 @@ interface ExpeditionOrder {
     assignedAt: string;
     totalAmount: number;
     totalWeight: number;
+    // ТЗ §1.1: expeditionId и expeditionStatus всегда присутствуют (но могут быть null/open)
+    expeditionId: number | null;
+    expeditionStatus: ExpeditionStatus;
     customer: {
         id: number;
         name: string;
         code: string;
     };
     items: OrderItem[];
-    isHidden?: boolean; // Для скрытия выделенных
+    isHidden?: boolean;
 }
 
 interface Expeditor {
@@ -71,6 +81,9 @@ export default function ExpeditionPage() {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
 
+    // Модалка возврата
+    const [returnModalOrder, setReturnModalOrder] = useState<ExpeditionOrder | null>(null);
+
     useEffect(() => {
         fetchExpeditors();
     }, []);
@@ -87,11 +100,11 @@ export default function ExpeditionPage() {
             const res = await axios.get(`${API_URL}/api/expeditors`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            setExpeditors(res.data.filter((e: Expeditor & { isActive: boolean }) => e.isActive));
-
-            // Auto-select first expeditor if available
-            if (res.data.length > 0) {
-                setSelectedExpeditor(res.data[0].id);
+            // ТЗ: фильтруем только активных, выбираем первого из активных
+            const active = res.data.filter((e: Expeditor & { isActive: boolean }) => e.isActive);
+            setExpeditors(active);
+            if (active.length > 0) {
+                setSelectedExpeditor(active[0].id);
             }
         } catch (err) {
             console.error('Failed to fetch expeditors:', err);
@@ -114,7 +127,10 @@ export default function ExpeditionPage() {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setOrders(res.data);
+
+            // ТЗ §6.1: сброс UI state при загрузке нового списка
             setSelectedIds(new Set());
+            setHiddenIds(new Set());
             setSaved(false);
         } catch (err) {
             console.error('Failed to fetch orders:', err);
@@ -126,8 +142,9 @@ export default function ExpeditionPage() {
     const startDelivery = async (orderId: number) => {
         try {
             const token = localStorage.getItem('token');
+            // ТЗ: FSM статусом управляет бэк, шлём только deliveryStatus
             await axios.patch(`${API_URL}/api/orders/${orderId}`,
-                { status: 'in_delivery', deliveryStatus: 'in_delivery' },
+                { deliveryStatus: 'in_delivery' },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             fetchOrders();
@@ -137,8 +154,20 @@ export default function ExpeditionPage() {
         }
     };
 
-    const viewInvoice = (orderId: number) => {
-        navigate(`/expedition/${orderId}/invoice`);
+    // ТЗ §2: накладная использует expeditionId конкретного заказа
+    const viewInvoice = (orderId: number, expeditionId: number | null) => {
+        const url = expeditionId !== null
+            ? `/expedition/${orderId}/invoice?expeditionId=${expeditionId}`
+            : `/expedition/${orderId}/invoice`;
+        navigate(url);
+    };
+
+    // ТЗ §5: "Подпись и завершение" - отдельный роут /complete, не /invoice
+    const goToComplete = (orderId: number, expeditionId: number | null) => {
+        const url = expeditionId !== null
+            ? `/expedition/${orderId}/complete?expeditionId=${expeditionId}`
+            : `/expedition/${orderId}/complete`;
+        navigate(url);
     };
 
     // Чекбоксы
@@ -445,8 +474,11 @@ export default function ExpeditionPage() {
                                     <OrderCard
                                         key={order.id}
                                         order={order}
-                                        onViewInvoice={() => viewInvoice(order.id)}
+                                        onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
                                         onStartDelivery={() => startDelivery(order.id)}
+                                        onReturn={() => setReturnModalOrder(order)}
+                                        onEdit={() => navigate(`/orders/${order.id}`)}
+                                        expeditionStatus={order.expeditionStatus}
                                         isEditing={isEditing}
                                         isSelected={selectedIds.has(order.id)}
                                         onToggleSelect={() => toggleSelect(order.id)}
@@ -468,8 +500,12 @@ export default function ExpeditionPage() {
                                     <OrderCard
                                         key={order.id}
                                         order={order}
-                                        onViewInvoice={() => viewInvoice(order.id)}
+                                        onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
+                                        onReturn={() => setReturnModalOrder(order)}
+                                        onEdit={() => navigate(`/orders/${order.id}`)}
+                                        onComplete={() => goToComplete(order.id, order.expeditionId)}
                                         showCompleteButton
+                                        expeditionStatus={order.expeditionStatus}
                                         isEditing={isEditing}
                                         isSelected={selectedIds.has(order.id)}
                                         onToggleSelect={() => toggleSelect(order.id)}
@@ -491,7 +527,7 @@ export default function ExpeditionPage() {
                                     <OrderCard
                                         key={order.id}
                                         order={order}
-                                        onViewInvoice={() => viewInvoice(order.id)}
+                                        onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
                                         isCompleted
                                         isEditing={isEditing}
                                         isSelected={selectedIds.has(order.id)}
@@ -503,6 +539,19 @@ export default function ExpeditionPage() {
                     )}
                 </div>
             )}
+
+            {/* Модалка возврата: используем expeditionId из заказа, не из state */}
+            {returnModalOrder && returnModalOrder.expeditionId != null && (
+                <ReturnModal
+                    orderId={returnModalOrder.id}
+                    orderNumber={returnModalOrder.idn || String(returnModalOrder.id)}
+                    expeditionId={returnModalOrder.expeditionId}
+                    items={returnModalOrder.items}
+                    isOpen={true}
+                    onClose={() => setReturnModalOrder(null)}
+                    onSaved={() => fetchOrders()}
+                />
+            )}
         </div>
     );
 }
@@ -511,24 +560,31 @@ interface OrderCardProps {
     order: ExpeditionOrder;
     onViewInvoice: () => void;
     onStartDelivery?: () => void;
+    onComplete?: () => void; // ТЗ: callback для "Подпись и завершение" с expeditionId
     showCompleteButton?: boolean;
     isCompleted?: boolean;
     isEditing?: boolean;
     isSelected?: boolean;
     onToggleSelect?: () => void;
+    onReturn?: () => void;
+    onEdit?: () => void;
+    expeditionStatus?: string; // open | closed
 }
 
 function OrderCard({
     order,
     onViewInvoice,
     onStartDelivery,
+    onComplete,
     showCompleteButton,
     isCompleted,
     isEditing,
     isSelected,
-    onToggleSelect
+    onToggleSelect,
+    onReturn,
+    onEdit,
+    expeditionStatus = 'open'
 }: OrderCardProps) {
-    const navigate = useNavigate();
     const statusInfo = DELIVERY_STATUS_LABELS[order.deliveryStatus] || { label: order.deliveryStatus, color: 'bg-gray-100' };
 
     return (
@@ -583,16 +639,32 @@ function OrderCard({
                     <Eye size={14} /> Накладная
                 </Button>
 
-                {onStartDelivery && order.deliveryStatus === 'pending' && (
+                {/* Кнопка Редактировать (ТЗ §3.2) - скрываем при closed */}
+                {onEdit && !isCompleted && expeditionStatus === 'open' && (
+                    <Button variant="outline" size="sm" onClick={onEdit} className="flex items-center gap-1">
+                        <Edit2 size={14} /> Редактировать
+                    </Button>
+                )}
+
+                {/* ТЗ §4.2: "Начать доставку" показывается только при pending и open */}
+                {onStartDelivery && order.deliveryStatus === 'pending' && expeditionStatus === 'open' && (
                     <Button size="sm" onClick={onStartDelivery} className="flex items-center gap-1">
                         <Truck size={14} /> Начать доставку
                     </Button>
                 )}
 
-                {showCompleteButton && (
+                {/* ТЗ §3.1: "Возврат" только при expeditionId !== null и open */}
+                {onReturn && !isCompleted && order.expeditionId !== null && expeditionStatus === 'open' && (
+                    <Button variant="outline" size="sm" onClick={onReturn} className="flex items-center gap-1 text-orange-600 border-orange-300 hover:bg-orange-50">
+                        <RotateCcw size={14} /> Возврат
+                    </Button>
+                )}
+
+                {/* ТЗ §5.2: "Подпись и завершение" только при expeditionId !== null, open, in_delivery */}
+                {showCompleteButton && onComplete && order.expeditionId !== null && expeditionStatus === 'open' && order.deliveryStatus === 'in_delivery' && !isCompleted && (
                     <Button
                         size="sm"
-                        onClick={() => navigate(`/expedition/${order.id}/invoice`)}
+                        onClick={onComplete}
                         className="flex items-center gap-1 bg-green-600 hover:bg-green-700"
                     >
                         <Check size={14} /> Подпись и завершение

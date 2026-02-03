@@ -44,5 +44,9 @@ router.get('/:id/attachments', orders.getOrderAttachments);
 // Rework: Send order back to summary for rework
 router.post('/:id/rework', orders.sendOrderToRework);
 
+// Invoice: Generate invoice on-the-fly (ТЗ §6.2)
+// GET /api/orders/:id/invoice?expeditionId=123
+router.get('/:id/invoice', orders.generateInvoice);
+
 export default router;
 

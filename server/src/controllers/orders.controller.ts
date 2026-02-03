@@ -83,18 +83,20 @@ export const createOrder = async (req: Request, res: Response) => {
             const validItems = [];
 
             for (const item of items) {
-                const amount = item.price * item.quantity;
+                const qty = Number(item.quantity);
+                const price = Number(item.price);
+                const amount = price * qty;
                 totalAmount += amount;
-                totalWeight += item.quantity;
+                totalWeight += qty;
                 validItems.push({
-                    productId: item.productId,
-                    quantity: item.quantity,
-                    price: item.price,
+                    productId: Number(item.productId),
+                    quantity: qty,
+                    price: price,
                     amount: amount,
-                    shippedQty: item.shippedQty || 0,
-                    sumWithRevaluation: item.sumWithRevaluation || amount,
-                    distributionCoef: item.distributionCoef || 0,
-                    weightToDistribute: item.weightToDistribute || 0,
+                    shippedQty: item.shippedQty == null ? 0 : Number(item.shippedQty),
+                    sumWithRevaluation: item.sumWithRevaluation == null ? amount : Number(item.sumWithRevaluation),
+                    distributionCoef: item.distributionCoef == null ? 0 : Number(item.distributionCoef),
+                    weightToDistribute: item.weightToDistribute == null ? 0 : Number(item.weightToDistribute),
                 });
             }
 
@@ -106,7 +108,7 @@ export const createOrder = async (req: Request, res: Response) => {
                     paymentType,
                     totalAmount,
                     totalWeight,
-                    status: 'new',
+                    status: ORDER_STATUS.NEW,  // ТЗ §4.1: FSM статус, не 'new'
                     items: {
                         create: validItems
                     }
@@ -128,6 +130,11 @@ export const updateOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
         const { customerId, date, paymentType, status, expeditorId, items } = req.body;
+
+        // ТЗ: status нельзя менять напрямую - срабатывает для ОБОИХ веток (full и simple)
+        if (status !== undefined) {
+            return res.status(400).json({ error: 'status нельзя менять через updateOrder. Используй FSM endpoints.' });
+        }
 
         // If items are provided, do a full update with transaction
         if (items && Array.isArray(items)) {
@@ -157,18 +164,20 @@ export const updateOrder = async (req: Request, res: Response) => {
                 const validItems = [];
 
                 for (const item of items) {
-                    const amount = item.price * item.quantity;
+                    const qty = Number(item.quantity);
+                    const price = Number(item.price);
+                    const amount = price * qty;
                     totalAmount += amount;
-                    totalWeight += item.quantity;
+                    totalWeight += qty;
                     validItems.push({
-                        productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.price,
+                        productId: Number(item.productId),
+                        quantity: qty,
+                        price: price,
                         amount: amount,
-                        shippedQty: item.shippedQty || 0,
-                        sumWithRevaluation: item.sumWithRevaluation || amount,
-                        distributionCoef: item.distributionCoef || 0,
-                        weightToDistribute: item.weightToDistribute || 0,
+                        shippedQty: item.shippedQty == null ? 0 : Number(item.shippedQty),
+                        sumWithRevaluation: item.sumWithRevaluation == null ? amount : Number(item.sumWithRevaluation),
+                        distributionCoef: item.distributionCoef == null ? 0 : Number(item.distributionCoef),
+                        weightToDistribute: item.weightToDistribute == null ? 0 : Number(item.weightToDistribute),
                     });
                 }
 
@@ -179,8 +188,10 @@ export const updateOrder = async (req: Request, res: Response) => {
                         customerId: customerId ? Number(customerId) : undefined,
                         date: date ? new Date(date) : undefined,
                         paymentType,
-                        status,
-                        expeditorId: expeditorId !== undefined ? expeditorId : undefined,
+                        // status - заблокирован выше, не передаём
+                        expeditorId: expeditorId === null
+                            ? null
+                            : (expeditorId !== undefined ? Number(expeditorId) : undefined), // ТЗ §10.4
                         totalAmount,
                         totalWeight,
                         items: {
@@ -221,11 +232,22 @@ export const updateOrder = async (req: Request, res: Response) => {
             });
             res.json(result);
         } else {
-            // Simple update (just status or expeditor)
+            // Simple update - (ТЗ: status уже заблокирован выше)
             let data: any = {};
-            if (status) data.status = status;
-            if (expeditorId !== undefined) data.expeditorId = expeditorId;
+
+            if (expeditorId !== undefined) {
+                data.expeditorId = expeditorId === null ? null : Number(expeditorId);
+            }
             if (paymentType) data.paymentType = paymentType;
+
+            const allowedDelivery = new Set(['pending', 'in_delivery', 'delivered']);
+            if (req.body.deliveryStatus !== undefined) {
+                const ds = String(req.body.deliveryStatus);
+                if (!allowedDelivery.has(ds)) {
+                    return res.status(400).json({ error: `Некорректный deliveryStatus: ${ds}` });
+                }
+                data.deliveryStatus = ds;
+            }
 
             const order = await prisma.order.update({
                 where: { id: Number(id) },
@@ -239,9 +261,15 @@ export const updateOrder = async (req: Request, res: Response) => {
     }
 };
 
-// Delete Order
+// Delete Order (ТЗ §3.1: RBAC - только ADMIN)
 export const deleteOrder = async (req: Request, res: Response) => {
     try {
+        // ТЗ §3.1: удаление заказа разрешено только ADMIN
+        const role = (req as any).user?.role;
+        if (role !== 'ADMIN' && role !== 'admin') {
+            return res.status(403).json({ error: 'Только администратор может удалять заказы' });
+        }
+
         const { id } = req.params;
         await prisma.order.delete({
             where: { id: Number(id) }
@@ -443,8 +471,9 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
 
         let where: any = {
             expeditorId: Number(expeditorId),
-            // FSM + backwards compatibility: показываем как новые (LOADED, SHIPPED), так и старые статусы
-            status: { in: [ORDER_STATUS.LOADED, ORDER_STATUS.SHIPPED, 'assigned', 'in_delivery', 'delivered'] }
+            // ТЗ §4.2: только FSM статусы - LOADED (назначен), SHIPPED (отгружен)
+            // 'in_delivery'/'delivered' - это deliveryStatus, НЕ status!
+            status: { in: [ORDER_STATUS.LOADED, ORDER_STATUS.SHIPPED] }
         };
 
         // Filter by delivery status if provided
@@ -454,16 +483,36 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
         // Если статус не указан - показываем все статусы (включая delivered)
 
         // Фильтр по дате (в таймзоне Asia/Tashkent)
+        let startDate: Date | undefined;
+        let endDate: Date | undefined;
+
         if (dateFrom || dateTo) {
             where.date = {};
             if (dateFrom) {
                 const { start } = getDateRangeForTashkent(String(dateFrom));
                 where.date.gte = start;
+                startDate = start;
             }
             if (dateTo) {
                 const { end } = getDateRangeForTashkent(String(dateTo));
                 where.date.lt = end;
+                endDate = end;
             }
+        }
+
+        // ТЗ: Найти ExpeditionJournal по expeditorId и диапазону дат
+        // Его ID используется для возвратов и накладной
+        let expedition: any = null;
+        if (startDate && endDate) {
+            expedition = await prisma.expeditionJournal.findFirst({
+                where: {
+                    expeditorId: Number(expeditorId),
+                    dateFrom: { lte: endDate },
+                    dateTo: { gte: startDate },
+                    isHidden: false
+                },
+                orderBy: { createdAt: 'desc' }
+            });
         }
 
         const orders = await prisma.order.findMany({
@@ -477,7 +526,16 @@ export const getExpeditorOrders = async (req: Request, res: Response) => {
             orderBy: { assignedAt: 'desc' }
         });
 
-        res.json(orders);
+        // ТЗ: Добавляем expeditionId и expeditionStatus к каждому заказу
+        // Нормализуем status к строгим 'open' | 'closed'
+        const expeditionStatus: 'open' | 'closed' = expedition?.status === 'closed' ? 'closed' : 'open';
+        const ordersWithExpedition = orders.map(order => ({
+            ...order,
+            expeditionId: expedition?.id || null,
+            expeditionStatus
+        }));
+
+        res.json(ordersWithExpedition);
     } catch (error) {
         console.error('getExpeditorOrders error:', error);
         res.status(500).json({ error: 'Failed to fetch expeditor orders' });
@@ -506,10 +564,14 @@ export const completeOrder = async (req: Request, res: Response) => {
                 throw new Error('ORDER_NOT_FOUND');
             }
 
-            // 2. FSM проверка: закрытие только из LOADED или in_delivery (backwards compat)
-            const allowedStatuses = [ORDER_STATUS.LOADED, 'in_delivery', 'assigned'];
-            if (!allowedStatuses.includes(currentOrder.status)) {
+            // 2. FSM проверка: закрытие только из LOADED
+            if (currentOrder.status !== ORDER_STATUS.LOADED) {
                 throw new Error(`INVALID_STATUS:${currentOrder.status}`);
+            }
+
+            // ТЗ: закрывают только "в пути"
+            if (currentOrder.deliveryStatus !== 'in_delivery') {
+                throw new Error(`INVALID_DELIVERY_STATUS:${currentOrder.deliveryStatus}`);
             }
 
             // 3. Проверка прав: только назначенный экспедитор может закрыть
@@ -739,7 +801,7 @@ export const getOrdersPendingDispatch = async (req: Request, res: Response) => {
         const { date, includeAssigned } = req.query;
 
         const where: Prisma.OrderWhereInput = {
-            isDisabled: false,
+            isDisabled: { not: true }, // ТЗ: правильно - { not: true } вместо false
             // FSM: в распределение попадают только заказы со статусом DISTRIBUTING
             // Если includeAssigned=true, также показываем LOADED (уже назначенные)
             status: includeAssigned === 'true'
@@ -861,11 +923,11 @@ export const sendOrderToRework = async (req: Request, res: Response) => {
                         productFullName: item.product?.name || '',
                         category: item.product?.category || null,
                         price: Number(item.price),
-                        shippedQty: item.shippedQty || 0,
+                        shippedQty: item.shippedQty ?? 0,
                         orderQty: item.quantity,
                         sumWithRevaluation: Number(item.amount),
-                        distributionCoef: Number(item.distributionCoef) || 0,
-                        weightToDistribute: Number(item.weightToDistribute) || 0,
+                        distributionCoef: item.distributionCoef == null ? 0 : Number(item.distributionCoef),
+                        weightToDistribute: item.weightToDistribute == null ? 0 : Number(item.weightToDistribute),
                         managerId: null,
                         managerName: '',
                         status: 'draft' // Готово к "Начать сборку"
@@ -938,5 +1000,65 @@ export const sendOrderToRework = async (req: Request, res: Response) => {
         }
 
         res.status(500).json({ error: 'Ошибка отправки на доработку' });
+    }
+};
+
+// ============================================
+// Generate Invoice (ТЗ §6.2)
+// TODO: Implement full invoice generation logic
+// ============================================
+export const generateInvoice = async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { expeditionId } = req.query;
+
+        const order = await prisma.order.findUnique({
+            where: { id: Number(id) },
+            include: {
+                customer: true,
+                expeditor: true,
+                items: { include: { product: true } }
+            }
+        });
+
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        // Формируем данные накладной
+        const invoiceData = {
+            orderId: order.id,
+            idn: order.idn,
+            date: order.date,
+            expeditionId: expeditionId ? Number(expeditionId) : null,
+            customer: {
+                id: order.customer.id,
+                name: order.customer.name,
+                code: order.customer.code
+            },
+            expeditor: order.expeditor ? {
+                id: order.expeditor.id,
+                name: order.expeditor.name
+            } : null,
+            items: order.items.map(item => {
+                const shipped = Number(item.shippedQty);
+                const qtyShip = shipped > 0 ? shipped : Number(item.quantity);
+                return {
+                    productId: item.productId,
+                    productName: item.product?.name || '',
+                    quantity: item.quantity,
+                    shippedQty: qtyShip,
+                    price: Number(item.price),
+                    amount: Number(item.amount)
+                };
+            }),
+            totalAmount: Number(order.totalAmount),
+            totalWeight: order.totalWeight
+        };
+
+        res.json(invoiceData);
+    } catch (error) {
+        console.error('generateInvoice error:', error);
+        res.status(500).json({ error: 'Failed to generate invoice' });
     }
 };

@@ -36,6 +36,8 @@ interface Order {
     date: string;
     customer: { name: string; code?: string; legalName?: string };
     totalAmount: number;
+    returnTotalSum?: number;     // Возвраты из точек
+    netTotalSum?: number;        // Сумма за минусом возвратов
     status: string;
     paymentType?: string;
     expeditorId: number | null;
@@ -402,6 +404,7 @@ const OrdersPage = () => {
                             <TableHead className="w-[100px]">№ Сводки</TableHead>
                             <TableHead>Клиент</TableHead>
                             <TableHead className="w-[120px] text-right">Сумма</TableHead>
+                            <TableHead className="w-[110px] text-right">Возвраты</TableHead>
                             <TableHead className="w-[120px]">Экспедитор</TableHead>
                             <TableHead className="w-[100px]">Накладная</TableHead>
                             <TableHead className="w-[110px]">Статус</TableHead>
@@ -411,14 +414,14 @@ const OrdersPage = () => {
                     <TableBody>
                         {loading ? (
                             <TableRow>
-                                <TableCell colSpan={10} className="h-24 text-center text-slate-500">
+                                <TableCell colSpan={11} className="h-24 text-center text-slate-500">
                                     <RefreshCw size={20} className="animate-spin inline mr-2" />
                                     Загрузка...
                                 </TableCell>
                             </TableRow>
                         ) : orders.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={10} className="h-24 text-center text-slate-500">
+                                <TableCell colSpan={11} className="h-24 text-center text-slate-500">
                                     Нет заказов за выбранный период
                                 </TableCell>
                             </TableRow>
@@ -447,6 +450,15 @@ const OrdersPage = () => {
                                     <TableCell className="font-medium text-slate-700">{o.customer?.name}</TableCell>
                                     <TableCell className="text-right font-medium">
                                         {Number(o.totalAmount).toLocaleString('ru-RU')} ₽
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {(o.returnTotalSum && Number(o.returnTotalSum) > 0) ? (
+                                            <span className="text-red-600 font-medium">
+                                                -{Number(o.returnTotalSum).toLocaleString('ru-RU')} ₽
+                                            </span>
+                                        ) : (
+                                            <span className="text-gray-400">—</span>
+                                        )}
                                     </TableCell>
                                     <TableCell>
                                         {o.expeditor ? (

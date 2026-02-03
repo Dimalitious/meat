@@ -10,6 +10,7 @@ interface OrderItem {
     price: number;
     amount: number;
     shippedQty: number;
+    qtyReturn?: number;         // Кол-во возврата
     product: {
         code: string;
         name: string;
@@ -25,6 +26,7 @@ interface Order {
     paymentType: string | null;
     totalAmount: number;
     totalWeight: number;
+    returnTotalSum?: number;    // Сумма возвратов
     customer: {
         id: number;
         name: string;
@@ -82,6 +84,12 @@ export default function OrderPrintPage() {
     if (!order) return <div className="p-8 text-center text-red-500">Заказ не найден</div>;
 
     const totalSum = order.items.reduce((sum, item) => sum + Number(item.amount), 0);
+    const totalReturn = order.items.reduce((sum, item) => {
+        const returnAmt = (item.qtyReturn || 0) * Number(item.price);
+        return sum + returnAmt;
+    }, 0);
+    const netSum = totalSum - totalReturn;
+    const hasReturns = totalReturn > 0;
     const displayItems = order.items.slice(0, MAX_ITEMS_PER_INVOICE);
     const hasMoreItems = order.items.length > MAX_ITEMS_PER_INVOICE;
 
@@ -185,12 +193,32 @@ export default function OrderPrintPage() {
                 <tfoot>
                     <tr style={{ fontWeight: 'bold' }}>
                         <td colSpan={4} style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
-                            ИТОГО:
+                            Сумма отгрузки:
                         </td>
                         <td style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
                             {totalSum.toFixed(2)} ₽
                         </td>
                     </tr>
+                    {hasReturns && (
+                        <>
+                            <tr style={{ color: '#dc2626' }}>
+                                <td colSpan={4} style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
+                                    Возвраты:
+                                </td>
+                                <td style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
+                                    -{totalReturn.toFixed(2)} ₽
+                                </td>
+                            </tr>
+                            <tr style={{ fontWeight: 'bold' }}>
+                                <td colSpan={4} style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
+                                    ИТОГО:
+                                </td>
+                                <td style={{ border: '1px solid #ccc', padding: '2pt 4pt', textAlign: 'right' }}>
+                                    {netSum.toFixed(2)} ₽
+                                </td>
+                            </tr>
+                        </>
+                    )}
                 </tfoot>
             </table>
 
