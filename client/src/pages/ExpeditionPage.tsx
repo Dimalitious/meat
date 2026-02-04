@@ -298,6 +298,7 @@ export default function ExpeditionPage() {
                                         key={order.id}
                                         order={order}
                                         onViewInvoice={() => viewInvoice(order.id, order.expeditionId)}
+                                        onReturn={() => setReturnModalOrder(order)}
                                         isCompleted
                                     />
                                 ))}
@@ -399,8 +400,8 @@ function OrderCard({
                     </Button>
                 )}
 
-                {/* "Возврат" только при expeditionId !== null и open */}
-                {onReturn && !isCompleted && order.expeditionId !== null && expeditionStatus === 'open' && (
+                {/* "Возврат" при наличии expeditionId (для всех статусов, включая доставленные) */}
+                {onReturn && order.expeditionId !== null && (
                     <Button variant="outline" size="sm" onClick={onReturn} className="flex items-center gap-1 text-orange-600 border-orange-300 hover:bg-orange-50">
                         <RotateCcw size={14} /> Возврат
                     </Button>

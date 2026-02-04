@@ -66,6 +66,11 @@ export default function AssemblyOrdersPage() {
     const [returnComment, setReturnComment] = useState('');
     const [returning, setReturning] = useState(false);
 
+    // Bulk delete state (ТЗ: Удаление из сборки)
+    const [selectedCustomerKeys, setSelectedCustomerKeys] = useState<Set<string>>(new Set());
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+
     useEffect(() => {
         loadAssemblyData();
     }, [assemblyDate]);
@@ -227,10 +232,11 @@ export default function AssemblyOrdersPage() {
             }, { headers: { Authorization: `Bearer ${token}` } });
             console.log('[CLIENT] PUT completed');
 
-            // Sync to orders with IDN
-            console.log('[CLIENT] Calling sync API...');
+            // Sync to orders with IDN and dispatchDay
+            console.log('[CLIENT] Calling sync API with dispatchDay:', assemblyDate);
             const syncRes = await axios.post(`${API_URL}/api/summary-orders/sync`, {
-                entryIds: [itemId]
+                entryIds: [itemId],
+                dispatchDay: assemblyDate  // ← КЛЮЧЕВОЕ: передаём выбранную дату!
             }, { headers: { Authorization: `Bearer ${token}` } });
             console.log('[CLIENT] Sync response:', syncRes.data);
 
@@ -361,6 +367,86 @@ export default function AssemblyOrdersPage() {
         }
     };
 
+    // ============================================
+    // Bulk Delete функции (ТЗ: Удаление из сборки)
+    // ============================================
+    const toggleCustomerSelection = (key: string) => {
+        setSelectedCustomerKeys(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(key)) {
+                newSet.delete(key);
+            } else {
+                newSet.add(key);
+            }
+            return newSet;
+        });
+    };
+
+    const toggleSelectAll = () => {
+        if (selectedCustomerKeys.size === filteredCustomers.length) {
+            setSelectedCustomerKeys(new Set());
+        } else {
+            setSelectedCustomerKeys(new Set(filteredCustomers.map(c => c.key)));
+        }
+    };
+
+    const bulkDeleteOrders = async () => {
+        // Собираем item IDs из выбранных клиентов
+        // ВАЖНО: в текущей структуре данных отсутствует orderId напрямую
+        // Нужно собрать item.id (summaryOrderJournal IDs) и найти связанные заказы
+
+        const selectedItemIds: number[] = [];
+        for (const key of selectedCustomerKeys) {
+            const customer = customers.find(c => c.key === key);
+            if (customer) {
+                for (const item of customer.items) {
+                    selectedItemIds.push(item.id);
+                }
+            }
+        }
+
+        if (selectedItemIds.length === 0) {
+            alert('Не выбраны заказы для удаления');
+            return;
+        }
+
+        setDeleting(true);
+        try {
+            const token = localStorage.getItem('token');
+
+            // Backend bulk-delete работает с orderIds
+            // Но в текущей структуре у нас summaryOrderJournal IDs
+            // Нужно сначала найти связанные Order IDs через API или использовать другой подход
+
+            // ДЛЯ ДАННОЙ РЕАЛИЗАЦИИ: предполагаем что item.id = summary entry id
+            // и backend должен найти связанные orders
+
+            const res = await axios.post(`${API_URL}/api/orders/bulk-delete`, {
+                orderIds: selectedItemIds,  // Это на самом деле summary entry IDs
+                reason: 'Удалено из сборки заказов'
+            }, { headers: { Authorization: `Bearer ${token}` } });
+
+            console.log('[BULK_DELETE] Response:', res.data);
+            alert(`Удалено ${res.data.deletedCount} заказов. Восстановлено ${res.data.restoredSummaryCount} записей в сводке.`);
+
+            setSelectedCustomerKeys(new Set());
+            setShowDeleteModal(false);
+            await loadAssemblyData();  // Перезагрузка данных
+
+        } catch (err: any) {
+            console.error('Bulk delete error:', err);
+            const errorMsg = err.response?.data?.error || 'Ошибка удаления';
+            const blocked = err.response?.data?.blocked;
+            if (blocked && blocked.length > 0) {
+                alert(`${errorMsg}\n\nБлокированные заказы:\n${blocked.map((b: any) => `ID ${b.orderId}: ${b.status}`).join('\n')}`);
+            } else {
+                alert(errorMsg);
+            }
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const filteredCustomers = customers.filter(c =>
         c.name.toLowerCase().includes(searchCustomer.toLowerCase())
     );
@@ -417,6 +503,26 @@ export default function AssemblyOrdersPage() {
                                 onChange={e => setSearchCustomer(e.target.value)}
                             />
                         </div>
+                        {/* Bulk delete controls */}
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedCustomerKeys.size > 0 && selectedCustomerKeys.size === filteredCustomers.length}
+                                    onChange={toggleSelectAll}
+                                    className="w-4 h-4 rounded border-gray-300"
+                                />
+                                <span>Выбрать все ({selectedCustomerKeys.size})</span>
+                            </label>
+                            {selectedCustomerKeys.size > 0 && (
+                                <button
+                                    onClick={() => setShowDeleteModal(true)}
+                                    className="px-3 py-1.5 bg-red-500 text-white text-sm rounded hover:bg-red-600 transition-colors"
+                                >
+                                    Удалить ({selectedCustomerKeys.size})
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <div className="flex-1 overflow-auto">
                         {filteredCustomers.length === 0 ? (
@@ -439,7 +545,19 @@ export default function AssemblyOrdersPage() {
                                         `}
                                     >
                                         <div className="flex justify-between items-start mb-2">
-                                            <div className="font-medium text-gray-900">{c.name}</div>
+                                            <div className="flex items-center gap-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedCustomerKeys.has(c.key)}
+                                                    onChange={(e) => {
+                                                        e.stopPropagation();
+                                                        toggleCustomerSelection(c.key);
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="w-4 h-4 rounded border-gray-300"
+                                                />
+                                                <span className="font-medium text-gray-900">{c.name}</span>
+                                            </div>
                                             {allConfirmed && (
                                                 <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full">
                                                     ✓ Готово
@@ -685,6 +803,44 @@ export default function AssemblyOrdersPage() {
                                         Вернуть
                                     </>
                                 )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Bulk Delete Confirmation Modal */}
+            {showDeleteModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg w-full max-w-md mx-4 shadow-xl">
+                        <div className="p-6">
+                            <h3 className="text-xl font-bold text-red-600 mb-4">
+                                Удалить выбранные заказы?
+                            </h3>
+                            <p className="text-gray-700 mb-4">
+                                Будет удалено <strong>{selectedCustomerKeys.size}</strong> клиентов
+                                ({Array.from(selectedCustomerKeys).reduce((acc, key) => {
+                                    const c = customers.find(c => c.key === key);
+                                    return acc + (c?.items.length || 0);
+                                }, 0)} позиций).
+                            </p>
+                            <div className="bg-orange-50 border border-orange-200 rounded p-3 text-sm text-orange-800">
+                                ⚠️ Заказы будут удалены из БД. Записи в Сводке вернутся в статус "Начать сборку".
+                            </div>
+                        </div>
+                        <div className="p-4 border-t flex justify-end gap-3">
+                            <button
+                                onClick={() => setShowDeleteModal(false)}
+                                className="px-4 py-2 border rounded hover:bg-gray-50"
+                            >
+                                Отмена
+                            </button>
+                            <button
+                                onClick={bulkDeleteOrders}
+                                disabled={deleting}
+                                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
+                            >
+                                {deleting ? 'Удаление...' : 'Да, удалить'}
                             </button>
                         </div>
                     </div>

@@ -620,9 +620,10 @@ export const assignExpeditor = async (req: Request, res: Response) => {
                 throw new Error('EXPEDITOR_NOT_FOUND');
             }
 
-            // 4. Парсинг dispatchDay (бизнес-дата в Asia/Tashkent)
-            let dispatchDayDate: Date | null = currentOrder.dispatchDay as Date | null;
-            if (dispatchDay) {
+            // 4. Парсинг dispatchDay — НЕ ЛОМАТЬ существующий
+            let dispatchDayDate = currentOrder.dispatchDay;
+
+            if (dispatchDay != null && String(dispatchDay).trim() !== '') {
                 const [y, m, d] = String(dispatchDay).slice(0, 10).split('-').map(Number);
                 dispatchDayDate = new Date(Date.UTC(y, m - 1, d));
             }
@@ -784,8 +785,10 @@ export const completeOrder = async (req: Request, res: Response) => {
                 throw new Error(`INVALID_STATUS:${currentOrder.status}`);
             }
 
-            // ТЗ: закрывают только "в пути"
-            if (currentOrder.deliveryStatus !== 'in_delivery') {
+            // ТЗ: закрывают только "в пути" или ожидающие доставку
+            // (смягчено: pending тоже допускается для случаев когда заказ напрямую из LOADED)
+            const allowedDeliveryStatuses = ['in_delivery', 'pending', null, undefined];
+            if (!allowedDeliveryStatuses.includes(currentOrder.deliveryStatus as any)) {
                 throw new Error(`INVALID_DELIVERY_STATUS:${currentOrder.deliveryStatus}`);
             }
 
@@ -940,10 +943,10 @@ export const startAssemblyOrder = async (req: Request, res: Response) => {
 export const confirmAssemblyOrder = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
+        const { dispatchDay } = req.body; // ← ПРИНИМАЕМ ИЗ UI
         const username = (req as any).user?.username || 'system';
 
         const result = await prisma.$transaction(async (tx) => {
-            // 1. Получаем и лочим заказ
             const currentOrder = await tx.order.findUnique({
                 where: { id: Number(id) }
             });
@@ -952,28 +955,39 @@ export const confirmAssemblyOrder = async (req: Request, res: Response) => {
                 throw new Error('ORDER_NOT_FOUND');
             }
 
-            // 2. FSM проверка: подтвердить можно только из IN_ASSEMBLY
+            // FSM проверка: подтвердить можно только из IN_ASSEMBLY
             if (currentOrder.status !== ORDER_STATUS.IN_ASSEMBLY) {
                 throw new Error(`INVALID_STATUS:${currentOrder.status}`);
             }
 
-            // 3. Вычисляем dispatchDay (сегодня в Asia/Tashkent)
-            const now = new Date();
-            // Asia/Tashkent = UTC+5
-            const tashkentOffset = 5 * 60 * 60 * 1000;
-            const tashkentNow = new Date(now.getTime() + tashkentOffset);
-            const dispatchDay = new Date(Date.UTC(
-                tashkentNow.getUTCFullYear(),
-                tashkentNow.getUTCMonth(),
-                tashkentNow.getUTCDate()
-            ));
+            // ===============================
+            // dispatchDay: из body или fallback
+            // ===============================
+            let dispatchDayDate: Date;
 
-            // 4. Обновляем статус заказа + устанавливаем dispatchDay
+            if (dispatchDay) {
+                const [y, m, d] = String(dispatchDay).slice(0, 10).split('-').map(Number);
+                if (!y || !m || !d) {
+                    throw new Error('INVALID_DISPATCH_DAY');
+                }
+                dispatchDayDate = new Date(Date.UTC(y, m - 1, d));
+            } else {
+                // fallback — сегодня в Asia/Tashkent
+                const now = new Date();
+                const tashkentOffset = 5 * 60 * 60 * 1000;
+                const tashkentNow = new Date(now.getTime() + tashkentOffset);
+                dispatchDayDate = new Date(Date.UTC(
+                    tashkentNow.getUTCFullYear(),
+                    tashkentNow.getUTCMonth(),
+                    tashkentNow.getUTCDate()
+                ));
+            }
+
             const order = await tx.order.update({
                 where: { id: Number(id) },
                 data: {
                     status: ORDER_STATUS.DISTRIBUTING,
-                    dispatchDay: dispatchDay,
+                    dispatchDay: dispatchDayDate,
                     assemblyConfirmedAt: new Date(),
                     assemblyConfirmedBy: username
                 },
@@ -983,10 +997,10 @@ export const confirmAssemblyOrder = async (req: Request, res: Response) => {
                 }
             });
 
-            // TODO: Добавить журнал событий FSM после создания правильной модели
-            // Сейчас журналы несовместимы с FSM-событиями (они хранят снимки, а не события)
+            console.log(
+                `[FSM] Order #${id}: IN_ASSEMBLY → DISTRIBUTING by ${username}, dispatchDay=${dispatchDayDate.toISOString().slice(0, 10)}`
+            );
 
-            console.log(`[FSM] Order #${id}: IN_ASSEMBLY → DISTRIBUTING by ${username}, dispatchDay=${dispatchDay.toISOString().slice(0, 10)}`);
             return order;
         });
 
@@ -999,6 +1013,9 @@ export const confirmAssemblyOrder = async (req: Request, res: Response) => {
 
         if (error.message === 'ORDER_NOT_FOUND') {
             return res.status(404).json({ error: 'Заказ не найден' });
+        }
+        if (error.message === 'INVALID_DISPATCH_DAY') {
+            return res.status(400).json({ error: 'Некорректная дата распределения' });
         }
         if (error.message?.startsWith('INVALID_STATUS:')) {
             const currentStatus = error.message.split(':')[1];
@@ -1275,5 +1292,152 @@ export const generateInvoice = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('generateInvoice error:', error);
         res.status(500).json({ error: 'Failed to generate invoice' });
+    }
+};
+
+// ============================================
+// Bulk Delete Orders (ТЗ: Удаление из Сборки заказов)
+// "Антиграв" паттерн: атомарная транзакция
+// ============================================
+export const bulkDeleteOrders = async (req: Request, res: Response) => {
+    try {
+        const userRole = (req as any).user?.role;
+        const username = (req as any).user?.username || 'system';
+
+        // RBAC: только dispatcher, admin, manager
+        const allowedRoles = ['dispatcher', 'admin', 'manager', 'ADMIN', 'MANAGER', 'DISPATCHER'];
+        if (!allowedRoles.includes(userRole)) {
+            return res.status(403).json({ error: 'Недостаточно прав для удаления заказов' });
+        }
+
+        const { orderIds, reason } = req.body as { orderIds: number[]; reason?: string };
+
+        if (!orderIds || !Array.isArray(orderIds) || orderIds.length === 0) {
+            return res.status(400).json({ error: 'orderIds обязателен и должен быть непустым массивом' });
+        }
+
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Получаем все заказы с items и привязками к summary
+            const orders = await tx.order.findMany({
+                where: { id: { in: orderIds.map(Number) } },
+                include: {
+                    items: {
+                        include: {
+                            summaryEntry: true
+                        }
+                    },
+                    attachments: true,
+                    returns: { include: { items: true } }
+                }
+            });
+
+            if (orders.length !== orderIds.length) {
+                const foundIds = orders.map(o => o.id);
+                const notFound = orderIds.filter(id => !foundIds.includes(Number(id)));
+                throw { code: 'ORDER_NOT_FOUND', notFound };
+            }
+
+            // 2. FSM проверка: удалять можно только NEW или IN_ASSEMBLY
+            const allowedStatuses = new Set([ORDER_STATUS.NEW, ORDER_STATUS.IN_ASSEMBLY]);
+            const blocked = orders
+                .filter(o => !allowedStatuses.has(o.status as any))
+                .map(o => ({ orderId: o.id, status: o.status }));
+
+            if (blocked.length > 0) {
+                throw { code: 'BLOCKED_STATUS', blocked };
+            }
+
+            // 3. Собираем все summaryEntry IDs для восстановления
+            const summaryIds = new Set<number>();
+            for (const order of orders) {
+                for (const item of order.items) {
+                    if (item.summaryEntry?.id) {
+                        summaryIds.add(item.summaryEntry.id);
+                    }
+                }
+            }
+
+            // 4. Восстанавливаем записи сводки → status='draft', orderItemId=null
+            let restoredSummaryCount = 0;
+            if (summaryIds.size > 0) {
+                const upd = await tx.summaryOrderJournal.updateMany({
+                    where: { id: { in: [...summaryIds] } },
+                    data: {
+                        status: 'draft',
+                        orderItemId: null
+                    }
+                });
+                restoredSummaryCount = upd.count;
+            }
+
+            // 5. Удаляем зависимости (каскад не всегда работает)
+            const orderIdsList = orderIds.map(Number);
+
+            // Удаляем ReturnAuditLog
+            await tx.returnAuditLog.deleteMany({
+                where: { orderId: { in: orderIdsList } }
+            }).catch(() => { });
+
+            // Удаляем OrderReturnItem через OrderReturn
+            for (const order of orders) {
+                for (const ret of order.returns) {
+                    await tx.orderReturnItem.deleteMany({
+                        where: { returnId: ret.id }
+                    }).catch(() => { });
+                }
+            }
+
+            // Удаляем OrderReturn
+            await tx.orderReturn.deleteMany({
+                where: { orderId: { in: orderIdsList } }
+            }).catch(() => { });
+
+            // Удаляем OrderAttachment
+            await tx.orderAttachment.deleteMany({
+                where: { orderId: { in: orderIdsList } }
+            });
+
+            // Удаляем OrderItem (каскад должен работать, но на всякий случай)
+            await tx.orderItem.deleteMany({
+                where: { orderId: { in: orderIdsList } }
+            });
+
+            // 6. Удаляем сами заказы
+            const del = await tx.order.deleteMany({
+                where: { id: { in: orderIdsList } }
+            });
+
+            console.log(`[BULK_DELETE] Deleted ${del.count} orders by ${username}, restored ${restoredSummaryCount} summary entries. Reason: ${reason || 'N/A'}`);
+
+            return {
+                deletedCount: del.count,
+                restoredSummaryCount,
+                deletedOrderIds: orderIdsList
+            };
+        });
+
+        return res.json({
+            success: true,
+            ...result
+        });
+
+    } catch (error: any) {
+        console.error('bulkDeleteOrders error:', error);
+
+        if (error.code === 'ORDER_NOT_FOUND') {
+            return res.status(404).json({
+                error: 'Некоторые заказы не найдены',
+                notFound: error.notFound
+            });
+        }
+
+        if (error.code === 'BLOCKED_STATUS') {
+            return res.status(400).json({
+                error: 'Некоторые заказы нельзя удалить (уже в статусе распределения или выше)',
+                blocked: error.blocked
+            });
+        }
+
+        return res.status(500).json({ error: 'Ошибка удаления заказов' });
     }
 };

@@ -533,8 +533,8 @@ export const bulkDeleteSummaryOrders = async (req: Request, res: Response) => {
 // Sync entries to Orders table
 export const syncToOrders = async (req: Request, res: Response) => {
     try {
-        const { entryIds } = req.body;
-        console.log('[SYNC] Called with entryIds:', entryIds);
+        const { entryIds, dispatchDay: dispatchDayParam } = req.body;
+        console.log('[SYNC] Called with entryIds:', entryIds, 'dispatchDay:', dispatchDayParam);
 
         const entries = await prisma.summaryOrderJournal.findMany({
             where: {
@@ -608,11 +608,18 @@ export const syncToOrders = async (req: Request, res: Response) => {
                     results.push({ action: 'item_added', orderId: order.id, orderItemId });
                 }
             } else {
-                // Calculate dispatchDay in Asia/Tashkent timezone (UTC+5)
+                // dispatchDay: из body или fallback (сегодня в Asia/Tashkent)
                 const now = new Date();
-                const tashkentOffset = 5 * 60; // UTC+5 in minutes
-                const tashkentTime = new Date(now.getTime() + (tashkentOffset + now.getTimezoneOffset()) * 60 * 1000);
-                const dispatchDay = new Date(tashkentTime.getFullYear(), tashkentTime.getMonth(), tashkentTime.getDate());
+                let dispatchDay: Date;
+
+                if (dispatchDayParam && String(dispatchDayParam).trim() !== '') {
+                    const [y, m, d] = String(dispatchDayParam).slice(0, 10).split('-').map(Number);
+                    dispatchDay = new Date(Date.UTC(y, m - 1, d));
+                } else {
+                    const tashkentOffset = 5 * 60; // UTC+5 in minutes
+                    const tashkentTime = new Date(now.getTime() + (tashkentOffset + now.getTimezoneOffset()) * 60 * 1000);
+                    dispatchDay = new Date(tashkentTime.getFullYear(), tashkentTime.getMonth(), tashkentTime.getDate());
+                }
 
                 order = await prisma.order.create({
                     data: {

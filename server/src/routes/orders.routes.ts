@@ -14,6 +14,9 @@ router.post('/disable', orders.disableOrders);             // POST /api/orders/d
 // ВАЖНО: Этот роут ДОЛЖЕН быть ДО /:id, иначе Express примет "pending-dispatch" за ID
 router.get('/pending-dispatch', orders.getOrdersPendingDispatch);
 
+// Bulk delete orders (ТЗ: Удаление из Сборки заказов)
+router.post('/bulk-delete', requireRole(['admin', 'manager', 'dispatcher']), orders.bulkDeleteOrders);
+
 // IDN-related: Get summary data by IDN for auto-populating quantity
 router.get('/summary-by-idn/:idn', orders.getSummaryByIdn);
 
