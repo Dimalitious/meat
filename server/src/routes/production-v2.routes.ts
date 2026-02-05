@@ -39,7 +39,18 @@ import {
     getClosuresByDate,
     recalcClosuresManual,
     reopenLot,
-    reopenProductForDate
+    reopenProductForDate,
+    // Production V3 - FIFO Allocations
+    postProductionRun,
+    voidProductionRun,
+    getLotAllocations,
+    // Production V3 - Adjustments
+    getAdjustments,
+    createAdjustment,
+    updateAdjustment,
+    postAdjustment,
+    voidAdjustment,
+    deleteAdjustment
 } from '../controllers/production-v2.controller';
 
 const router = Router();
@@ -168,5 +179,39 @@ router.post('/closures/lot/:purchaseItemId/reopen', reopenLot);
 // Восстановить продукт на дату
 router.post('/closures/product/:productId/reopen', reopenProductForDate);
 
-export default router;
+// ============================================
+// PRODUCTION V3 - FIFO Workflow
+// ============================================
 
+// Провести документ (draft → posted)
+router.post('/runs/:id/post', postProductionRun);
+
+// Аннулировать документ (posted → voided)
+router.post('/runs/:id/void', voidProductionRun);
+
+// История allocations для партии
+router.get('/lots/:purchaseItemId/allocations', getLotAllocations);
+
+// ============================================
+// PRODUCTION V3 - Adjustments
+// ============================================
+
+// Список корректировок
+router.get('/adjustments', getAdjustments);
+
+// Создать корректировку (draft)
+router.post('/adjustments', createAdjustment);
+
+// Обновить корректировку (только draft)
+router.patch('/adjustments/:id', updateAdjustment);
+
+// Провести корректировку (draft → posted)
+router.post('/adjustments/:id/post', postAdjustment);
+
+// Аннулировать корректировку (posted → voided)
+router.post('/adjustments/:id/void', voidAdjustment);
+
+// Удалить корректировку (только draft)
+router.delete('/adjustments/:id', deleteAdjustment);
+
+export default router;

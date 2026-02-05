@@ -2120,21 +2120,20 @@ async function recalcLotClosures(
 
     if (allIds.size === 0) return;
 
-    // 2. Агрегируем выработку по sourcePurchaseItemId
-    const producedAgg = await tx.productionRun.groupBy({
-        by: ['sourcePurchaseItemId'],
+    // 2. Агрегируем выработку по purchaseItemId из ProductionAllocation
+    // V3: Используем allocations вместо sourcePurchaseItemId (INV-1)
+    const producedAgg = await tx.productionAllocation.groupBy({
+        by: ['purchaseItemId'],
         where: {
-            sourcePurchaseItemId: { in: Array.from(allIds) },
-            isHidden: false
+            purchaseItemId: { in: Array.from(allIds) },
+            isVoided: false  // Только активные allocations
         },
-        _sum: { actualWeight: true }
+        _sum: { qtyAllocated: true }
     });
 
     const producedMap = new Map<number, Prisma.Decimal>();
     for (const row of producedAgg) {
-        if (row.sourcePurchaseItemId) {
-            producedMap.set(row.sourcePurchaseItemId, row._sum.actualWeight ?? new Prisma.Decimal(0));
-        }
+        producedMap.set(row.purchaseItemId, row._sum.qtyAllocated ?? new Prisma.Decimal(0));
     }
 
     // 3. Получаем qty для всех purchaseItems (включая открытые)
@@ -2619,6 +2618,673 @@ export const reopenProductForDate = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to reopen product for date' });
     }
 };
+// ============================================
+// PRODUCTION V3: FIFO ALLOCATION SYSTEM
+// ============================================
+
+/**
+ * FIFO Allocation: распределить вес документа по партиям закупок
+ * Порядок: purchaseDate ASC, id ASC
+ */
+async function allocateRunToLots(
+    tx: Prisma.TransactionClient,
+    runId: number,
+    productId: number,
+    weight: Prisma.Decimal,
+    allocatedAt: Date
+): Promise<void> {
+    // 1. Найти партии с остатком > 0, отсортированные FIFO
+    const availableLots = await tx.purchaseItem.findMany({
+        where: {
+            productId,
+            qtyRemaining: { gt: 0 },
+            purchase: { isDisabled: false }
+        },
+        orderBy: [
+            { purchase: { purchaseDate: 'asc' } },
+            { id: 'asc' }
+        ],
+        include: {
+            purchase: { select: { purchaseDate: true, idn: true } }
+        }
+    });
+
+    let remaining = new Prisma.Decimal(weight);
+    const allocations: { purchaseItemId: number; qty: Prisma.Decimal }[] = [];
+
+    for (const lot of availableLots) {
+        if (remaining.lte(0)) break;
+
+        const lotRemaining = new Prisma.Decimal(lot.qtyRemaining);
+        const toAllocate = Prisma.Decimal.min(remaining, lotRemaining);
+
+        allocations.push({
+            purchaseItemId: lot.id,
+            qty: toAllocate
+        });
+
+        remaining = remaining.sub(toAllocate);
+    }
+
+    // 2. Проверка: хватает ли партий?
+    if (remaining.gt(0)) {
+        // Помечаем run как needsReview
+        await tx.productionRun.update({
+            where: { id: runId },
+            data: { needsReview: true }
+        });
+        console.warn(`[FIFO] Run #${runId}: insufficient lots, remaining=${remaining.toString()}`);
+    }
+
+    // 3. Создать allocation записи
+    for (const alloc of allocations) {
+        await tx.productionAllocation.create({
+            data: {
+                sourceType: 'RUN',
+                sourceId: runId,
+                purchaseItemId: alloc.purchaseItemId,
+                productId,
+                qtyAllocated: alloc.qty,
+                allocatedAt
+            }
+        });
+
+        // 4. Обновить qtyRemaining в партии
+        await tx.purchaseItem.update({
+            where: { id: alloc.purchaseItemId },
+            data: {
+                qtyRemaining: { decrement: alloc.qty }
+            }
+        });
+    }
+}
+
+/**
+ * Отменить allocations для документа (при void)
+ */
+async function deallocateRun(
+    tx: Prisma.TransactionClient,
+    runId: number,
+    voidReason: string
+): Promise<void> {
+    // 1. Получить все активные allocations
+    const allocations = await tx.productionAllocation.findMany({
+        where: {
+            sourceType: 'RUN',
+            sourceId: runId,
+            isVoided: false
+        }
+    });
+
+    // 2. Отметить как voided и вернуть qty в партии
+    for (const alloc of allocations) {
+        await tx.productionAllocation.update({
+            where: { id: alloc.id },
+            data: {
+                isVoided: true,
+                voidedAt: new Date(),
+                voidReason
+            }
+        });
+
+        // Вернуть qty в партию
+        await tx.purchaseItem.update({
+            where: { id: alloc.purchaseItemId },
+            data: {
+                qtyRemaining: { increment: alloc.qtyAllocated }
+            }
+        });
+    }
+}
+
+/**
+ * Провести документ выработки (draft → posted)
+ * POST /api/production-v2/runs/:id/post
+ */
+export const postProductionRun = async (req: Request, res: Response) => {
+    try {
+        const runId = Number(req.params.id);
+        const username = (req as any).user?.username || 'system';
+
+        const run = await prisma.productionRun.findUnique({
+            where: { id: runId },
+            select: {
+                id: true,
+                productId: true,
+                productionDate: true,
+                actualWeight: true,
+                status: true,
+                isLocked: true
+            }
+        });
+
+        if (!run) {
+            return res.status(404).json({ error: 'Run not found' });
+        }
+
+        if (run.status !== 'draft') {
+            return res.status(400).json({ error: `Cannot post run with status '${run.status}'` });
+        }
+
+        if (!run.actualWeight || new Prisma.Decimal(run.actualWeight).lte(0)) {
+            return res.status(400).json({ error: 'Cannot post run with zero weight' });
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // 1. FIFO allocation
+            await allocateRunToLots(
+                tx,
+                run.id,
+                run.productId,
+                new Prisma.Decimal(run.actualWeight!),
+                run.productionDate
+            );
+
+            // 2. Update status
+            await tx.productionRun.update({
+                where: { id: runId },
+                data: {
+                    status: 'posted',
+                    isLocked: true
+                }
+            });
+
+            // 3. Recalc closures
+            const dayStart = toTashkentDayStart(run.productionDate);
+            await recalcLotClosures(tx, dayStart, username);
+            await recalcClosuresForDate(tx, dayStart.toISOString().slice(0, 10), username);
+
+            // 4. Audit
+            await tx.productionClosureAudit.create({
+                data: {
+                    scope: 'LOT',
+                    action: 'POSTED',
+                    productionDate: dayStart,
+                    productId: run.productId,
+                    performedBy: username,
+                    payload: { runId, actualWeight: run.actualWeight?.toString() }
+                }
+            });
+        });
+
+        res.json({ success: true, runId, status: 'posted' });
+    } catch (error) {
+        console.error('postProductionRun error:', error);
+        res.status(500).json({ error: 'Failed to post production run' });
+    }
+};
+
+/**
+ * Аннулировать документ выработки (posted → voided)
+ * POST /api/production-v2/runs/:id/void
+ */
+export const voidProductionRun = async (req: Request, res: Response) => {
+    try {
+        const runId = Number(req.params.id);
+        const { reason } = req.body;
+        const username = (req as any).user?.username || 'system';
+
+        const run = await prisma.productionRun.findUnique({
+            where: { id: runId },
+            select: {
+                id: true,
+                productId: true,
+                productionDate: true,
+                status: true
+            }
+        });
+
+        if (!run) {
+            return res.status(404).json({ error: 'Run not found' });
+        }
+
+        if (run.status !== 'posted') {
+            return res.status(400).json({ error: `Cannot void run with status '${run.status}'` });
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Deallocate
+            await deallocateRun(tx, runId, reason || 'Voided by user');
+
+            // 2. Update status
+            await tx.productionRun.update({
+                where: { id: runId },
+                data: {
+                    status: 'voided',
+                    isHidden: true
+                }
+            });
+
+            // 3. Recalc closures
+            const dayStart = toTashkentDayStart(run.productionDate);
+            await recalcLotClosures(tx, dayStart, username);
+            await recalcClosuresForDate(tx, dayStart.toISOString().slice(0, 10), username);
+
+            // 4. Audit
+            await tx.productionClosureAudit.create({
+                data: {
+                    scope: 'LOT',
+                    action: 'VOIDED',
+                    productionDate: dayStart,
+                    productId: run.productId,
+                    performedBy: username,
+                    payload: { runId, reason }
+                }
+            });
+        });
+
+        res.json({ success: true, runId, status: 'voided' });
+    } catch (error) {
+        console.error('voidProductionRun error:', error);
+        res.status(500).json({ error: 'Failed to void production run' });
+    }
+};
+
+/**
+ * Получить allocations для партии
+ * GET /api/production-v2/lots/:purchaseItemId/allocations
+ */
+export const getLotAllocations = async (req: Request, res: Response) => {
+    try {
+        const purchaseItemId = Number(req.params.purchaseItemId);
+
+        const allocations = await prisma.productionAllocation.findMany({
+            where: { purchaseItemId },
+            orderBy: { allocatedAt: 'desc' },
+            include: {
+                productionRun: {
+                    select: {
+                        id: true,
+                        productionDate: true,
+                        status: true,
+                        product: { select: { id: true, name: true, code: true } }
+                    }
+                }
+            }
+        });
+
+        res.json(allocations);
+    } catch (error) {
+        console.error('getLotAllocations error:', error);
+        res.status(500).json({ error: 'Failed to get lot allocations' });
+    }
+};
+
+// ============================================
+// PRODUCTION V3: ADJUSTMENTS
+// ============================================
+
+/**
+ * Получить список корректировок
+ * GET /api/production-v2/adjustments?date=YYYY-MM-DD
+ */
+export const getAdjustments = async (req: Request, res: Response) => {
+    try {
+        const { date, productId, status } = req.query;
+
+        const where: any = {};
+
+        if (date) {
+            const { dayStart, dayEnd } = getTashkentDayRange(String(date));
+            where.adjustmentDate = { gte: dayStart, lt: dayEnd };
+        }
+
+        if (productId) {
+            where.productId = Number(productId);
+        }
+
+        if (status) {
+            where.status = String(status);
+        }
+
+        const adjustments = await prisma.productionAdjustment.findMany({
+            where,
+            include: {
+                product: { select: { id: true, code: true, name: true } },
+                creator: { select: { id: true, name: true } }
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        res.json(adjustments);
+    } catch (error) {
+        console.error('getAdjustments error:', error);
+        res.status(500).json({ error: 'Failed to get adjustments' });
+    }
+};
+
+/**
+ * Создать корректировку (draft)
+ * POST /api/production-v2/adjustments
+ */
+export const createAdjustment = async (req: Request, res: Response) => {
+    try {
+        const { productId, adjustmentDate, effectiveDate, deltaWeight, reason } = req.body;
+        const userId = (req as any).user?.userId;
+
+        if (!productId || !deltaWeight) {
+            return res.status(400).json({ error: 'productId and deltaWeight are required' });
+        }
+
+        const adjustment = await prisma.productionAdjustment.create({
+            data: {
+                productId: Number(productId),
+                adjustmentDate: adjustmentDate ? new Date(adjustmentDate) : new Date(),
+                effectiveDate: effectiveDate ? new Date(effectiveDate) : new Date(),
+                deltaWeight: Number(deltaWeight),
+                reason: reason || null,
+                status: 'draft',
+                createdBy: userId
+            },
+            include: {
+                product: { select: { id: true, code: true, name: true } },
+                creator: { select: { id: true, name: true } }
+            }
+        });
+
+        res.status(201).json(adjustment);
+    } catch (error) {
+        console.error('createAdjustment error:', error);
+        res.status(500).json({ error: 'Failed to create adjustment' });
+    }
+};
+
+/**
+ * Обновить корректировку (только draft)
+ * PATCH /api/production-v2/adjustments/:id
+ */
+export const updateAdjustment = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        const { deltaWeight, reason, adjustmentDate, effectiveDate } = req.body;
+
+        const existing = await prisma.productionAdjustment.findUnique({
+            where: { id },
+            select: { status: true }
+        });
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Adjustment not found' });
+        }
+
+        if (existing.status !== 'draft') {
+            return res.status(400).json({ error: 'Cannot update non-draft adjustment' });
+        }
+
+        const data: any = {};
+        if (deltaWeight !== undefined) data.deltaWeight = Number(deltaWeight);
+        if (reason !== undefined) data.reason = reason;
+        if (adjustmentDate) data.adjustmentDate = new Date(adjustmentDate);
+        if (effectiveDate) data.effectiveDate = new Date(effectiveDate);
+
+        const adjustment = await prisma.productionAdjustment.update({
+            where: { id },
+            data,
+            include: {
+                product: { select: { id: true, code: true, name: true } },
+                creator: { select: { id: true, name: true } }
+            }
+        });
+
+        res.json(adjustment);
+    } catch (error) {
+        console.error('updateAdjustment error:', error);
+        res.status(500).json({ error: 'Failed to update adjustment' });
+    }
+};
+
+/**
+ * Провести корректировку (draft → posted)
+ * POST /api/production-v2/adjustments/:id/post
+ */
+export const postAdjustment = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        const username = (req as any).user?.username || 'system';
+
+        const adjustment = await prisma.productionAdjustment.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                productId: true,
+                adjustmentDate: true,
+                deltaWeight: true,
+                status: true
+            }
+        });
+
+        if (!adjustment) {
+            return res.status(404).json({ error: 'Adjustment not found' });
+        }
+
+        if (adjustment.status !== 'draft') {
+            return res.status(400).json({ error: `Cannot post adjustment with status '${adjustment.status}'` });
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // 1. FIFO allocation (аналогично run)
+            await allocateAdjustmentToLots(
+                tx,
+                adjustment.id,
+                adjustment.productId,
+                new Prisma.Decimal(adjustment.deltaWeight),
+                adjustment.adjustmentDate
+            );
+
+            // 2. Update status
+            await tx.productionAdjustment.update({
+                where: { id },
+                data: {
+                    status: 'posted',
+                    isLocked: true
+                }
+            });
+
+            // 3. Recalc closures
+            const dayStart = toTashkentDayStart(adjustment.adjustmentDate);
+            await recalcLotClosures(tx, dayStart, username);
+            await recalcClosuresForDate(tx, dayStart.toISOString().slice(0, 10), username);
+
+            // 4. Audit
+            await tx.productionClosureAudit.create({
+                data: {
+                    scope: 'LOT',
+                    action: 'POSTED',
+                    productionDate: dayStart,
+                    productId: adjustment.productId,
+                    performedBy: username,
+                    payload: { adjustmentId: id, deltaWeight: adjustment.deltaWeight.toString() }
+                }
+            });
+        });
+
+        res.json({ success: true, id, status: 'posted' });
+    } catch (error) {
+        console.error('postAdjustment error:', error);
+        res.status(500).json({ error: 'Failed to post adjustment' });
+    }
+};
+
+/**
+ * Аннулировать корректировку (posted → voided)
+ * POST /api/production-v2/adjustments/:id/void
+ */
+export const voidAdjustment = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+        const { reason } = req.body;
+        const username = (req as any).user?.username || 'system';
+
+        const adjustment = await prisma.productionAdjustment.findUnique({
+            where: { id },
+            select: {
+                id: true,
+                productId: true,
+                adjustmentDate: true,
+                status: true
+            }
+        });
+
+        if (!adjustment) {
+            return res.status(404).json({ error: 'Adjustment not found' });
+        }
+
+        if (adjustment.status !== 'posted') {
+            return res.status(400).json({ error: `Cannot void adjustment with status '${adjustment.status}'` });
+        }
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Deallocate
+            await deallocateAdjustment(tx, id, reason || 'Voided by user');
+
+            // 2. Update status
+            await tx.productionAdjustment.update({
+                where: { id },
+                data: {
+                    status: 'voided',
+                    voidedAt: new Date(),
+                    voidedBy: (req as any).user?.userId,
+                    voidReason: reason
+                }
+            });
+
+            // 3. Recalc closures
+            const dayStart = toTashkentDayStart(adjustment.adjustmentDate);
+            await recalcLotClosures(tx, dayStart, username);
+            await recalcClosuresForDate(tx, dayStart.toISOString().slice(0, 10), username);
+
+            // 4. Audit
+            await tx.productionClosureAudit.create({
+                data: {
+                    scope: 'LOT',
+                    action: 'VOIDED',
+                    productionDate: dayStart,
+                    productId: adjustment.productId,
+                    performedBy: username,
+                    payload: { adjustmentId: id, reason }
+                }
+            });
+        });
+
+        res.json({ success: true, id, status: 'voided' });
+    } catch (error) {
+        console.error('voidAdjustment error:', error);
+        res.status(500).json({ error: 'Failed to void adjustment' });
+    }
+};
+
+/**
+ * Удалить корректировку (только draft)
+ * DELETE /api/production-v2/adjustments/:id
+ */
+export const deleteAdjustment = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+
+        const existing = await prisma.productionAdjustment.findUnique({
+            where: { id },
+            select: { status: true }
+        });
+
+        if (!existing) {
+            return res.status(404).json({ error: 'Adjustment not found' });
+        }
+
+        if (existing.status !== 'draft') {
+            return res.status(400).json({ error: 'Cannot delete non-draft adjustment. Use void instead.' });
+        }
+
+        await prisma.productionAdjustment.delete({ where: { id } });
+
+        res.json({ success: true, id });
+    } catch (error) {
+        console.error('deleteAdjustment error:', error);
+        res.status(500).json({ error: 'Failed to delete adjustment' });
+    }
+};
+
+// Helper: FIFO allocation for adjustment
+async function allocateAdjustmentToLots(
+    tx: Prisma.TransactionClient,
+    adjustmentId: number,
+    productId: number,
+    weight: Prisma.Decimal,
+    allocatedAt: Date
+): Promise<void> {
+    const availableLots = await tx.purchaseItem.findMany({
+        where: {
+            productId,
+            qtyRemaining: { gt: 0 },
+            purchase: { isDisabled: false }
+        },
+        orderBy: [
+            { purchase: { purchaseDate: 'asc' } },
+            { id: 'asc' }
+        ]
+    });
+
+    let remaining = new Prisma.Decimal(weight);
+
+    for (const lot of availableLots) {
+        if (remaining.lte(0)) break;
+
+        const lotRemaining = new Prisma.Decimal(lot.qtyRemaining);
+        const toAllocate = Prisma.Decimal.min(remaining, lotRemaining);
+
+        await tx.productionAllocation.create({
+            data: {
+                sourceType: 'ADJ',
+                sourceId: adjustmentId,
+                purchaseItemId: lot.id,
+                productId,
+                qtyAllocated: toAllocate,
+                allocatedAt
+            }
+        });
+
+        await tx.purchaseItem.update({
+            where: { id: lot.id },
+            data: { qtyRemaining: { decrement: toAllocate } }
+        });
+
+        remaining = remaining.sub(toAllocate);
+    }
+
+    if (remaining.gt(0)) {
+        console.warn(`[FIFO] Adjustment #${adjustmentId}: insufficient lots, remaining=${remaining.toString()}`);
+    }
+}
+
+// Helper: Deallocate for adjustment
+async function deallocateAdjustment(
+    tx: Prisma.TransactionClient,
+    adjustmentId: number,
+    voidReason: string
+): Promise<void> {
+    const allocations = await tx.productionAllocation.findMany({
+        where: {
+            sourceType: 'ADJ',
+            sourceId: adjustmentId,
+            isVoided: false
+        }
+    });
+
+    for (const alloc of allocations) {
+        await tx.productionAllocation.update({
+            where: { id: alloc.id },
+            data: {
+                isVoided: true,
+                voidedAt: new Date(),
+                voidReason
+            }
+        });
+
+        await tx.purchaseItem.update({
+            where: { id: alloc.purchaseItemId },
+            data: { qtyRemaining: { increment: alloc.qtyAllocated } }
+        });
+    }
+}
 
 // Export recalc functions for use in other functions
 export { recalcLotClosures, recalcClosuresForDate, getTashkentDayRange };

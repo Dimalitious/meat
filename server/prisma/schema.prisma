@@ -30,6 +30,9 @@ model User {
   productionDocs      ProductionDoc[]         @relation("ProductionDocCreator")
   productionInputs    ProductionInput[]       @relation("ProductionInputLoader")
   cuttingLines        ProductionCuttingLine[] @relation("CuttingLineCreator")
+  // Production V3: Adjustments
+  createdAdjustments  ProductionAdjustment[]  @relation("AdjustmentCreator")
+  voidedAdjustments   ProductionAdjustment[]  @relation("AdjustmentVoider")
 }
 
 model District {
@@ -93,6 +96,8 @@ model Product {
   orderReturnItems         OrderReturnItem[]
   // Production Closure relations
   productionClosures       ProductionClosure[]       @relation("ProductionClosures")
+  // Production V3: Adjustments
+  productionAdjustments    ProductionAdjustment[]
 }
 
 model Customer {
@@ -787,11 +792,13 @@ model ProductionRun {
   productionDate  DateTime  @default(now())  // Редактируемая дата выработки
   plannedWeight   Decimal?  @db.Decimal(14, 3)  // Вес (план) - ввод пользователя
   actualWeight    Decimal?  @db.Decimal(14, 3)  // Фактический вес (сумма значений)
+  status          String    @default("draft")  // V3: draft | posted
   isLocked        Boolean   @default(false)  // Зафиксировано (нельзя редактировать)
   isHidden        Boolean   @default(false)  // Скрыто в журнале
+  needsReview     Boolean   @default(false)  // V3: флаг для миграции (нехватка партий)
   // Источник позиции
   sourceType      String    @default("MANUAL")  // MANUAL | PURCHASE | OPENING_BALANCE
-  sourcePurchaseItemId  Int?  // FK → PurchaseItem (если sourceType = PURCHASE)
+  sourcePurchaseItemId  Int?  // FK → PurchaseItem (если sourceType = PURCHASE) - legacy
   sourceOpeningBalanceQty Decimal? @db.Decimal(14, 3)  // Остаток на начало (если sourceType = OPENING_BALANCE)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -801,6 +808,7 @@ model ProductionRun {
   user        User      @relation("RunUser", fields: [userId], references: [id])
   sourcePurchaseItem PurchaseItem? @relation(fields: [sourcePurchaseItemId], references: [id])
   values      ProductionRunValue[]  // Значения по узлам
+  allocations ProductionAllocation[]  // V3: FIFO allocations
   
   @@index([productId])
   @@index([mmlId])
@@ -810,6 +818,7 @@ model ProductionRun {
   @@index([productionDate])
   @@index([isHidden, productionDate])
   @@index([sourceType])
+  @@index([status])
 }
 
 // Значения выработки по узлам MML
@@ -834,6 +843,64 @@ model ProductionRunValue {
   @@index([productionRunId])
   @@index([mmlNodeId])
   @@index([staffId])
+}
+
+// ============================================
+// PRODUCTION V3: FIFO ALLOCATIONS & ADJUSTMENTS
+// ============================================
+
+// Распределение веса документа (RUN или ADJ) по партиям закупок (FIFO)
+// Центральная таблица для FIFO-логики
+model ProductionAllocation {
+  id              Int       @id @default(autoincrement())
+  sourceType      String    // RUN | ADJ
+  sourceId        Int       // productionRunId или productionAdjustmentId
+  purchaseItemId  Int       // FK → PurchaseItem (партия)
+  productId       Int       // денормализация, MUST == document.productId
+  qtyAllocated    Decimal   @db.Decimal(14, 3)  // Сколько списано из партии
+  allocatedAt     DateTime  @default(now())     // Порядок документов (INV-4)
+  isVoided        Boolean   @default(false)     // Для историчности (INV-2)
+  voidedAt        DateTime?
+  voidReason      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  purchaseItem    PurchaseItem  @relation(fields: [purchaseItemId], references: [id])
+  productionRun   ProductionRun? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  
+  @@index([purchaseItemId, isVoided])
+  @@index([productId, allocatedAt, isVoided])
+  @@index([sourceType, sourceId])
+  @@index([sourceId])
+}
+
+// Корректирующий документ производства (для аудита изменений факта)
+// effectiveDate - в какой день отображается в отчётах
+// adjustmentDate - в какой день потребляет партии (FIFO)
+model ProductionAdjustment {
+  id              Int       @id @default(autoincrement())
+  productId       Int       // FK → Product
+  adjustmentDate  DateTime  // Дата для FIFO и closures
+  effectiveDate   DateTime  // Дата для отчётов
+  deltaWeight     Decimal   @db.Decimal(14, 3)  // Вес корректировки (>= 0)
+  reason          String?   // Причина корректировки
+  status          String    @default("draft")   // draft | posted | voided
+  isLocked        Boolean   @default(false)
+  createdBy       Int       // FK → User
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  voidedAt        DateTime?
+  voidedBy        Int?
+  voidReason      String?
+  
+  product         Product   @relation(fields: [productId], references: [id])
+  creator         User      @relation("AdjustmentCreator", fields: [createdBy], references: [id])
+  voider          User?     @relation("AdjustmentVoider", fields: [voidedBy], references: [id])
+  
+  @@index([productId])
+  @@index([adjustmentDate])
+  @@index([effectiveDate])
+  @@index([status])
 }
 
 // ============================================
@@ -897,7 +964,8 @@ model PurchaseItem {
   supplierId      Int       // Какой поставщик в этой закупке
   productId       Int
   price           Decimal   @db.Decimal(14, 2)  // Закупочная цена
-  qty             Decimal   @db.Decimal(14, 3)  // Количество
+  qty             Decimal   @db.Decimal(14, 3)  // Количество (qtyPurchased)
+  qtyRemaining    Decimal   @default(0) @db.Decimal(14, 3)  // V3: денорм остаток для FIFO Mode B
   amount          Decimal   @db.Decimal(14, 2)  // Сумма (price * qty)
   paymentTypeId   Int?      // Тип оплаты (может быть разный для каждой строки)
   isSystem        Boolean   @default(false)     // Виртуальная партия (OPENING_BALANCE)
@@ -910,7 +978,9 @@ model PurchaseItem {
   paymentType   PaymentType?  @relation(fields: [paymentTypeId], references: [id])
   // Production-Purchase Integration
   productionInputs  ProductionInput[]
-  productionRuns    ProductionRun[]  // Выработки, созданные из этой закупки
+  productionRuns    ProductionRun[]  // Выработки, созданные из этой закупки (legacy)
+  // Production V3: FIFO allocations
+  allocations   ProductionAllocation[]
   // Production Closure relation
   lotClosure    ProductionLotClosure?  // Закрытие партии (1:1)
   
@@ -918,6 +988,7 @@ model PurchaseItem {
   @@index([purchaseId])
   @@index([supplierId])
   @@index([productId])
+  @@index([productId, qtyRemaining])  // V3: для FIFO поиска
 }
 
 // ============================================
@@ -1432,7 +1503,7 @@ model ProductionClosure {
 model ProductionClosureAudit {
   id               Int       @id @default(autoincrement())
   scope            String    // LOT | PRODUCT
-  action           String    // CLOSED | REOPENED | RECALC
+  action           String    // CLOSED | REOPENED | RECALC | POSTED | VOIDED | HIDDEN | UNHIDDEN | REBUILD_ALLOC
   productionDate   DateTime? @db.Date
   productId        Int?
   purchaseItemId   Int?

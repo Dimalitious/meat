@@ -63,6 +63,8 @@ interface ProductionRun {
     actualWeight: number | null;
     isHidden: boolean;
     sourceType: string;
+    status: 'draft' | 'posted' | 'voided';  // V3
+    needsReview?: boolean;  // V3
     product: Product;
     mml: Mml;
     user: { id: number; name: string };
@@ -124,6 +126,21 @@ interface CombinedItem {
     isCarryover?: boolean;    // TZ7: маркер переноса с прошлых дат
 }
 
+// V3: Adjustment interface
+interface Adjustment {
+    id: number;
+    productId: number;
+    adjustmentDate: string;
+    effectiveDate: string;
+    deltaWeight: number;
+    reason: string | null;
+    status: 'draft' | 'posted' | 'voided';
+    isLocked: boolean;
+    createdAt: string;
+    product: { id: number; code: string; name: string };
+    creator: { id: number; name: string } | null;
+}
+
 export default function ProductionV3Page() {
     useAuth();
     const token = localStorage.getItem('token');
@@ -160,7 +177,7 @@ export default function ProductionV3Page() {
     const [warning, setWarning] = useState<string | null>(null);
     const [selectedMmlNodeIds, setSelectedMmlNodeIds] = useState<Set<number>>(new Set());
     const [isSubmitting, setIsSubmitting] = useState(false); // Защита от двойного клика
-    const [activeMainTab, setActiveMainTab] = useState<'production' | 'writeoff'>('production'); // Выработка / Списание
+    const [activeMainTab, setActiveMainTab] = useState<'production' | 'writeoff' | 'adjustments'>('production'); // V3: + adjustments
 
     // Inline редактирование значений
     const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
@@ -179,6 +196,15 @@ export default function ProductionV3Page() {
     // Мобильная навигация: 1=список товаров, 2=категории/детали, 3=редактирование
     const [mobileLevel, setMobileLevel] = useState<1 | 2 | 3>(1);
     const [isMobile, setIsMobile] = useState(false);
+
+    // V3: Adjustments state
+    const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
+    const [adjustmentsLoading, setAdjustmentsLoading] = useState(false);
+    const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
+    const [editingAdjustment, setEditingAdjustment] = useState<Adjustment | null>(null);
+    const [adjProductId, setAdjProductId] = useState<number | null>(null);
+    const [adjDeltaWeight, setAdjDeltaWeight] = useState('');
+    const [adjReason, setAdjReason] = useState('');
 
     // Определение мобильного режима
     useEffect(() => {
@@ -580,7 +606,6 @@ export default function ProductionV3Page() {
 
             if (savedRunDate < filterFromDateObj || savedRunDate > filterToDateObj) {
                 // Позиция перенесена в другую дату - очищаем выбор
-                setProductIdsWithRunOutsideFilter(prev => new Set([...prev, savedProductId]));
                 setSelectedRun(null);
                 setWarning('Позиция перенесена в дату ' + new Date(savedProductionDate).toLocaleDateString('ru-RU'));
             } else {
@@ -679,6 +704,157 @@ export default function ProductionV3Page() {
             setRuns(runs.map(r => r.id === runId ? res.data : r));
         } catch (err) {
             console.error('Failed to toggle lock:', err);
+        }
+    };
+
+    // V3: Провести документ (draft → posted)
+    const postRun = async (runId: number) => {
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+        try {
+            await axios.post(`${API_URL}/api/production-v2/runs/${runId}/post`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            // Обновляем данные
+            await fetchRunsAuto();
+            if (selectedRun?.id === runId) {
+                const updatedRun = { ...selectedRun, status: 'posted' as const, isLocked: true };
+                setSelectedRun(updatedRun);
+            }
+            setWarning('Документ проведён!');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            console.error('Failed to post run:', err);
+            alert(err.response?.data?.error || 'Ошибка проведения документа');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // V3: Аннулировать документ (posted → voided)
+    const voidRun = async (runId: number) => {
+        if (isSubmitting) return;
+        const reason = prompt('Причина аннулирования:');
+        if (reason === null) return; // cancel
+
+        setIsSubmitting(true);
+        try {
+            await axios.post(`${API_URL}/api/production-v2/runs/${runId}/void`,
+                { reason },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await fetchRunsAuto();
+            setSelectedRun(null);
+            setWarning('Документ аннулирован');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            console.error('Failed to void run:', err);
+            alert(err.response?.data?.error || 'Ошибка аннулирования');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // V3: Загрузка корректировок
+    const loadAdjustments = async () => {
+        setAdjustmentsLoading(true);
+        try {
+            const params = new URLSearchParams();
+            if (dateFrom) params.append('date', dateFrom);
+            const res = await axios.get(`${API_URL}/api/production-v2/adjustments?${params}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setAdjustments(res.data);
+        } catch (err) {
+            console.error('Failed to load adjustments:', err);
+        } finally {
+            setAdjustmentsLoading(false);
+        }
+    };
+
+    // V3: Создать корректировку
+    const createAdjustmentHandler = async () => {
+        if (!adjProductId || !adjDeltaWeight) {
+            alert('Выберите товар и укажите вес');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            await axios.post(`${API_URL}/api/production-v2/adjustments`, {
+                productId: adjProductId,
+                adjustmentDate: dateFrom || new Date().toISOString().slice(0, 10),
+                deltaWeight: Number(adjDeltaWeight),
+                reason: adjReason || null
+            }, { headers: { Authorization: `Bearer ${token}` } });
+            await loadAdjustments();
+            setShowAdjustmentModal(false);
+            setAdjProductId(null);
+            setAdjDeltaWeight('');
+            setAdjReason('');
+            setWarning('Корректировка создана');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка создания');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // V3: Провести корректировку
+    const postAdjustmentHandler = async (id: number) => {
+        if (isSubmitting) return;
+        setIsSubmitting(true);
+        try {
+            await axios.post(`${API_URL}/api/production-v2/adjustments/${id}/post`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await loadAdjustments();
+            setWarning('Корректировка проведена');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка проведения');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // V3: Аннулировать корректировку
+    const voidAdjustmentHandler = async (id: number) => {
+        if (isSubmitting) return;
+        const reason = prompt('Причина аннулирования:');
+        if (reason === null) return;
+        setIsSubmitting(true);
+        try {
+            await axios.post(`${API_URL}/api/production-v2/adjustments/${id}/void`,
+                { reason },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await loadAdjustments();
+            setWarning('Корректировка аннулирована');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка аннулирования');
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    // V3: Удалить корректировку (только draft)
+    const deleteAdjustmentHandler = async (id: number) => {
+        if (isSubmitting) return;
+        if (!confirm('Удалить корректировку?')) return;
+        setIsSubmitting(true);
+        try {
+            await axios.delete(`${API_URL}/api/production-v2/adjustments/${id}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await loadAdjustments();
+            setWarning('Корректировка удалена');
+            setTimeout(() => setWarning(null), 2000);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка удаления');
+        } finally {
+            setIsSubmitting(false);
         }
     };
 
@@ -821,7 +997,7 @@ export default function ProductionV3Page() {
                 </h1>
             </div>
 
-            {/* Табы: Выработка / Списание */}
+            {/* Табы: Выработка / Списание / Корректировки */}
             <div className="flex gap-2 mb-4">
                 <button
                     onClick={() => setActiveMainTab('production')}
@@ -840,6 +1016,15 @@ export default function ProductionV3Page() {
                         }`}
                 >
                     📤 Списание
+                </button>
+                <button
+                    onClick={() => { setActiveMainTab('adjustments'); loadAdjustments(); }}
+                    className={`px-4 py-2 rounded-lg font-medium transition-all ${activeMainTab === 'adjustments'
+                        ? 'bg-orange-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                >
+                    ⚙️ Корректировки
                 </button>
             </div>
 
@@ -866,611 +1051,775 @@ export default function ProductionV3Page() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-[20%_15%_1fr] gap-3 flex-1 overflow-hidden">
-                {/* Левая панель - Журнал */}
-                <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 1 ? 'hidden' : ''}`}>
-                    <div className="p-4 border-b border-gray-200">
-                        <h2 className="font-semibold mb-2 flex items-center justify-between text-gray-800">
-                            Журнал производства
-                            {(loading || combinedLoading) && <span className="text-xs text-gray-400 animate-pulse">загрузка...</span>}
+            {/* V3: Adjustments Tab Content */}
+            {activeMainTab === 'adjustments' && (
+                <div className="bg-white rounded-xl shadow-lg p-6 flex-1 overflow-auto">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="font-semibold text-lg text-gray-800">
+                            Корректировки
+                            {adjustmentsLoading && <span className="text-xs text-gray-400 animate-pulse ml-2">загрузка...</span>}
                         </h2>
+                        <button
+                            onClick={() => setShowAdjustmentModal(true)}
+                            className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg flex items-center gap-1"
+                        >
+                            <Plus size={16} /> Создать
+                        </button>
+                    </div>
 
-                        {/* Фильтры дат */}
-                        <div className="flex gap-2 mb-3">
-                            <div className="flex-1">
-                                <label className="text-xs text-gray-500 block mb-1">Дата С</label>
-                                <input type="date" className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-sm"
-                                    value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-                            </div>
-                            <div className="flex-1">
-                                <label className="text-xs text-gray-500 block mb-1">Дата По</label>
-                                <input type="date" className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-sm"
-                                    value={dateTo} onChange={e => setDateTo(e.target.value)} />
-                            </div>
-                        </div>
-
-                        {/* Поиск */}
-                        <div className="relative mb-3">
-                            <Search className="absolute left-2 top-2.5 text-gray-400" size={16} />
-                            <input type="text" placeholder="Поиск..." className="w-full bg-white border border-gray-300 rounded pl-8 pr-3 py-2 text-sm"
-                                value={productSearch} onChange={e => setProductSearch(e.target.value)} />
-                        </div>
-
-                        {/* Кнопки действий */}
-                        <div className="flex gap-2 flex-wrap">
-                            <Button onClick={loadCombinedItems} className="flex-1 bg-indigo-600 hover:bg-indigo-700">
-                                <Download size={16} className="mr-1" /> Загрузить
-                            </Button>
-                            {selectedCombinedIds.size > 0 && (
-                                <Button
-                                    variant="outline"
-                                    onClick={() => {
-                                        const newMarked = new Set(markedForDeletion);
-                                        selectedCombinedIds.forEach(id => newMarked.add(id));
-                                        setMarkedForDeletion(newMarked);
-                                        setSelectedCombinedIds(new Set());
-                                    }}
-                                    className="text-red-600 border-red-300 hover:bg-red-50"
-                                >
-                                    <Trash2 size={16} className="mr-1" /> Скрыть ({selectedCombinedIds.size})
-                                </Button>
-                            )}
-                        </div>
-                        {markedForDeletion.size > 0 && (
-                            <button
-                                onClick={() => setShowMarkedItems(!showMarkedItems)}
-                                className="text-xs text-gray-500 hover:text-gray-700 underline mt-2"
-                            >
-                                {showMarkedItems ? 'Скрыть помеченные' : `Показать помеченные (${markedForDeletion.size})`}
-                            </button>
+                    {/* Adjustments List */}
+                    <div className="space-y-2">
+                        {adjustments.length === 0 ? (
+                            <div className="text-center text-gray-400 py-10">Нет корректировок за выбранную дату</div>
+                        ) : (
+                            adjustments.map(adj => (
+                                <div key={adj.id} className={`border rounded-lg p-3 flex justify-between items-center ${adj.status === 'voided' ? 'bg-red-50 border-red-200' :
+                                    adj.status === 'posted' ? 'bg-green-50 border-green-200' :
+                                        'bg-yellow-50 border-yellow-200'
+                                    }`}>
+                                    <div>
+                                        <div className="font-medium">{adj.product.name}</div>
+                                        <div className="text-sm text-gray-500">
+                                            <span className="font-mono">{adj.product.code}</span>
+                                            <span className="mx-2">•</span>
+                                            <span className={adj.deltaWeight > 0 ? 'text-green-600' : 'text-red-600'}>
+                                                {adj.deltaWeight > 0 ? '+' : ''}{adj.deltaWeight} кг
+                                            </span>
+                                            {adj.reason && <span className="mx-2">• {adj.reason}</span>}
+                                        </div>
+                                        <div className="text-xs text-gray-400 mt-1">
+                                            {new Date(adj.adjustmentDate).toLocaleDateString('ru-RU')}
+                                            {adj.creator && ` • ${adj.creator.name}`}
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`px-2 py-1 rounded text-xs font-medium ${adj.status === 'posted' ? 'bg-green-100 text-green-700' :
+                                            adj.status === 'voided' ? 'bg-red-100 text-red-700' :
+                                                'bg-yellow-100 text-yellow-700'
+                                            }`}>
+                                            {adj.status === 'posted' ? '✓ Проведён' :
+                                                adj.status === 'voided' ? '✕ Аннулирован' :
+                                                    '○ Черновик'}
+                                        </span>
+                                        {adj.status === 'draft' && (
+                                            <>
+                                                <button onClick={() => postAdjustmentHandler(adj.id)} className="text-green-600 hover:text-green-800 text-sm">Провести</button>
+                                                <button onClick={() => deleteAdjustmentHandler(adj.id)} className="text-red-600 hover:text-red-800 text-sm">Удалить</button>
+                                            </>
+                                        )}
+                                        {adj.status === 'posted' && (
+                                            <button onClick={() => voidAdjustmentHandler(adj.id)} className="text-red-600 hover:text-red-800 text-sm">Аннулировать</button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))
                         )}
                     </div>
 
-                    {/* Объединённый список (закуп + остатки) */}
-                    <div className="flex-1 overflow-auto">
-                        {combinedLoading ? (
-                            <div className="text-center text-gray-400 py-8">
-                                <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto mb-2"></div>
-                                Загрузка данных...
-                            </div>
-                        ) : displayedItems.length === 0 ? (
-                            <div className="text-center text-gray-400 py-8">
-                                <Package size={32} className="mx-auto mb-2 text-gray-300" />
-                                <p>Нет данных за выбранный период</p>
-                                <p className="text-xs mt-1">Нажмите "Загрузить данные"</p>
-                            </div>
-                        ) : (
-                            <>
-                                {/* Счётчик */}
-                                <div className="p-2 border-b bg-gray-50 text-sm text-gray-600">
-                                    Найдено: <span className="font-semibold">{displayedItems.filter(item =>
-                                        item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
-                                        item.productCode.toLowerCase().includes(productSearch.toLowerCase())
-                                    ).length}</span> позиций
+                    {/* Create Adjustment Modal */}
+                    {showAdjustmentModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                            <div className="bg-white rounded-lg p-6 w-full max-w-md">
+                                <h3 className="font-semibold text-lg mb-4">Новая корректировка</h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-sm text-gray-600 block mb-1">Товар</label>
+                                        <select
+                                            value={adjProductId || ''}
+                                            onChange={e => setAdjProductId(Number(e.target.value))}
+                                            className="w-full border rounded px-3 py-2"
+                                        >
+                                            <option value="">-- Выберите товар --</option>
+                                            {products.map(p => (
+                                                <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-600 block mb-1">Вес (кг) - положительный или отрицательный</label>
+                                        <input
+                                            type="number"
+                                            step="0.001"
+                                            value={adjDeltaWeight}
+                                            onChange={e => setAdjDeltaWeight(e.target.value)}
+                                            className="w-full border rounded px-3 py-2"
+                                            placeholder="-5.5 или +10"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm text-gray-600 block mb-1">Причина</label>
+                                        <textarea
+                                            value={adjReason}
+                                            onChange={e => setAdjReason(e.target.value)}
+                                            className="w-full border rounded px-3 py-2"
+                                            placeholder="Коррекция выхода, пересортица..."
+                                            rows={2}
+                                        />
+                                    </div>
                                 </div>
+                                <div className="flex justify-end gap-2 mt-4">
+                                    <button
+                                        onClick={() => { setShowAdjustmentModal(false); setAdjProductId(null); setAdjDeltaWeight(''); setAdjReason(''); }}
+                                        className="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100"
+                                    >
+                                        Отмена
+                                    </button>
+                                    <button
+                                        onClick={createAdjustmentHandler}
+                                        disabled={isSubmitting}
+                                        className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded disabled:bg-gray-400"
+                                    >
+                                        Создать
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
 
-                                {/* Список позиций */}
-                                {displayedItems
-                                    .filter(item =>
-                                        item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
-                                        item.productCode.toLowerCase().includes(productSearch.toLowerCase())
-                                    )
-                                    .map(item => (
-                                        <div key={item.productId}
-                                            className={`px-3 py-3 border-b cursor-pointer transition-colors ${selectedCombinedItem?.productId === item.productId
-                                                ? 'bg-indigo-50 border-l-4 border-indigo-500'
-                                                : selectedCombinedIds.has(item.productId)
-                                                    ? 'bg-yellow-50 border-l-4 border-yellow-400'
-                                                    : 'hover:bg-gray-50'
-                                                }`}
-                                            onClick={async () => {
-                                                // Фильтр дат для поиска run'а
-                                                const fromDate = new Date(dateFrom);
-                                                fromDate.setHours(0, 0, 0, 0);
-                                                const toDate = new Date(dateTo);
-                                                toDate.setHours(23, 59, 59, 999);
+            {/* Production/Writeoff Grid (скрывается при adjustments) */}
+            {activeMainTab !== 'adjustments' && (
+                <div className="grid grid-cols-1 md:grid-cols-[20%_15%_1fr] gap-3 flex-1 overflow-hidden">
+                    {/* Левая панель - Журнал */}
+                    <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 1 ? 'hidden' : ''}`}>
+                        <div className="p-4 border-b border-gray-200">
+                            <h2 className="font-semibold mb-2 flex items-center justify-between text-gray-800">
+                                Журнал производства
+                                {(loading || combinedLoading) && <span className="text-xs text-gray-400 animate-pulse">загрузка...</span>}
+                            </h2>
 
-                                                // Ищем run для этого товара В ПРЕДЕЛАХ текущего фильтра дат
-                                                const existingRun = runs.find(r => {
-                                                    if (r.productId !== item.productId || r.isHidden) return false;
-                                                    const runDate = new Date(r.productionDate);
-                                                    return runDate >= fromDate && runDate <= toDate;
-                                                });
+                            {/* Фильтры дат */}
+                            <div className="flex gap-2 mb-3">
+                                <div className="flex-1">
+                                    <label className="text-xs text-gray-500 block mb-1">Дата С</label>
+                                    <input type="date" className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-sm"
+                                        value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+                                </div>
+                                <div className="flex-1">
+                                    <label className="text-xs text-gray-500 block mb-1">Дата По</label>
+                                    <input type="date" className="w-full bg-white border border-gray-300 rounded px-2 py-1 text-sm"
+                                        value={dateTo} onChange={e => setDateTo(e.target.value)} />
+                                </div>
+                            </div>
 
-                                                // Проверяем: если товар уже выбран — не перезагружаем вообще
+                            {/* Поиск */}
+                            <div className="relative mb-3">
+                                <Search className="absolute left-2 top-2.5 text-gray-400" size={16} />
+                                <input type="text" placeholder="Поиск..." className="w-full bg-white border border-gray-300 rounded pl-8 pr-3 py-2 text-sm"
+                                    value={productSearch} onChange={e => setProductSearch(e.target.value)} />
+                            </div>
 
-                                                if (selectedRun?.productId === item.productId) {
-                                                    return;
-                                                }
+                            {/* Кнопки действий */}
+                            <div className="flex gap-2 flex-wrap">
+                                <Button onClick={loadCombinedItems} className="flex-1 bg-indigo-600 hover:bg-indigo-700">
+                                    <Download size={16} className="mr-1" /> Загрузить
+                                </Button>
+                                {selectedCombinedIds.size > 0 && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => {
+                                            const newMarked = new Set(markedForDeletion);
+                                            selectedCombinedIds.forEach(id => newMarked.add(id));
+                                            setMarkedForDeletion(newMarked);
+                                            setSelectedCombinedIds(new Set());
+                                        }}
+                                        className="text-red-600 border-red-300 hover:bg-red-50"
+                                    >
+                                        <Trash2 size={16} className="mr-1" /> Скрыть ({selectedCombinedIds.size})
+                                    </Button>
+                                )}
+                            </div>
+                            {markedForDeletion.size > 0 && (
+                                <button
+                                    onClick={() => setShowMarkedItems(!showMarkedItems)}
+                                    className="text-xs text-gray-500 hover:text-gray-700 underline mt-2"
+                                >
+                                    {showMarkedItems ? 'Скрыть помеченные' : `Показать помеченные (${markedForDeletion.size})`}
+                                </button>
+                            )}
+                        </div>
 
-                                                setSelectedCombinedItem(item);
-                                                if (isMobile) setMobileLevel(2);
+                        {/* Объединённый список (закуп + остатки) */}
+                        <div className="flex-1 overflow-auto">
+                            {combinedLoading ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <div className="animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto mb-2"></div>
+                                    Загрузка данных...
+                                </div>
+                            ) : displayedItems.length === 0 ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <Package size={32} className="mx-auto mb-2 text-gray-300" />
+                                    <p>Нет данных за выбранный период</p>
+                                    <p className="text-xs mt-1">Нажмите "Загрузить данные"</p>
+                                </div>
+                            ) : (
+                                <>
+                                    {/* Счётчик */}
+                                    <div className="p-2 border-b bg-gray-50 text-sm text-gray-600">
+                                        Найдено: <span className="font-semibold">{displayedItems.filter(item =>
+                                            item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
+                                            item.productCode.toLowerCase().includes(productSearch.toLowerCase())
+                                        ).length}</span> позиций
+                                    </div>
 
-                                                if (existingRun) {
-                                                    // Загружаем существующую выработку
-                                                    await loadRunDetails(existingRun.id);
-                                                } else {
-                                                    // Создаём новую выработку только если нет существующей
-                                                    try {
-                                                        const sourceType = item.purchaseQty > 0 ? 'PURCHASE' : 'OPENING_BALANCE';
-                                                        const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
-                                                            productId: item.productId,
-                                                            sourceType,
-                                                            productionDate: dateFrom,
-                                                            plannedWeight: item.totalQty
-                                                        }, {
-                                                            headers: { Authorization: `Bearer ${token}` }
-                                                        });
-                                                        const newRun = res.data.run || res.data;
-                                                        setRuns([newRun, ...runs]);
-                                                        await loadRunDetails(newRun.id);
-                                                    } catch (err: any) {
-                                                        if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
-                                                            setWarning('У этого товара нет MML структуры');
-                                                            setTimeout(() => setWarning(null), 3000);
-                                                        } else {
-                                                            console.error('Failed to create run:', err);
+                                    {/* Список позиций */}
+                                    {displayedItems
+                                        .filter(item =>
+                                            item.productName.toLowerCase().includes(productSearch.toLowerCase()) ||
+                                            item.productCode.toLowerCase().includes(productSearch.toLowerCase())
+                                        )
+                                        .map(item => (
+                                            <div key={item.productId}
+                                                className={`px-3 py-3 border-b cursor-pointer transition-colors ${selectedCombinedItem?.productId === item.productId
+                                                    ? 'bg-indigo-50 border-l-4 border-indigo-500'
+                                                    : selectedCombinedIds.has(item.productId)
+                                                        ? 'bg-yellow-50 border-l-4 border-yellow-400'
+                                                        : 'hover:bg-gray-50'
+                                                    }`}
+                                                onClick={async () => {
+                                                    // Фильтр дат для поиска run'а
+                                                    const fromDate = new Date(dateFrom);
+                                                    fromDate.setHours(0, 0, 0, 0);
+                                                    const toDate = new Date(dateTo);
+                                                    toDate.setHours(23, 59, 59, 999);
+
+                                                    // Ищем run для этого товара В ПРЕДЕЛАХ текущего фильтра дат
+                                                    const existingRun = runs.find(r => {
+                                                        if (r.productId !== item.productId || r.isHidden) return false;
+                                                        const runDate = new Date(r.productionDate);
+                                                        return runDate >= fromDate && runDate <= toDate;
+                                                    });
+
+                                                    // Проверяем: если товар уже выбран — не перезагружаем вообще
+
+                                                    if (selectedRun?.productId === item.productId) {
+                                                        return;
+                                                    }
+
+                                                    setSelectedCombinedItem(item);
+                                                    if (isMobile) setMobileLevel(2);
+
+                                                    if (existingRun) {
+                                                        // Загружаем существующую выработку
+                                                        await loadRunDetails(existingRun.id);
+                                                    } else {
+                                                        // Создаём новую выработку только если нет существующей
+                                                        try {
+                                                            const sourceType = item.purchaseQty > 0 ? 'PURCHASE' : 'OPENING_BALANCE';
+                                                            const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
+                                                                productId: item.productId,
+                                                                sourceType,
+                                                                productionDate: dateFrom,
+                                                                plannedWeight: item.totalQty
+                                                            }, {
+                                                                headers: { Authorization: `Bearer ${token}` }
+                                                            });
+                                                            const newRun = res.data.run || res.data;
+                                                            setRuns([newRun, ...runs]);
+                                                            await loadRunDetails(newRun.id);
+                                                        } catch (err: any) {
+                                                            if (err.response?.status === 400 && err.response?.data?.error?.includes('MML')) {
+                                                                setWarning('У этого товара нет MML структуры');
+                                                                setTimeout(() => setWarning(null), 3000);
+                                                            } else {
+                                                                console.error('Failed to create run:', err);
+                                                            }
                                                         }
                                                     }
-                                                }
-                                            }}>
-                                            <div className="flex items-start gap-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={selectedCombinedIds.has(item.productId)}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        const newSet = new Set(selectedCombinedIds);
-                                                        if (newSet.has(item.productId)) {
-                                                            newSet.delete(item.productId);
-                                                        } else {
-                                                            newSet.add(item.productId);
-                                                        }
-                                                        setSelectedCombinedIds(newSet);
-                                                    }}
-                                                    onChange={() => { }}
-                                                    className="w-4 h-4 mt-1 accent-indigo-600"
-                                                />
-                                                <div className="flex-1 min-w-0">
-                                                    {/* Название товара */}
-                                                    <div className="font-medium text-sm truncate text-gray-800">{item.productName}</div>
-                                                    {/* Код товара */}
-                                                    <div className="text-xs text-gray-400">Код: {item.productCode}</div>
-                                                    {/* IDN закупки */}
-                                                    {item.purchaseDetails && item.purchaseDetails.length > 0 && (
-                                                        <div className="text-xs text-indigo-500 font-mono">{item.purchaseDetails[0].idn}</div>
-                                                    )}
-                                                    {/* Пункт 8 ТЗ: Даты закупки и выработки */}
-                                                    <div className="flex flex-wrap gap-2 text-xs mb-1 mt-1">
+                                                }}>
+                                                <div className="flex items-start gap-2">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={selectedCombinedIds.has(item.productId)}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const newSet = new Set(selectedCombinedIds);
+                                                            if (newSet.has(item.productId)) {
+                                                                newSet.delete(item.productId);
+                                                            } else {
+                                                                newSet.add(item.productId);
+                                                            }
+                                                            setSelectedCombinedIds(newSet);
+                                                        }}
+                                                        onChange={() => { }}
+                                                        className="w-4 h-4 mt-1 accent-indigo-600"
+                                                    />
+                                                    <div className="flex-1 min-w-0">
+                                                        {/* Название товара */}
+                                                        <div className="font-medium text-sm truncate text-gray-800">{item.productName}</div>
+                                                        {/* Код товара */}
+                                                        <div className="text-xs text-gray-400">Код: {item.productCode}</div>
+                                                        {/* IDN закупки */}
                                                         {item.purchaseDetails && item.purchaseDetails.length > 0 && (
-                                                            <span className="text-gray-500">
-                                                                📅 Закуп: {new Date(item.purchaseDetails[0].date).toLocaleDateString('ru-RU')}
-                                                            </span>
+                                                            <div className="text-xs text-indigo-500 font-mono">{item.purchaseDetails[0].idn}</div>
                                                         )}
-                                                        {(() => {
-                                                            // Приоритет: если есть выбранный run для этого товара — показываем РЕДАКТИРУЕМУЮ дату
-                                                            const isSelected = selectedRun?.productId === item.productId;
-
-                                                            // Ищем run в пределах текущего фильтра дат
-                                                            const fromDate = new Date(dateFrom);
-                                                            fromDate.setHours(0, 0, 0, 0);
-                                                            const toDateObj = new Date(dateTo);
-                                                            toDateObj.setHours(23, 59, 59, 999);
-
-                                                            const productRun = isSelected
-                                                                ? selectedRun
-                                                                : runs.find(r => {
-                                                                    if (r.productId !== item.productId || r.isHidden) return false;
-                                                                    const runDate = new Date(r.productionDate);
-                                                                    return runDate >= fromDate && runDate <= toDateObj;
-                                                                });
-
-                                                            // Если это выбранный товар - показываем editProductionDate (то что в инпуте справа)
-                                                            // Иначе - показываем дату из productRun
-                                                            const displayDate = isSelected && editProductionDate
-                                                                ? editProductionDate
-                                                                : productRun?.productionDate;
-
-                                                            return displayDate ? (
+                                                        {/* Пункт 8 ТЗ: Даты закупки и выработки */}
+                                                        <div className="flex flex-wrap gap-2 text-xs mb-1 mt-1">
+                                                            {item.purchaseDetails && item.purchaseDetails.length > 0 && (
                                                                 <span className="text-gray-500">
-                                                                    🏭 Выработка: {new Date(displayDate).toLocaleDateString('ru-RU')}
+                                                                    📅 Закуп: {new Date(item.purchaseDetails[0].date).toLocaleDateString('ru-RU')}
                                                                 </span>
-                                                            ) : null;
-                                                        })()}
-                                                    </div>
-                                                    {/* Маркеры количества - ВЕРТИКАЛЬНЫЙ LAYOUT */}
-                                                    <div className="flex flex-col gap-1 text-xs">
-                                                        {item.purchaseQty > 0 && (
-                                                            <div className="flex items-center gap-1">
-                                                                <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                                                                <span className="text-gray-600">Закуп:</span>
-                                                                <span className="font-medium text-green-700">{formatNumber(item.purchaseQty, 1)} кг</span>
-                                                            </div>
-                                                        )}
-                                                        {item.balanceQty > 0 && (
-                                                            <div className="flex items-center gap-1">
-                                                                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                                                <span className="text-gray-600">Остаток:</span>
-                                                                <span className="font-medium text-blue-700">{formatNumber(item.balanceQty, 1)} кг</span>
-                                                            </div>
-                                                        )}
-                                                        <div className="flex items-center gap-1">
-                                                            <span className="w-2 h-2 rounded-full bg-orange-500"></span>
-                                                            <span className="text-gray-600">Выработано:</span>
-                                                            <span className="font-medium text-orange-700">{formatNumber(getYieldByProductId(item.productId), 1)} кг</span>
-                                                        </div>
-                                                        {(() => {
-                                                            const remaining = (item.purchaseQty || 0) + (item.balanceQty || 0) - getYieldByProductId(item.productId);
-                                                            return (
-                                                                <div className="flex items-center gap-1">
-                                                                    <span className={`w-2 h-2 rounded-full ${remaining < 0 ? 'bg-red-600' : remaining > 0 ? 'bg-amber-500' : 'bg-gray-400'}`}></span>
-                                                                    <span className="text-gray-600">Осталось:</span>
-                                                                    <span className={`font-semibold ${remaining < 0 ? 'text-red-600' : remaining > 0 ? 'text-amber-600' : 'text-gray-500'}`}>
-                                                                        {formatNumber(remaining, 1)} кг
+                                                            )}
+                                                            {(() => {
+                                                                // Приоритет: если есть выбранный run для этого товара — показываем РЕДАКТИРУЕМУЮ дату
+                                                                const isSelected = selectedRun?.productId === item.productId;
+
+                                                                // Ищем run в пределах текущего фильтра дат
+                                                                const fromDate = new Date(dateFrom);
+                                                                fromDate.setHours(0, 0, 0, 0);
+                                                                const toDateObj = new Date(dateTo);
+                                                                toDateObj.setHours(23, 59, 59, 999);
+
+                                                                const productRun = isSelected
+                                                                    ? selectedRun
+                                                                    : runs.find(r => {
+                                                                        if (r.productId !== item.productId || r.isHidden) return false;
+                                                                        const runDate = new Date(r.productionDate);
+                                                                        return runDate >= fromDate && runDate <= toDateObj;
+                                                                    });
+
+                                                                // Если это выбранный товар - показываем editProductionDate (то что в инпуте справа)
+                                                                // Иначе - показываем дату из productRun
+                                                                const displayDate = isSelected && editProductionDate
+                                                                    ? editProductionDate
+                                                                    : productRun?.productionDate;
+
+                                                                return displayDate ? (
+                                                                    <span className="text-gray-500">
+                                                                        🏭 Выработка: {new Date(displayDate).toLocaleDateString('ru-RU')}
                                                                     </span>
+                                                                ) : null;
+                                                            })()}
+                                                        </div>
+                                                        {/* Маркеры количества - ВЕРТИКАЛЬНЫЙ LAYOUT */}
+                                                        <div className="flex flex-col gap-1 text-xs">
+                                                            {item.purchaseQty > 0 && (
+                                                                <div className="flex items-center gap-1">
+                                                                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                                                                    <span className="text-gray-600">Закуп:</span>
+                                                                    <span className="font-medium text-green-700">{formatNumber(item.purchaseQty, 1)} кг</span>
                                                                 </div>
-                                                            );
-                                                        })()}
+                                                            )}
+                                                            {item.balanceQty > 0 && (
+                                                                <div className="flex items-center gap-1">
+                                                                    <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                                                    <span className="text-gray-600">Остаток:</span>
+                                                                    <span className="font-medium text-blue-700">{formatNumber(item.balanceQty, 1)} кг</span>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex items-center gap-1">
+                                                                <span className="w-2 h-2 rounded-full bg-orange-500"></span>
+                                                                <span className="text-gray-600">Выработано:</span>
+                                                                <span className="font-medium text-orange-700">{formatNumber(getYieldByProductId(item.productId), 1)} кг</span>
+                                                            </div>
+                                                            {(() => {
+                                                                const remaining = (item.purchaseQty || 0) + (item.balanceQty || 0) - getYieldByProductId(item.productId);
+                                                                return (
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className={`w-2 h-2 rounded-full ${remaining < 0 ? 'bg-red-600' : remaining > 0 ? 'bg-amber-500' : 'bg-gray-400'}`}></span>
+                                                                        <span className="text-gray-600">Осталось:</span>
+                                                                        <span className={`font-semibold ${remaining < 0 ? 'text-red-600' : remaining > 0 ? 'text-amber-600' : 'text-gray-500'}`}>
+                                                                            {formatNumber(remaining, 1)} кг
+                                                                        </span>
+                                                                    </div>
+                                                                );
+                                                            })()}
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    ))}
-                            </>
-                        )}
-                    </div>
-
-
-                </div>
-
-                {/* СРЕДНЯЯ ПАНЕЛЬ - Вертикальные табы категорий */}
-                <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 2 ? 'hidden' : ''}`}>
-                    <div className="p-3 border-b bg-gradient-to-r from-indigo-50 to-purple-50">
-                        <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                            <List size={16} className="text-indigo-600" />
-                            Категории MML
-                        </h3>
-                        <p className="text-xs text-gray-500 mt-1">Выберите категорию для редактирования</p>
-                    </div>
-                    <div className="flex-1 overflow-auto p-2 space-y-1">
-                        {!selectedRun ? (
-                            <div className="text-center text-gray-400 py-8">
-                                <Package size={32} className="mx-auto mb-2 text-gray-300" />
-                                <p className="text-sm">Сначала выберите позицию</p>
-                            </div>
-                        ) : categories.length === 0 ? (
-                            <div className="text-center text-gray-400 py-8">
-                                <Package size={32} className="mx-auto mb-2 text-gray-300" />
-                                <p className="text-sm">Нет категорий</p>
-                            </div>
-                        ) : (
-                            categories.map(cat => {
-                                const catTotal = cat.nodes.reduce((sum, node) => {
-                                    const entries = runValues.get(node.id) || [];
-                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                }, 0);
-                                const isActive = activeCategory === cat.category;
-                                return (
-                                    <button
-                                        key={cat.category}
-                                        onClick={() => { setActiveCategory(cat.category); if (isMobile) setMobileLevel(3); }}
-                                        className={`w-full text-left px-3 py-3 rounded-lg transition-all ${isActive
-                                            ? 'bg-indigo-600 text-white shadow-md'
-                                            : 'bg-gray-50 hover:bg-gray-100 text-gray-700'
-                                            }`}
-                                    >
-                                        <div className="font-medium text-sm truncate">{cat.category}</div>
-                                        <div className={`text-xs mt-1 flex gap-1 ${isActive ? 'text-indigo-200' : ''}`}>
-                                            <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-green-100 text-green-700'}`}>
-                                                {cat.nodes.length} поз.
-                                            </span>
-                                            <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-purple-100 text-purple-700'}`}>
-                                                {formatNumber(catTotal, 1)} кг
-                                            </span>
-                                        </div>
-                                    </button>
-                                );
-                            })
-                        )}
-                    </div>
-                    {/* Итого по всем категориям */}
-                    {selectedRun && (
-                        <div className="p-3 border-t bg-indigo-50">
-                            <div className="flex justify-between items-center">
-                                <span className="text-sm font-medium text-gray-600">Итого:</span>
-                                <span className="text-lg font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 3)} кг</span>
-                            </div>
+                                        ))}
+                                </>
+                            )}
                         </div>
-                    )}
-                </div>
 
-                {/* ПРАВАЯ ПАНЕЛЬ - Детали */}
-                <div className={`bg-white rounded-lg shadow flex flex-col overflow-hidden ${isMobile && mobileLevel !== 3 ? 'hidden' : ''}`}>
-                    {/* Placeholder когда нет выбранной выработки */}
-                    {!selectedRun && (
-                        <div className="flex-1 flex items-center justify-center text-gray-400">
-                            <div className="text-center">
-                                <Package size={48} className="mx-auto mb-4 text-gray-300" />
-                                <p>Выберите позицию слева</p>
-                                <p className="text-sm mt-1">Выработка создастся автоматически</p>
-                            </div>
+
+                    </div>
+
+                    {/* СРЕДНЯЯ ПАНЕЛЬ - Вертикальные табы категорий */}
+                    <div className={`bg-white rounded-xl shadow-lg flex flex-col border border-gray-200 overflow-hidden ${isMobile && mobileLevel !== 2 ? 'hidden' : ''}`}>
+                        <div className="p-3 border-b bg-gradient-to-r from-indigo-50 to-purple-50">
+                            <h3 className="font-semibold text-gray-800 flex items-center gap-2">
+                                <List size={16} className="text-indigo-600" />
+                                Категории MML
+                            </h3>
+                            <p className="text-xs text-gray-500 mt-1">Выберите категорию для редактирования</p>
                         </div>
-                    )}
-
-                    {/* Детали выработки (для всех вкладок когда выбрана выработка) */}
-                    {selectedRun && (
-                        <>
-                            {/* Шапка - ультракомпактная */}
-                            <div className="px-2 py-1 border-b bg-gray-50 flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                    <h3 className="font-semibold text-sm">{selectedRun.product.name}</h3>
-                                    <div className="text-xs text-gray-500 flex items-center gap-2">
-                                        <span className="flex items-center gap-0.5"><User size={10} /> {selectedRun.user?.name}</span>
-                                        <span className="flex items-center gap-0.5"><Calendar size={10} /> {new Date(selectedRun.productionDate).toLocaleDateString('ru-RU')}</span>
-                                        <span className={`px-1 py-0 rounded text-xs ${selectedRun.isLocked ? 'bg-gray-200' : 'bg-yellow-100 text-yellow-800'}`}>
-                                            {selectedRun.isLocked ? 'Зафикс.' : 'Ред.'}
-                                        </span>
-                                    </div>
+                        <div className="flex-1 overflow-auto p-2 space-y-1">
+                            {!selectedRun ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <Package size={32} className="mx-auto mb-2 text-gray-300" />
+                                    <p className="text-sm">Сначала выберите позицию</p>
                                 </div>
-                                <div>
-                                    {!selectedRun.isLocked ? (
-                                        <button onClick={saveRunValues} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded flex items-center gap-1">
-                                            <Save size={12} /> Сохранить
-                                        </button>
-                                    ) : (
-                                        <button onClick={() => toggleRunLock(selectedRun.id)} className="text-xs bg-gray-500 hover:bg-gray-600 text-white px-2 py-1 rounded flex items-center gap-1">
-                                            <Edit2 size={12} /> Ред.
-                                        </button>
-                                    )}
+                            ) : categories.length === 0 ? (
+                                <div className="text-center text-gray-400 py-8">
+                                    <Package size={32} className="mx-auto mb-2 text-gray-300" />
+                                    <p className="text-sm">Нет категорий</p>
                                 </div>
-                            </div>
-
-                            {/* Поля — ультракомпактный дизайн */}
-                            <div className="px-2 py-1 border-b bg-white">
-                                <div className="grid grid-cols-5 gap-1 items-end">
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 block">Дата</label>
-                                        <input type="date" className="w-full border rounded px-1 py-0.5 text-xs disabled:bg-gray-100"
-                                            value={editProductionDate} onChange={e => setEditProductionDate(e.target.value)} disabled={selectedRun.isLocked} />
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 block">
-                                            <span className="inline-block w-1 h-1 bg-green-500 rounded-full mr-0.5"></span>Закуп
-                                        </label>
-                                        <div className="border rounded px-1 py-0.5 text-xs bg-green-50 font-medium text-green-700">
-                                            {formatNumber(currentCombinedItem?.purchaseQty || 0, 1)}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 block">
-                                            <span className="inline-block w-1 h-1 bg-blue-500 rounded-full mr-0.5"></span>Остаток
-                                        </label>
-                                        <div className="border rounded px-1 py-0.5 text-xs bg-blue-50 font-medium text-blue-700">
-                                            {formatNumber(currentCombinedItem?.balanceQty || 0, 1)}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 block">
-                                            <span className="inline-block w-1 h-1 bg-purple-500 rounded-full mr-0.5"></span>Итого
-                                        </label>
-                                        <div className="border rounded px-1 py-0.5 text-xs bg-purple-50 font-bold text-purple-700">
-                                            {formatNumber(currentCombinedItem?.totalQty || 0, 1)}
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="text-[10px] text-gray-500 block">
-                                            <span className="inline-block w-1 h-1 bg-orange-500 rounded-full mr-0.5"></span>Факт
-                                        </label>
-                                        <div className="border rounded px-1 py-0.5 text-xs bg-orange-50 font-bold text-orange-600">
-                                            {formatNumber(calculateActualWeight(), 1)}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Таблица деталей категории - INLINE КОМПАКТНАЯ */}
-                            <div className="flex-1 overflow-auto px-3 py-2">
-                                <div className="flex justify-between items-center mb-2">
-                                    <div>
-                                        <h4 className="font-semibold text-sm text-gray-800">{activeCategory || 'Выберите категорию'}</h4>
-                                        <p className="text-gray-500 text-xs">{activeCategoryNodes.length} позиций</p>
-                                    </div>
-                                    <div className="flex items-center gap-2">
+                            ) : (
+                                categories.map(cat => {
+                                    const catTotal = cat.nodes.reduce((sum, node) => {
+                                        const entries = runValues.get(node.id) || [];
+                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                    }, 0);
+                                    const isActive = activeCategory === cat.category;
+                                    return (
                                         <button
-                                            className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
-                                            onClick={() => {
-                                                if (activeCategoryNodes.length > 0) {
-                                                    // Открываем модальное окно для добавления новой записи
-                                                    setSelectedNodeForValue(activeCategoryNodes[0]);
-                                                    setNewValueAmount('');
-                                                    setEditingValueId(null);
-                                                    setShowAddValueModal(true);
-                                                } else {
-                                                    setWarning('Сначала выберите категорию');
-                                                    setTimeout(() => setWarning(null), 2000);
-                                                }
-                                            }}
+                                            key={cat.category}
+                                            onClick={() => { setActiveCategory(cat.category); if (isMobile) setMobileLevel(3); }}
+                                            className={`w-full text-left px-3 py-3 rounded-lg transition-all ${isActive
+                                                ? 'bg-indigo-600 text-white shadow-md'
+                                                : 'bg-gray-50 hover:bg-gray-100 text-gray-700'
+                                                }`}
                                         >
-                                            <Plus size={14} /> Добавить строку
+                                            <div className="font-medium text-sm truncate">{cat.category}</div>
+                                            <div className={`text-xs mt-1 flex gap-1 ${isActive ? 'text-indigo-200' : ''}`}>
+                                                <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-green-100 text-green-700'}`}>
+                                                    {cat.nodes.length} поз.
+                                                </span>
+                                                <span className={`px-1.5 py-0.5 rounded ${isActive ? 'bg-indigo-500' : 'bg-purple-100 text-purple-700'}`}>
+                                                    {formatNumber(catTotal, 1)} кг
+                                                </span>
+                                            </div>
                                         </button>
-                                        <div className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded">
-                                            Итого: {formatNumber(activeCategoryNodes.reduce((sum, node) => {
-                                                const entries = runValues.get(node.id) || [];
-                                                return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                            }, 0), 3)} кг
+                                    );
+                                })
+                            )}
+                        </div>
+                        {/* Итого по всем категориям */}
+                        {selectedRun && (
+                            <div className="p-3 border-t bg-indigo-50">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-sm font-medium text-gray-600">Итого:</span>
+                                    <span className="text-lg font-bold text-indigo-700">{formatNumber(calculateActualWeight(), 3)} кг</span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* ПРАВАЯ ПАНЕЛЬ - Детали */}
+                    <div className={`bg-white rounded-lg shadow flex flex-col overflow-hidden ${isMobile && mobileLevel !== 3 ? 'hidden' : ''}`}>
+                        {/* Placeholder когда нет выбранной выработки */}
+                        {!selectedRun && (
+                            <div className="flex-1 flex items-center justify-center text-gray-400">
+                                <div className="text-center">
+                                    <Package size={48} className="mx-auto mb-4 text-gray-300" />
+                                    <p>Выберите позицию слева</p>
+                                    <p className="text-sm mt-1">Выработка создастся автоматически</p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Детали выработки (для всех вкладок когда выбрана выработка) */}
+                        {selectedRun && (
+                            <>
+                                {/* Шапка - ультракомпактная */}
+                                <div className="px-2 py-1 border-b bg-gray-50 flex justify-between items-center">
+                                    <div className="flex items-center gap-2">
+                                        <h3 className="font-semibold text-sm">{selectedRun.product.name}</h3>
+                                        <div className="text-xs text-gray-500 flex items-center gap-2">
+                                            <span className="flex items-center gap-0.5"><User size={10} /> {selectedRun.user?.name}</span>
+                                            <span className="flex items-center gap-0.5"><Calendar size={10} /> {new Date(selectedRun.productionDate).toLocaleDateString('ru-RU')}</span>
+                                            {/* V3: Status badge */}
+                                            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${selectedRun.status === 'posted' ? 'bg-green-100 text-green-700' :
+                                                selectedRun.status === 'voided' ? 'bg-red-100 text-red-700' :
+                                                    'bg-yellow-100 text-yellow-700'
+                                                }`}>
+                                                {selectedRun.status === 'posted' ? '✓ Проведён' :
+                                                    selectedRun.status === 'voided' ? '✕ Аннулирован' :
+                                                        '○ Черновик'}
+                                            </span>
+                                            {/* V3: needsReview indicator */}
+                                            {selectedRun.needsReview && (
+                                                <span className="px-1.5 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-medium">
+                                                    ⚠ Требует проверки
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                        {/* V3: Post/Void buttons */}
+                                        {selectedRun.status === 'draft' && (
+                                            <button
+                                                onClick={() => postRun(selectedRun.id)}
+                                                disabled={isSubmitting}
+                                                className="text-xs bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-2 py-1 rounded flex items-center gap-1"
+                                            >
+                                                ✓ Провести
+                                            </button>
+                                        )}
+                                        {selectedRun.status === 'posted' && (
+                                            <button
+                                                onClick={() => voidRun(selectedRun.id)}
+                                                disabled={isSubmitting}
+                                                className="text-xs bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-2 py-1 rounded flex items-center gap-1"
+                                            >
+                                                ✕ Аннулировать
+                                            </button>
+                                        )}
+                                        {/* Original save/edit buttons */}
+                                        {selectedRun.status !== 'voided' && (
+                                            !selectedRun.isLocked ? (
+                                                <button onClick={saveRunValues} className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded flex items-center gap-1">
+                                                    <Save size={12} /> Сохранить
+                                                </button>
+                                            ) : (
+                                                <button onClick={() => toggleRunLock(selectedRun.id)} className="text-xs bg-gray-500 hover:bg-gray-600 text-white px-2 py-1 rounded flex items-center gap-1">
+                                                    <Edit2 size={12} /> Ред.
+                                                </button>
+                                            )
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Поля — ультракомпактный дизайн */}
+                                <div className="px-2 py-1 border-b bg-white">
+                                    <div className="grid grid-cols-5 gap-1 items-end">
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 block">Дата</label>
+                                            <input type="date" className="w-full border rounded px-1 py-0.5 text-xs disabled:bg-gray-100"
+                                                value={editProductionDate} onChange={e => setEditProductionDate(e.target.value)} disabled={selectedRun.isLocked} />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 block">
+                                                <span className="inline-block w-1 h-1 bg-green-500 rounded-full mr-0.5"></span>Закуп
+                                            </label>
+                                            <div className="border rounded px-1 py-0.5 text-xs bg-green-50 font-medium text-green-700">
+                                                {formatNumber(currentCombinedItem?.purchaseQty || 0, 1)}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 block">
+                                                <span className="inline-block w-1 h-1 bg-blue-500 rounded-full mr-0.5"></span>Остаток
+                                            </label>
+                                            <div className="border rounded px-1 py-0.5 text-xs bg-blue-50 font-medium text-blue-700">
+                                                {formatNumber(currentCombinedItem?.balanceQty || 0, 1)}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 block">
+                                                <span className="inline-block w-1 h-1 bg-purple-500 rounded-full mr-0.5"></span>Итого
+                                            </label>
+                                            <div className="border rounded px-1 py-0.5 text-xs bg-purple-50 font-bold text-purple-700">
+                                                {formatNumber(currentCombinedItem?.totalQty || 0, 1)}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] text-gray-500 block">
+                                                <span className="inline-block w-1 h-1 bg-orange-500 rounded-full mr-0.5"></span>Факт
+                                            </label>
+                                            <div className="border rounded px-1 py-0.5 text-xs bg-orange-50 font-bold text-orange-600">
+                                                {formatNumber(calculateActualWeight(), 1)}
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                                {activeCategoryNodes.length > 0 && (
-                                    <div className="border rounded-lg overflow-hidden shadow-sm">
-                                        <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center text-xs font-semibold text-gray-700 border-b">
-                                            <input
-                                                type="checkbox"
-                                                checked={activeCategoryNodes.every(n => selectedMmlNodeIds.has(n.id))}
-                                                onChange={(e) => {
-                                                    const newSet = new Set(selectedMmlNodeIds);
-                                                    if (e.target.checked) {
-                                                        activeCategoryNodes.forEach(n => newSet.add(n.id));
-                                                    } else {
-                                                        activeCategoryNodes.forEach(n => newSet.delete(n.id));
-                                                    }
-                                                    setSelectedMmlNodeIds(newSet);
-                                                }}
-                                                className="w-4 h-4 accent-indigo-600"
-                                            />
-                                            <span>Позиция</span>
-                                            <span className="text-center text-gray-500">Код</span>
-                                            <span className="text-center text-gray-500">Пользователь</span>
-                                            <span className="text-center text-gray-500">Время</span>
-                                            <span className="text-center">Итого (кг)</span>
-                                            <span className="text-center">
-                                                {selectedMmlNodeIds.size > 0 ? (
-                                                    <button
-                                                        onClick={async () => {
-                                                            if (!selectedRun) return;
-                                                            const newValues = new Map(runValues);
-                                                            selectedMmlNodeIds.forEach(nodeId => {
-                                                                newValues.delete(nodeId);
-                                                            });
-                                                            setRunValues(newValues);
-                                                            setSelectedMmlNodeIds(new Set());
-                                                            setWarning(`Очищено ${selectedMmlNodeIds.size} позиций`);
-                                                            setTimeout(() => setWarning(null), 2000);
-                                                        }}
-                                                        className="text-red-600 hover:text-red-800"
-                                                        title={`Очистить ${selectedMmlNodeIds.size} выбранных`}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
-                                                ) : 'Действия'}
-                                            </span>
-                                        </div>
-                                        {activeCategoryNodes.map((node, idx) => {
-                                            const entries = runValues.get(node.id) || [];
-                                            const total = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                            // Пункт 3: не показывать пустые строки, КРОМЕ тех что редактируются
-                                            if (total === 0 && editingNodeId !== node.id) return null;
 
-                                            // TZ4: Показываем каждую запись как отдельную строку
-                                            return (
-                                                <div key={node.id}>
-                                                    {/* Заголовок позиции */}
-                                                    <div className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-2 border-b hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
-                                                        <input
-                                                            type="checkbox"
-                                                            checked={selectedMmlNodeIds.has(node.id)}
-                                                            onChange={(e) => {
-                                                                const newSet = new Set(selectedMmlNodeIds);
-                                                                if (e.target.checked) {
-                                                                    newSet.add(node.id);
-                                                                } else {
-                                                                    newSet.delete(node.id);
-                                                                }
-                                                                setSelectedMmlNodeIds(newSet);
+                                {/* Таблица деталей категории - INLINE КОМПАКТНАЯ */}
+                                <div className="flex-1 overflow-auto px-3 py-2">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div>
+                                            <h4 className="font-semibold text-sm text-gray-800">{activeCategory || 'Выберите категорию'}</h4>
+                                            <p className="text-gray-500 text-xs">{activeCategoryNodes.length} позиций</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1 transition-colors"
+                                                onClick={() => {
+                                                    if (activeCategoryNodes.length > 0) {
+                                                        // Открываем модальное окно для добавления новой записи
+                                                        setSelectedNodeForValue(activeCategoryNodes[0]);
+                                                        setNewValueAmount('');
+                                                        setEditingValueId(null);
+                                                        setShowAddValueModal(true);
+                                                    } else {
+                                                        setWarning('Сначала выберите категорию');
+                                                        setTimeout(() => setWarning(null), 2000);
+                                                    }
+                                                }}
+                                            >
+                                                <Plus size={14} /> Добавить строку
+                                            </button>
+                                            <div className="text-sm font-semibold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded">
+                                                Итого: {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                                    const entries = runValues.get(node.id) || [];
+                                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                }, 0), 3)} кг
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {activeCategoryNodes.length > 0 && (
+                                        <div className="border rounded-lg overflow-hidden shadow-sm">
+                                            <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-4 py-2 grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center text-xs font-semibold text-gray-700 border-b">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={activeCategoryNodes.every(n => selectedMmlNodeIds.has(n.id))}
+                                                    onChange={(e) => {
+                                                        const newSet = new Set(selectedMmlNodeIds);
+                                                        if (e.target.checked) {
+                                                            activeCategoryNodes.forEach(n => newSet.add(n.id));
+                                                        } else {
+                                                            activeCategoryNodes.forEach(n => newSet.delete(n.id));
+                                                        }
+                                                        setSelectedMmlNodeIds(newSet);
+                                                    }}
+                                                    className="w-4 h-4 accent-indigo-600"
+                                                />
+                                                <span>Позиция</span>
+                                                <span className="text-center text-gray-500">Код</span>
+                                                <span className="text-center text-gray-500">Пользователь</span>
+                                                <span className="text-center text-gray-500">Время</span>
+                                                <span className="text-center">Итого (кг)</span>
+                                                <span className="text-center">
+                                                    {selectedMmlNodeIds.size > 0 ? (
+                                                        <button
+                                                            onClick={async () => {
+                                                                if (!selectedRun) return;
+                                                                const newValues = new Map(runValues);
+                                                                selectedMmlNodeIds.forEach(nodeId => {
+                                                                    newValues.delete(nodeId);
+                                                                });
+                                                                setRunValues(newValues);
+                                                                setSelectedMmlNodeIds(new Set());
+                                                                setWarning(`Очищено ${selectedMmlNodeIds.size} позиций`);
+                                                                setTimeout(() => setWarning(null), 2000);
                                                             }}
-                                                            className="w-4 h-4 accent-indigo-600"
-                                                        />
-                                                        <span className="text-sm truncate font-medium" title={node.product.name}>{node.product.name}</span>
-                                                        <span className="text-xs text-gray-400 text-center">{node.product.code}</span>
-                                                        {/* Показываем первого пользователя или количество записей */}
-                                                        <span className="text-xs text-gray-500 truncate text-center">
-                                                            {entries.length > 1
-                                                                ? `${entries.length} записей`
-                                                                : entries.length > 0 && entries[0].staff?.fullName
-                                                                    ? entries[0].staff.fullName
-                                                                    : '—'}
-                                                        </span>
-                                                        <span className="text-xs text-gray-400 text-center">
-                                                            {entries.length === 1 && entries[0].recordedAt
-                                                                ? new Date(entries[0].recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-                                                                : entries.length > 1 ? '—' : '—'}
-                                                        </span>
-                                                        {/* Итого по позиции */}
-                                                        <div className="flex justify-center">
-                                                            <span className={`text-sm font-bold tabular-nums ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
-                                                                {total > 0 ? formatNumber(total, 3) : '—'}
-                                                            </span>
-                                                        </div>
-                                                        {/* Кнопка добавления */}
-                                                        <div className="flex items-center gap-1 justify-center">
-                                                            <button
-                                                                onClick={() => {
-                                                                    setSelectedNodeForValue(node);
-                                                                    setNewValueAmount('');
-                                                                    setEditingValueId(null);
-                                                                    setShowAddValueModal(true);
+                                                            className="text-red-600 hover:text-red-800"
+                                                            title={`Очистить ${selectedMmlNodeIds.size} выбранных`}
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    ) : 'Действия'}
+                                                </span>
+                                            </div>
+                                            {activeCategoryNodes.map((node, idx) => {
+                                                const entries = runValues.get(node.id) || [];
+                                                const total = entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                // Пункт 3: не показывать пустые строки, КРОМЕ тех что редактируются
+                                                if (total === 0 && editingNodeId !== node.id) return null;
+
+                                                // TZ4: Показываем каждую запись как отдельную строку
+                                                return (
+                                                    <div key={node.id}>
+                                                        {/* Заголовок позиции */}
+                                                        <div className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-2 border-b hover:bg-indigo-50/50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} ${selectedMmlNodeIds.has(node.id) ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={selectedMmlNodeIds.has(node.id)}
+                                                                onChange={(e) => {
+                                                                    const newSet = new Set(selectedMmlNodeIds);
+                                                                    if (e.target.checked) {
+                                                                        newSet.add(node.id);
+                                                                    } else {
+                                                                        newSet.delete(node.id);
+                                                                    }
+                                                                    setSelectedMmlNodeIds(newSet);
                                                                 }}
-                                                                className="text-green-500 hover:text-green-700 p-0.5"
-                                                                title="Добавить запись"
-                                                            >
-                                                                <Plus size={14} />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                    {/* TZ4: Отдельные строки для каждой записи */}
-                                                    {entries.map((entry, entryIdx) => (
-                                                        <div key={entry.id} className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-1.5 border-b bg-gray-50/80 text-sm`}>
-                                                            <span className="w-4"></span>
-                                                            <span className="text-xs text-gray-400 pl-4">└ Запись #{entryIdx + 1}</span>
-                                                            <span className="text-xs text-gray-400 text-center">—</span>
-                                                            <span className="text-xs text-blue-600 truncate text-center" title={entry.staff?.fullName || ''}>
-                                                                {entry.staff?.fullName || '—'}
+                                                                className="w-4 h-4 accent-indigo-600"
+                                                            />
+                                                            <span className="text-sm truncate font-medium" title={node.product.name}>{node.product.name}</span>
+                                                            <span className="text-xs text-gray-400 text-center">{node.product.code}</span>
+                                                            {/* Показываем первого пользователя или количество записей */}
+                                                            <span className="text-xs text-gray-500 truncate text-center">
+                                                                {entries.length > 1
+                                                                    ? `${entries.length} записей`
+                                                                    : entries.length > 0 && entries[0].staff?.fullName
+                                                                        ? entries[0].staff.fullName
+                                                                        : '—'}
                                                             </span>
                                                             <span className="text-xs text-gray-400 text-center">
-                                                                {entry.recordedAt
-                                                                    ? new Date(entry.recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-                                                                    : '—'}
+                                                                {entries.length === 1 && entries[0].recordedAt
+                                                                    ? new Date(entries[0].recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                                                                    : entries.length > 1 ? '—' : '—'}
                                                             </span>
-                                                            <span className="text-xs text-indigo-600 font-medium text-center">
-                                                                {formatNumber(Number(entry.value) || 0, 3)}
-                                                            </span>
+                                                            {/* Итого по позиции */}
+                                                            <div className="flex justify-center">
+                                                                <span className={`text-sm font-bold tabular-nums ${total > 0 ? 'text-indigo-700' : 'text-gray-400'}`}>
+                                                                    {total > 0 ? formatNumber(total, 3) : '—'}
+                                                                </span>
+                                                            </div>
+                                                            {/* Кнопка добавления */}
                                                             <div className="flex items-center gap-1 justify-center">
                                                                 <button
                                                                     onClick={() => {
                                                                         setSelectedNodeForValue(node);
-                                                                        setEditingValueId(entry.id);
-                                                                        setNewValueAmount(String(entry.value));
+                                                                        setNewValueAmount('');
+                                                                        setEditingValueId(null);
                                                                         setShowAddValueModal(true);
                                                                     }}
-                                                                    className="text-blue-400 hover:text-blue-600 p-0.5"
-                                                                    title="Редактировать"
+                                                                    className="text-green-500 hover:text-green-700 p-0.5"
+                                                                    title="Добавить запись"
                                                                 >
-                                                                    <Edit2 size={12} />
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => deleteValueEntry(entry.id)}
-                                                                    className="text-red-400 hover:text-red-600 p-0.5"
-                                                                    title="Удалить"
-                                                                >
-                                                                    <Trash2 size={12} />
+                                                                    <Plus size={14} />
                                                                 </button>
                                                             </div>
                                                         </div>
-                                                    ))}
-                                                </div>
-                                            );
-                                        })}
-                                        {/* Итоговая строка */}
-                                        <div className="grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center px-4 py-2 bg-indigo-100 border-t-2 border-indigo-200">
-                                            <span></span>
-                                            <span className="text-sm font-semibold text-indigo-900">ИТОГО по категории</span>
-                                            <span></span>
-                                            <span></span>
-                                            <span className="text-sm font-bold text-indigo-800 tabular-nums text-center">
-                                                {formatNumber(activeCategoryNodes.reduce((sum, node) => {
-                                                    const entries = runValues.get(node.id) || [];
-                                                    return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
-                                                }, 0), 3)}
-                                            </span>
-                                            <span className="text-xs text-indigo-600 text-center">кг</span>
+                                                        {/* TZ4: Отдельные строки для каждой записи */}
+                                                        {entries.map((entry, entryIdx) => (
+                                                            <div key={entry.id} className={`grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_4rem_5rem_4rem] gap-2 items-center px-4 py-1.5 border-b bg-gray-50/80 text-sm`}>
+                                                                <span className="w-4"></span>
+                                                                <span className="text-xs text-gray-400 pl-4">└ Запись #{entryIdx + 1}</span>
+                                                                <span className="text-xs text-gray-400 text-center">—</span>
+                                                                <span className="text-xs text-blue-600 truncate text-center" title={entry.staff?.fullName || ''}>
+                                                                    {entry.staff?.fullName || '—'}
+                                                                </span>
+                                                                <span className="text-xs text-gray-400 text-center">
+                                                                    {entry.recordedAt
+                                                                        ? new Date(entry.recordedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                                                                        : '—'}
+                                                                </span>
+                                                                <span className="text-xs text-indigo-600 font-medium text-center">
+                                                                    {formatNumber(Number(entry.value) || 0, 3)}
+                                                                </span>
+                                                                <div className="flex items-center gap-1 justify-center">
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            setSelectedNodeForValue(node);
+                                                                            setEditingValueId(entry.id);
+                                                                            setNewValueAmount(String(entry.value));
+                                                                            setShowAddValueModal(true);
+                                                                        }}
+                                                                        className="text-blue-400 hover:text-blue-600 p-0.5"
+                                                                        title="Редактировать"
+                                                                    >
+                                                                        <Edit2 size={12} />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => deleteValueEntry(entry.id)}
+                                                                        className="text-red-400 hover:text-red-600 p-0.5"
+                                                                        title="Удалить"
+                                                                    >
+                                                                        <Trash2 size={12} />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                );
+                                            })}
+                                            {/* Итоговая строка */}
+                                            <div className="grid grid-cols-[auto_minmax(0,1fr)_6rem_7rem_5rem_4rem] gap-2 items-center px-4 py-2 bg-indigo-100 border-t-2 border-indigo-200">
+                                                <span></span>
+                                                <span className="text-sm font-semibold text-indigo-900">ИТОГО по категории</span>
+                                                <span></span>
+                                                <span></span>
+                                                <span className="text-sm font-bold text-indigo-800 tabular-nums text-center">
+                                                    {formatNumber(activeCategoryNodes.reduce((sum, node) => {
+                                                        const entries = runValues.get(node.id) || [];
+                                                        return sum + entries.reduce((s, e) => s + (Number(e.value) || 0), 0);
+                                                    }, 0), 3)}
+                                                </span>
+                                                <span className="text-xs text-indigo-600 text-center">кг</span>
+                                            </div>
                                         </div>
-                                    </div>
-                                )}
-                            </div>
-                        </>
-                    )}
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Модальное окно подтверждения удаления */}
             {deleteConfirmNode && (
