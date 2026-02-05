@@ -133,8 +133,6 @@ export default function ProductionV3Page() {
     const [runs, setRuns] = useState<ProductionRun[]>([]);
     const [selectedRun, setSelectedRun] = useState<ProductionRun | null>(null);
     const [runValues, setRunValues] = useState<Map<number, RunValue[]>>(new Map());
-    // productIds которые имеют run вне текущего диапазона дат (для скрытия из списка)
-    const [productIdsWithRunOutsideFilter, setProductIdsWithRunOutsideFilter] = useState<Set<number>>(new Set());
     const [categories, setCategories] = useState<CategoryGroup[]>([]);
     const [activeCategory, setActiveCategory] = useState<string | null>(null);
     const [currentStaff, setCurrentStaff] = useState<StaffInfo | null>(null);
@@ -266,18 +264,12 @@ export default function ProductionV3Page() {
             });
 
             // Новый формат ответа: { runs, productIdsWithRunsOutsideRange }
-            const { runs: runsData, productIdsWithRunsOutsideRange } = res.data;
+            // NOTE: productIdsWithRunsOutsideRange больше не используется для скрытия
+            const { runs: runsData } = res.data;
 
             if (runsData && runsData.length > 0) {
             }
             setRuns(runsData || []);
-
-            // Обновляем список productIds, которые нужно скрыть (их run вне текущего фильтра)
-            if (productIdsWithRunsOutsideRange && productIdsWithRunsOutsideRange.length > 0) {
-                setProductIdsWithRunOutsideFilter(new Set(productIdsWithRunsOutsideRange));
-            } else {
-                setProductIdsWithRunOutsideFilter(new Set());
-            }
         } catch (err) {
             console.error('Failed to fetch runs:', err);
         } finally {
@@ -472,7 +464,7 @@ export default function ProductionV3Page() {
             const res = await axios.post(`${API_URL}/api/production-v2/runs`, {
                 productId: mmlModalData.productId,
                 sourceType: mmlModalData.sourceType,
-                sourceItemId: mmlModalData.sourceItemId,
+                sourcePurchaseItemId: mmlModalData.sourceItemId,
                 productionDate: dateFrom
             }, {
                 headers: { Authorization: `Bearer ${token}` }
@@ -735,27 +727,28 @@ export default function ProductionV3Page() {
         toDate.setHours(23, 59, 59, 999);
 
         // Фильтруем существующие combinedItems
+        // V3: Показываем ВСЕ позиции с carryover/закупками, независимо от runs на других датах
         const filteredItems = combinedItems.filter(item => {
-            // Если productId в списке "имеет run вне фильтра" — не показываем
-            if (productIdsWithRunOutsideFilter.has(item.productId)) {
-                return false;
+            // Определяем наличие carryover/остатка
+            const hasCarryover =
+                (item.purchaseDetails?.some((d: any) => Number(d?.remainingQty ?? 0) > 0) ?? false) ||
+                Boolean((item as any).isCarryover) ||
+                Number(item.balanceQty ?? 0) > 0;
+
+            // Если есть закуп или остаток — всегда показываем
+            if (item.purchaseQty > 0 || hasCarryover) {
+                return true;
             }
+
             // Ищем run для этого товара В ПРЕДЕЛАХ текущего диапазона дат
             const productRunInRange = runs.find(r => {
                 if (r.productId !== item.productId || r.isHidden) return false;
                 const runDate = new Date(r.productionDate);
                 return runDate >= fromDate && runDate <= toDate;
             });
+
             // Если есть run в диапазоне — показываем
-            if (productRunInRange) {
-                return true;
-            }
-            // Если есть run ВНЕ диапазона — не показываем (он будет видим при другом фильтре)
-            const anyRun = runs.find(r => r.productId === item.productId && !r.isHidden);
-            if (anyRun) {
-                return false; // Есть run, но вне диапазона
-            }
-            return true; // Нет run — показываем по дате закупки
+            return !!productRunInRange;
         });
 
         // Добавляем runs из других дат, у которых productionDate в текущем диапазоне

@@ -32,7 +32,14 @@ import {
     addRunValueEntry,
     updateRunValueEntry,
     deleteRunValueEntry,
-    getMmlCategories
+    getMmlCategories,
+    // Production V3 - Closures
+    getPurchasesByDate,
+    getCarryoverBreakdown,
+    getClosuresByDate,
+    recalcClosuresManual,
+    reopenLot,
+    reopenProductForDate
 } from '../controllers/production-v2.controller';
 
 const router = Router();
@@ -138,6 +145,28 @@ router.get('/unfinished', loadUnfinishedItems);
 
 // Получить производственного сотрудника для текущего пользователя
 router.get('/staff/me', getCurrentProductionStaff);
+
+// ============================================
+// PRODUCTION V3 - Closures System
+// ============================================
+
+// Закупки за одну дату
+router.get('/purchases-by-date', getPurchasesByDate);
+
+// Carryover breakdown по партиям
+router.get('/carryover-breakdown', getCarryoverBreakdown);
+
+// Статусы закрытий на дату
+router.get('/closures', getClosuresByDate);
+
+// Ручной пересчёт закрытий
+router.post('/closures/recalc', recalcClosuresManual);
+
+// Восстановить партию
+router.post('/closures/lot/:purchaseItemId/reopen', reopenLot);
+
+// Восстановить продукт на дату
+router.post('/closures/product/:productId/reopen', reopenProductForDate);
 
 export default router;
 

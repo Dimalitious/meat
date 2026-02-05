@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -485,15 +485,23 @@ export const restoreMml = async (req: Request, res: Response) => {
  */
 export const getProductionRuns = async (req: Request, res: Response) => {
     try {
-        const { dateFrom, dateTo, isLocked, productId, showHidden } = req.query;
+        const { dateFrom, dateTo, productionDate, isLocked, productId, showHidden } = req.query;
 
         const where: any = {
             // По умолчанию не показываем скрытые
             isHidden: showHidden === 'true' ? undefined : false
         };
 
-        // Фильтрация по дате выработки (productionDate)
-        if (dateFrom || dateTo) {
+        // V3: Single date filter (preferred)
+        if (productionDate) {
+            const dayStart = new Date(String(productionDate));
+            dayStart.setUTCHours(0, 0, 0, 0);
+            const dayEnd = new Date(String(productionDate));
+            dayEnd.setUTCHours(23, 59, 59, 999);
+            where.productionDate = { gte: dayStart, lte: dayEnd };
+        }
+        // Legacy: Фильтрация по дате выработки (dateFrom/dateTo)
+        else if (dateFrom || dateTo) {
             where.productionDate = {};
             if (dateFrom) {
                 where.productionDate.gte = new Date(String(dateFrom));
@@ -660,7 +668,7 @@ export const getProductionRunById = async (req: Request, res: Response) => {
  */
 export const createProductionRun = async (req: Request, res: Response) => {
     try {
-        const { productId, productionDate, plannedWeight } = req.body;
+        const { productId, productionDate, plannedWeight, sourcePurchaseItemId, sourceType } = req.body;
         const userId = (req as any).user?.userId;
 
         if (!productId) {
@@ -686,6 +694,28 @@ export const createProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'MML not found for this product. Create MML first.' });
         }
 
+        // V3: Validate sourcePurchaseItemId for PURCHASE source type
+        const effectiveSourceType = sourceType || (sourcePurchaseItemId ? 'PURCHASE' : 'MANUAL');
+
+        // PURCHASE type requires sourcePurchaseItemId
+        if (effectiveSourceType === 'PURCHASE' && !sourcePurchaseItemId) {
+            return res.status(400).json({
+                error: 'sourcePurchaseItemId is required for PURCHASE source type. Each run must be linked to a specific lot.'
+            });
+        }
+
+        if (sourcePurchaseItemId) {
+            const purchaseItem = await prisma.purchaseItem.findUnique({
+                where: { id: Number(sourcePurchaseItemId) }
+            });
+            if (!purchaseItem) {
+                return res.status(400).json({ error: 'Source purchase item not found' });
+            }
+            if (purchaseItem.productId !== Number(productId)) {
+                return res.status(400).json({ error: 'Source purchase item product does not match' });
+            }
+        }
+
         const run = await prisma.productionRun.create({
             data: {
                 productId: Number(productId),
@@ -694,7 +724,10 @@ export const createProductionRun = async (req: Request, res: Response) => {
                 productionDate: productionDate ? new Date(productionDate) : new Date(),
                 plannedWeight: plannedWeight ? Number(plannedWeight) : null,
                 actualWeight: 0,
-                isHidden: false
+                isHidden: false,
+                // V3: Source tracking
+                sourcePurchaseItemId: sourcePurchaseItemId ? Number(sourcePurchaseItemId) : null,
+                sourceType: effectiveSourceType
             },
             include: {
                 product: {
@@ -969,6 +1002,22 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
             },
             values: run.values
         });
+
+        // V3: Trigger closure recalculation in background (fire-and-forget)
+        const runDateStr = run.productionDate.toISOString().slice(0, 10);
+        const username = (req as any).user?.username || 'system';
+        (async () => {
+            try {
+                const dayStart = new Date(run.productionDate);
+                dayStart.setUTCHours(0, 0, 0, 0);
+                await prisma.$transaction(async (tx: any) => {
+                    await recalcLotClosures(tx, dayStart, username);
+                    await recalcClosuresForDate(tx, runDateStr, username);
+                });
+            } catch (e) {
+                console.error('Background closure recalc error:', e);
+            }
+        })();
     } catch (error) {
         console.error('saveProductionRunValues error:', error);
         res.status(500).json({ error: 'Failed to save production run values' });
@@ -1109,7 +1158,27 @@ export const deleteProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Cannot delete locked production run' });
         }
 
-        await prisma.productionRun.delete({ where: { id } });
+        // V3: Soft delete instead of hard delete
+        await prisma.productionRun.update({
+            where: { id },
+            data: { isHidden: true }
+        });
+
+        // V3: Trigger recalc in background
+        const username = (req as any).user?.username || 'system';
+        const runDateStr = run.productionDate.toISOString().slice(0, 10);
+        (async () => {
+            try {
+                const dayStart = new Date(run.productionDate);
+                dayStart.setUTCHours(0, 0, 0, 0);
+                await prisma.$transaction(async (tx: any) => {
+                    await recalcLotClosures(tx, dayStart, username);
+                    await recalcClosuresForDate(tx, runDateStr, username);
+                });
+            } catch (e) {
+                console.error('Background closure recalc error:', e);
+            }
+        })();
 
         res.json({ success: true });
     } catch (error) {
@@ -1123,7 +1192,7 @@ export const deleteProductionRun = async (req: Request, res: Response) => {
  */
 export const hideProductionRuns = async (req: Request, res: Response) => {
     try {
-        const { ids } = req.body; // массив ID выработок
+        const { ids, productionDate } = req.body; // массив ID выработок и дата
 
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ error: 'ids array is required' });
@@ -1138,6 +1207,23 @@ export const hideProductionRuns = async (req: Request, res: Response) => {
             }
         });
 
+        // V3: Trigger recalc if date provided
+        if (productionDate) {
+            const username = (req as any).user?.username || 'system';
+            (async () => {
+                try {
+                    const dayStart = new Date(productionDate);
+                    dayStart.setUTCHours(0, 0, 0, 0);
+                    await prisma.$transaction(async (tx: any) => {
+                        await recalcLotClosures(tx, dayStart, username);
+                        await recalcClosuresForDate(tx, String(productionDate), username);
+                    });
+                } catch (e) {
+                    console.error('Background closure recalc error:', e);
+                }
+            })();
+        }
+
         res.json({ success: true, hiddenCount: ids.length });
     } catch (error) {
         console.error('hideProductionRuns error:', error);
@@ -1150,7 +1236,7 @@ export const hideProductionRuns = async (req: Request, res: Response) => {
  */
 export const unhideProductionRuns = async (req: Request, res: Response) => {
     try {
-        const { ids } = req.body;
+        const { ids, productionDate } = req.body; // массив ID выработок и дата
 
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ error: 'ids array is required' });
@@ -1164,6 +1250,23 @@ export const unhideProductionRuns = async (req: Request, res: Response) => {
                 isHidden: false
             }
         });
+
+        // V3: Trigger recalc if date provided
+        if (productionDate) {
+            const username = (req as any).user?.username || 'system';
+            (async () => {
+                try {
+                    const dayStart = new Date(productionDate);
+                    dayStart.setUTCHours(0, 0, 0, 0);
+                    await prisma.$transaction(async (tx: any) => {
+                        await recalcLotClosures(tx, dayStart, username);
+                        await recalcClosuresForDate(tx, String(productionDate), username);
+                    });
+                } catch (e) {
+                    console.error('Background closure recalc error:', e);
+                }
+            })();
+        }
 
         res.json({ success: true, unhiddenCount: ids.length });
     } catch (error) {
@@ -1733,6 +1836,22 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             data: { actualWeight }
         });
 
+        // V3: Trigger closure recalculation in background
+        const username = (req as any).user?.username || 'system';
+        (async () => {
+            try {
+                const dayStart = new Date(run.productionDate);
+                dayStart.setUTCHours(0, 0, 0, 0);
+                const runDateStr = run.productionDate.toISOString().slice(0, 10);
+                await prisma.$transaction(async (tx: any) => {
+                    await recalcLotClosures(tx, dayStart, username);
+                    await recalcClosuresForDate(tx, runDateStr, username);
+                });
+            } catch (e) {
+                console.error('Background closure recalc error:', e);
+            }
+        })();
+
         res.status(201).json(newValue);
     } catch (error) {
         console.error('addRunValueEntry error:', error);
@@ -1805,6 +1924,22 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
             data: { actualWeight }
         });
 
+        // V3: Trigger closure recalculation in background
+        const username = (req as any).user?.username || 'system';
+        (async () => {
+            try {
+                const dayStart = new Date(existing.run.productionDate);
+                dayStart.setUTCHours(0, 0, 0, 0);
+                const runDateStr = existing.run.productionDate.toISOString().slice(0, 10);
+                await prisma.$transaction(async (tx: any) => {
+                    await recalcLotClosures(tx, dayStart, username);
+                    await recalcClosuresForDate(tx, runDateStr, username);
+                });
+            } catch (e) {
+                console.error('Background closure recalc error:', e);
+            }
+        })();
+
         res.json(updated);
     } catch (error) {
         console.error('updateRunValueEntry error:', error);
@@ -1861,6 +1996,22 @@ export const deleteRunValueEntry = async (req: Request, res: Response) => {
             data: { actualWeight }
         });
 
+        // V3: Trigger closure recalculation in background
+        const username = (req as any).user?.username || 'system';
+        (async () => {
+            try {
+                const dayStart = new Date(existing.run.productionDate);
+                dayStart.setUTCHours(0, 0, 0, 0);
+                const runDateStr = existing.run.productionDate.toISOString().slice(0, 10);
+                await prisma.$transaction(async (tx: any) => {
+                    await recalcLotClosures(tx, dayStart, username);
+                    await recalcClosuresForDate(tx, runDateStr, username);
+                });
+            } catch (e) {
+                console.error('Background closure recalc error:', e);
+            }
+        })();
+
         res.json({ success: true });
     } catch (error) {
         console.error('deleteRunValueEntry error:', error);
@@ -1900,3 +2051,574 @@ export const getMmlCategories = async (req: Request, res: Response) => {
         res.status(500).json({ error: 'Failed to get MML categories' });
     }
 };
+
+// ============================================
+// PRODUCTION V3 - CLOSURE SYSTEM
+// ============================================
+
+const DAY_MS = 86_400_000;
+const LOOKBACK_DAYS = 90;
+const TOLERANCE = new Prisma.Decimal('0.01'); // 1%
+
+/**
+ * Конвертация строки YYYY-MM-DD в начало дня по Ташкенту (UTC+5)
+ * Возвращает Date в UTC
+ */
+function toTashkentDayStart(dateStr: string): Date {
+    const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+    // Ташкент = UTC+5, так что 00:00 Ташкент = 19:00 UTC предыдущего дня
+    return new Date(Date.UTC(y, m - 1, d, -5, 0, 0, 0));
+}
+
+/**
+ * Добавить дни к дате
+ */
+function addDays(date: Date, days: number): Date {
+    return new Date(date.getTime() + days * DAY_MS);
+}
+
+/**
+ * Получить диапазон дня [start, end) для Ташкента
+ */
+function getTashkentDayRange(dateStr: string): { dayStart: Date; dayEnd: Date } {
+    const dayStart = toTashkentDayStart(dateStr);
+    const dayEnd = addDays(dayStart, 1);
+    return { dayStart, dayEnd };
+}
+
+/**
+ * Пересчёт закрытий партий (ProductionLotClosure)
+ * Вызывается в транзакции при любом изменении выработки
+ */
+async function recalcLotClosures(
+    tx: Prisma.TransactionClient,
+    beforeDay: Date,
+    username: string
+): Promise<void> {
+    // Lookback: только последние 90 дней + все открытые
+    const minDate = addDays(beforeDay, -LOOKBACK_DAYS);
+
+    // 1. Получаем все purchaseItems за период
+    const purchaseItems = await tx.purchaseItem.findMany({
+        where: {
+            purchase: {
+                purchaseDate: { gte: minDate, lt: beforeDay },
+                isDisabled: false
+            }
+        },
+        select: { id: true, qty: true, productId: true }
+    });
+
+    // Также получаем все открытые closures (независимо от даты)
+    const openClosures = await tx.productionLotClosure.findMany({
+        where: { status: 'open' },
+        select: { purchaseItemId: true }
+    });
+
+    const openIds = new Set(openClosures.map(c => c.purchaseItemId));
+    const allIds = new Set([...purchaseItems.map(p => p.id), ...openIds]);
+
+    if (allIds.size === 0) return;
+
+    // 2. Агрегируем выработку по sourcePurchaseItemId
+    const producedAgg = await tx.productionRun.groupBy({
+        by: ['sourcePurchaseItemId'],
+        where: {
+            sourcePurchaseItemId: { in: Array.from(allIds) },
+            isHidden: false
+        },
+        _sum: { actualWeight: true }
+    });
+
+    const producedMap = new Map<number, Prisma.Decimal>();
+    for (const row of producedAgg) {
+        if (row.sourcePurchaseItemId) {
+            producedMap.set(row.sourcePurchaseItemId, row._sum.actualWeight ?? new Prisma.Decimal(0));
+        }
+    }
+
+    // 3. Получаем qty для всех purchaseItems (включая открытые)
+    const allPurchaseItems = await tx.purchaseItem.findMany({
+        where: { id: { in: Array.from(allIds) } },
+        select: { id: true, qty: true }
+    });
+
+    const qtyMap = new Map<number, Prisma.Decimal>();
+    for (const pi of allPurchaseItems) {
+        qtyMap.set(pi.id, new Prisma.Decimal(pi.qty));
+    }
+
+    // 4. Сначала получаем текущие статусы closures для сравнения
+    const existingClosures = await tx.productionLotClosure.findMany({
+        where: { purchaseItemId: { in: Array.from(allIds) } },
+        select: { purchaseItemId: true, status: true }
+    });
+    const currentStatusMap = new Map<number, string>();
+    for (const c of existingClosures) {
+        currentStatusMap.set(c.purchaseItemId, c.status);
+    }
+
+    // 5. Batch upsert и отслеживание изменений статуса
+    const statusChanges: { purchaseItemId: number; fromStatus: string; toStatus: string }[] = [];
+
+    const upsertOps = Array.from(allIds).map(async (purchaseItemId) => {
+        const qtyPurchased = qtyMap.get(purchaseItemId) ?? new Prisma.Decimal(0);
+        const qtyProduced = producedMap.get(purchaseItemId) ?? new Prisma.Decimal(0);
+        const remainingRaw = qtyPurchased.sub(qtyProduced);
+        const qtyRemaining = remainingRaw.lt(0) ? new Prisma.Decimal(0) : remainingRaw;
+
+        let newStatus: 'open' | 'closed' = 'open';
+        if (qtyPurchased.lte(0)) {
+            newStatus = 'closed';
+        } else if (qtyRemaining.lte(0)) {
+            newStatus = 'closed';
+        } else {
+            const ratio = qtyRemaining.div(qtyPurchased);
+            if (ratio.lte(TOLERANCE)) newStatus = 'closed';
+        }
+
+        // Проверяем изменение статуса
+        const oldStatus = currentStatusMap.get(purchaseItemId) ?? 'new';
+        if (oldStatus !== newStatus && oldStatus !== 'new') {
+            statusChanges.push({
+                purchaseItemId,
+                fromStatus: oldStatus,
+                toStatus: newStatus
+            });
+        }
+
+        return tx.productionLotClosure.upsert({
+            where: { purchaseItemId },
+            create: {
+                purchaseItemId,
+                status: newStatus,
+                qtyPurchased,
+                qtyProduced,
+                qtyRemaining,
+                closedAt: newStatus === 'closed' ? new Date() : null,
+                closedBy: newStatus === 'closed' ? username : null
+            },
+            update: {
+                status: newStatus,
+                qtyPurchased,
+                qtyProduced,
+                qtyRemaining,
+                closedAt: newStatus === 'closed' ? new Date() : null,
+                closedBy: newStatus === 'closed' ? username : null,
+                reopenedAt: newStatus === 'open' && oldStatus === 'closed' ? new Date() : undefined,
+                reopenedBy: newStatus === 'open' && oldStatus === 'closed' ? username : undefined
+            }
+        });
+    });
+
+    await Promise.all(upsertOps);
+
+    // 6. Audit log только при смене статуса
+    if (statusChanges.length > 0) {
+        const auditOps = statusChanges.map(change =>
+            tx.productionClosureAudit.create({
+                data: {
+                    scope: 'LOT',
+                    action: change.toStatus === 'closed' ? 'CLOSED' : 'REOPENED',
+                    purchaseItemId: change.purchaseItemId,
+                    performedBy: username,
+                    payload: { fromStatus: change.fromStatus, toStatus: change.toStatus }
+                }
+            })
+        );
+        await Promise.all(auditOps);
+    }
+}
+
+/**
+ * Пересчёт закрытий продуктов на дату (ProductionClosure)
+ */
+async function recalcClosuresForDate(
+    tx: Prisma.TransactionClient,
+    dateStr: string,
+    username: string
+): Promise<void> {
+    const { dayStart, dayEnd } = getTashkentDayRange(dateStr);
+
+    // 1. Закупки на дату по productId
+    const purchaseAgg = await tx.purchaseItem.groupBy({
+        by: ['productId'],
+        where: {
+            purchase: {
+                purchaseDate: { gte: dayStart, lt: dayEnd },
+                isDisabled: false
+            }
+        },
+        _sum: { qty: true }
+    });
+
+    const purchaseMap = new Map<number, Prisma.Decimal>();
+    for (const row of purchaseAgg) {
+        purchaseMap.set(row.productId, row._sum.qty ?? new Prisma.Decimal(0));
+    }
+
+    // 2. Carryover из открытых партий до этой даты
+    const openLots = await tx.productionLotClosure.findMany({
+        where: { status: 'open' },
+        include: {
+            purchaseItem: {
+                include: {
+                    purchase: { select: { purchaseDate: true } }
+                }
+            }
+        }
+    });
+
+    const carryMap = new Map<number, Prisma.Decimal>();
+    for (const lot of openLots) {
+        const pi = lot.purchaseItem;
+        if (!pi?.purchase?.purchaseDate) continue;
+        if (pi.purchase.purchaseDate >= dayStart) continue; // Только партии ДО текущего дня
+
+        const productId = pi.productId;
+        const cur = carryMap.get(productId) ?? new Prisma.Decimal(0);
+        carryMap.set(productId, cur.add(new Prisma.Decimal(lot.qtyRemaining)));
+    }
+
+    // 3. Выработка на дату по productId
+    const producedAgg = await tx.productionRun.groupBy({
+        by: ['productId'],
+        where: {
+            isHidden: false,
+            productionDate: { gte: dayStart, lt: dayEnd }
+        },
+        _sum: { actualWeight: true }
+    });
+
+    const producedMap = new Map<number, Prisma.Decimal>();
+    for (const row of producedAgg) {
+        producedMap.set(row.productId, row._sum.actualWeight ?? new Prisma.Decimal(0));
+    }
+
+    // 4. Собираем все productIds
+    const productIds = new Set<number>([
+        ...purchaseMap.keys(),
+        ...carryMap.keys(),
+        ...producedMap.keys()
+    ]);
+
+    // 5. Batch upsert closures
+    const upsertOps = Array.from(productIds).map(async (productId) => {
+        const totalIn = (purchaseMap.get(productId) ?? new Prisma.Decimal(0))
+            .add(carryMap.get(productId) ?? new Prisma.Decimal(0));
+
+        const totalProduced = producedMap.get(productId) ?? new Prisma.Decimal(0);
+
+        if (totalIn.lte(0)) {
+            return tx.productionClosure.upsert({
+                where: { productionDate_productId: { productionDate: dayStart, productId } },
+                create: {
+                    productionDate: dayStart,
+                    productId,
+                    status: 'open',
+                    totalIn,
+                    totalProduced,
+                    diffAbs: new Prisma.Decimal(0)
+                },
+                update: {
+                    status: 'open',
+                    totalIn,
+                    totalProduced,
+                    diffAbs: new Prisma.Decimal(0),
+                    closedAt: null,
+                    closedBy: null
+                }
+            });
+        }
+
+        const diffAbs = totalIn.sub(totalProduced).abs();
+        const ratio = diffAbs.div(totalIn);
+        const status: 'open' | 'closed' = ratio.lte(TOLERANCE) ? 'closed' : 'open';
+
+        return tx.productionClosure.upsert({
+            where: { productionDate_productId: { productionDate: dayStart, productId } },
+            create: {
+                productionDate: dayStart,
+                productId,
+                status,
+                totalIn,
+                totalProduced,
+                diffAbs,
+                closedAt: status === 'closed' ? new Date() : null,
+                closedBy: status === 'closed' ? username : null
+            },
+            update: {
+                status,
+                totalIn,
+                totalProduced,
+                diffAbs,
+                closedAt: status === 'closed' ? new Date() : null,
+                closedBy: status === 'closed' ? username : null
+            }
+        });
+    });
+
+    await Promise.all(upsertOps);
+
+    // 6. Audit log
+    await tx.productionClosureAudit.create({
+        data: {
+            scope: 'PRODUCT',
+            action: 'RECALC',
+            productionDate: dayStart,
+            performedBy: username,
+            payload: { dateStr, count: productIds.size }
+        }
+    });
+}
+
+// ============================================
+// PRODUCTION V3 - ENDPOINTS
+// ============================================
+
+/**
+ * Получить закупки за одну дату (для кнопки "Загрузить")
+ * GET /api/production-v2/purchases-by-date?date=YYYY-MM-DD
+ */
+export const getPurchasesByDate = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.query;
+        if (!date) {
+            return res.status(400).json({ error: 'date is required (YYYY-MM-DD)' });
+        }
+
+        const { dayStart, dayEnd } = getTashkentDayRange(String(date));
+
+        const items = await prisma.purchaseItem.findMany({
+            where: {
+                purchase: {
+                    purchaseDate: { gte: dayStart, lt: dayEnd },
+                    isDisabled: false
+                }
+            },
+            include: {
+                purchase: { select: { id: true, idn: true, purchaseDate: true } },
+                product: { select: { id: true, name: true, code: true, category: true } },
+                supplier: { select: { id: true, name: true } }
+            }
+        });
+
+        res.json({ date, items });
+    } catch (error) {
+        console.error('getPurchasesByDate error:', error);
+        res.status(500).json({ error: 'Failed to load purchases by date' });
+    }
+};
+
+/**
+ * Получить carryover breakdown по партиям (для правой панели)
+ * GET /api/production-v2/carryover-breakdown?date=YYYY-MM-DD&productId=123
+ */
+export const getCarryoverBreakdown = async (req: Request, res: Response) => {
+    try {
+        const { date, productId } = req.query;
+        if (!date) {
+            return res.status(400).json({ error: 'date is required' });
+        }
+
+        const { dayStart } = getTashkentDayRange(String(date));
+
+        // Фильтруем на уровне БД
+        const whereClause: any = {
+            status: 'open',
+            purchaseItem: {
+                purchase: {
+                    purchaseDate: { lt: dayStart },
+                    isDisabled: false
+                }
+            }
+        };
+
+        if (productId) {
+            whereClause.purchaseItem.productId = Number(productId);
+        }
+
+        const lots = await prisma.productionLotClosure.findMany({
+            where: whereClause,
+            include: {
+                purchaseItem: {
+                    include: {
+                        purchase: { select: { idn: true, purchaseDate: true } },
+                        product: { select: { id: true, name: true, code: true, category: true } }
+                    }
+                }
+            }
+        });
+
+        const items = lots.map(lot => ({
+            purchaseItemId: lot.purchaseItemId,
+            productId: lot.purchaseItem?.productId,
+            productName: lot.purchaseItem?.product?.name ?? '',
+            productCode: lot.purchaseItem?.product?.code ?? null,
+            category: lot.purchaseItem?.product?.category ?? null,
+            idn: lot.purchaseItem?.purchase?.idn ?? null,
+            purchaseDate: lot.purchaseItem?.purchase?.purchaseDate ?? null,
+            qtyRemaining: lot.qtyRemaining,
+            qtyPurchased: lot.qtyPurchased,
+            qtyProduced: lot.qtyProduced
+        }));
+
+        // Группировка по productId для total
+        const totals = new Map<number, Prisma.Decimal>();
+        for (const item of items) {
+            if (item.productId) {
+                const cur = totals.get(item.productId) ?? new Prisma.Decimal(0);
+                totals.set(item.productId, cur.add(new Prisma.Decimal(item.qtyRemaining)));
+            }
+        }
+
+        res.json({
+            date,
+            items,
+            totals: Object.fromEntries(totals)
+        });
+    } catch (error) {
+        console.error('getCarryoverBreakdown error:', error);
+        res.status(500).json({ error: 'Failed to load carryover breakdown' });
+    }
+};
+
+/**
+ * Получить статусы закрытий на дату (для маркеров в UI)
+ * GET /api/production-v2/closures?date=YYYY-MM-DD
+ */
+export const getClosuresByDate = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.query;
+        if (!date) {
+            return res.status(400).json({ error: 'date is required' });
+        }
+
+        const { dayStart } = getTashkentDayRange(String(date));
+
+        const closures = await prisma.productionClosure.findMany({
+            where: { productionDate: dayStart },
+            select: {
+                productId: true,
+                status: true,
+                totalIn: true,
+                totalProduced: true,
+                diffAbs: true,
+                closedAt: true
+            }
+        });
+
+        res.json({ date, closures });
+    } catch (error) {
+        console.error('getClosuresByDate error:', error);
+        res.status(500).json({ error: 'Failed to load closures' });
+    }
+};
+
+/**
+ * Ручной пересчёт закрытий (кнопка "Сформировать")
+ * POST /api/production-v2/closures/recalc { date: "YYYY-MM-DD" }
+ */
+export const recalcClosuresManual = async (req: Request, res: Response) => {
+    try {
+        const { date } = req.body;
+        if (!date) {
+            return res.status(400).json({ error: 'date is required' });
+        }
+
+        const username = (req as any).user?.username || 'system';
+        const { dayStart } = getTashkentDayRange(String(date));
+
+        await prisma.$transaction(async (tx) => {
+            await recalcLotClosures(tx, dayStart, username);
+            await recalcClosuresForDate(tx, String(date), username);
+        });
+
+        res.json({ success: true, message: 'Closures recalculated' });
+    } catch (error) {
+        console.error('recalcClosuresManual error:', error);
+        res.status(500).json({ error: 'Failed to recalc closures' });
+    }
+};
+
+/**
+ * Восстановить партию (reopen)
+ * POST /api/production-v2/closures/lot/:purchaseItemId/reopen
+ */
+export const reopenLot = async (req: Request, res: Response) => {
+    try {
+        const purchaseItemId = Number(req.params.purchaseItemId);
+        const username = (req as any).user?.username || 'system';
+
+        const lot = await prisma.productionLotClosure.update({
+            where: { purchaseItemId },
+            data: {
+                status: 'open',
+                closedAt: null,
+                closedBy: null,
+                reopenedAt: new Date(),
+                reopenedBy: username
+            }
+        });
+
+        await prisma.productionClosureAudit.create({
+            data: {
+                scope: 'LOT',
+                action: 'REOPENED',
+                purchaseItemId,
+                performedBy: username
+            }
+        });
+
+        res.json(lot);
+    } catch (error) {
+        console.error('reopenLot error:', error);
+        res.status(500).json({ error: 'Failed to reopen lot' });
+    }
+};
+
+/**
+ * Восстановить продукт на дату (reopen)
+ * POST /api/production-v2/closures/product/:productId/reopen { date: "YYYY-MM-DD" }
+ */
+export const reopenProductForDate = async (req: Request, res: Response) => {
+    try {
+        const productId = Number(req.params.productId);
+        const { date } = req.body;
+        if (!date) {
+            return res.status(400).json({ error: 'date is required' });
+        }
+
+        const username = (req as any).user?.username || 'system';
+        const { dayStart } = getTashkentDayRange(String(date));
+
+        const closure = await prisma.productionClosure.update({
+            where: { productionDate_productId: { productionDate: dayStart, productId } },
+            data: {
+                status: 'open',
+                closedAt: null,
+                closedBy: null,
+                reopenedAt: new Date(),
+                reopenedBy: username
+            }
+        });
+
+        await prisma.productionClosureAudit.create({
+            data: {
+                scope: 'PRODUCT',
+                action: 'REOPENED',
+                productionDate: dayStart,
+                productId,
+                performedBy: username
+            }
+        });
+
+        res.json(closure);
+    } catch (error) {
+        console.error('reopenProductForDate error:', error);
+        res.status(500).json({ error: 'Failed to reopen product for date' });
+    }
+};
+
+// Export recalc functions for use in other functions
+export { recalcLotClosures, recalcClosuresForDate, getTashkentDayRange };
