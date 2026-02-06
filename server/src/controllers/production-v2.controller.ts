@@ -1738,15 +1738,40 @@ export const getRunValuesWithStaff = async (req: Request, res: Response) => {
 
 /**
  * Добавить новую запись значения в MML-узел с трекингом сотрудника
+ * V3: Поддержка opType, reasonText, photoUrl, photoMeta
  */
 export const addRunValueEntry = async (req: Request, res: Response) => {
     try {
         const runId = Number(req.params.id);
-        const { mmlNodeId, value } = req.body;
+        const { mmlNodeId, value, opType, reasonText, photoUrl, photoMeta } = req.body;
         const userId = (req as any).user?.userId;
 
-        if (!mmlNodeId || value === undefined) {
-            return res.status(400).json({ error: 'mmlNodeId and value are required' });
+        // Validation: mmlNodeId required
+        if (!mmlNodeId) {
+            return res.status(400).json({ error: 'mmlNodeId is required' });
+        }
+
+        // Validation: value required and must be > 0
+        if (value === undefined || value === null || value === '') {
+            return res.status(400).json({ error: 'value is required' });
+        }
+        const numericValue = Number(value);
+        if (isNaN(numericValue) || numericValue <= 0) {
+            return res.status(400).json({ error: 'value must be a positive number' });
+        }
+
+        // Validation: opType
+        const validOpTypes = ['PRODUCTION', 'WRITEOFF', 'ADJUSTMENT'];
+        const effectiveOpType = opType || 'PRODUCTION';
+        if (!validOpTypes.includes(effectiveOpType)) {
+            return res.status(400).json({ error: `opType must be one of: ${validOpTypes.join(', ')}` });
+        }
+
+        // Validation: reasonText required for WRITEOFF and ADJUSTMENT
+        if ((effectiveOpType === 'WRITEOFF' || effectiveOpType === 'ADJUSTMENT') && !reasonText?.trim()) {
+            return res.status(400).json({
+                error: `reasonText is required for ${effectiveOpType} operations`
+            });
         }
 
         // Проверяем что run существует и не заблокирован
@@ -1757,27 +1782,27 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
         if (run.isLocked) {
             return res.status(400).json({ error: 'Production run is locked' });
         }
+        if (run.status !== 'draft') {
+            return res.status(400).json({ error: 'Can only add values to draft runs' });
+        }
 
-        // Получаем staff по userId (или создаём если нет)
-        let staff = await prisma.productionStaff.findUnique({
-            where: { userId }
-        });
-
-        // Баг 3 fix: автосоздаём ProductionStaff если не существует
-        if (!staff && userId) {
+        // Получаем staff по userId (или создаём атомарно через upsert)
+        // Race-condition safe after @unique constraint on userId
+        let staff: { id: number; fullName: string } | null = null;
+        if (userId) {
             const user = await prisma.user.findUnique({
                 where: { id: userId },
-                select: { id: true, name: true, username: true }
+                select: { name: true, username: true }
             });
-            if (user) {
-                staff = await prisma.productionStaff.create({
-                    data: {
-                        fullName: user.name || user.username || 'Пользователь',
-                        userId: userId,
-                        isActive: true
-                    }
-                });
-            }
+            staff = await prisma.productionStaff.upsert({
+                where: { userId },
+                create: {
+                    userId,
+                    fullName: user?.name || user?.username || 'Пользователь',
+                    isActive: true
+                },
+                update: {} // No side effects - just return existing
+            });
         }
 
         // Получаем узел для snapshotProductId
@@ -1785,15 +1810,24 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             where: { id: Number(mmlNodeId) }
         });
 
+        if (!node) {
+            return res.status(400).json({ error: 'MML node not found' });
+        }
+
         // Создаём новую запись
         const newValue = await prisma.productionRunValue.create({
             data: {
                 productionRunId: runId,
                 mmlNodeId: Number(mmlNodeId),
-                value: value !== null && value !== '' ? Number(value) : null,
-                snapshotProductId: node?.productId || null,
+                value: numericValue,
+                snapshotProductId: node.productId || null,
                 staffId: staff?.id || null,
-                recordedAt: new Date()
+                recordedAt: new Date(),
+                // V3: Unified Operations
+                opType: effectiveOpType as any,
+                reasonText: reasonText?.trim() || null,
+                photoUrl: photoUrl || null,
+                photoMeta: photoMeta || null
             },
             include: {
                 staff: {
@@ -1809,21 +1843,24 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             }
         });
 
-        // Пересчитываем actualWeight
-        const allValues = await prisma.productionRunValue.findMany({
-            where: { productionRunId: runId },
+        // V3: Пересчитываем actualWeight (только PRODUCTION)
+        const productionValues = await prisma.productionRunValue.findMany({
+            where: {
+                productionRunId: runId,
+                opType: 'PRODUCTION'
+            },
             include: { node: true }
         });
 
         // Проверяем есть ли иерархия
-        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
+        const nodeIds = new Set(productionValues.map(v => v.mmlNodeId));
         const nodes = await prisma.productionMmlNode.findMany({
             where: { id: { in: Array.from(nodeIds) } }
         });
         const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
 
         let actualWeight = 0;
-        for (const val of allValues) {
+        for (const val of productionValues) {
             const n = nodes.find(x => x.id === val.mmlNodeId);
             const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
             if (shouldSum && val.value !== null) {
@@ -1859,13 +1896,16 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
     }
 };
 
+
 /**
  * Обновить запись значения выработки
+ * V3: Поддержка opType, reasonText, photoUrl обновлений с обработкой orphaned фото
  */
 export const updateRunValueEntry = async (req: Request, res: Response) => {
     try {
         const valueId = Number(req.params.valueId);
-        const { value } = req.body;
+        const { value, opType, reasonText, photoUrl, photoMeta } = req.body;
+        const userId = (req as any).user?.userId;
 
         const existing = await prisma.productionRunValue.findUnique({
             where: { id: valueId },
@@ -1878,12 +1918,88 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
         if (existing.run.isLocked) {
             return res.status(400).json({ error: 'Production run is locked' });
         }
+        if (existing.run.status !== 'draft') {
+            return res.status(400).json({ error: 'Can only update values in draft runs' });
+        }
+
+        // Determine effective opType (existing or new)
+        const effectiveOpType = opType || existing.opType;
+
+        // Validation: value must be > 0 if provided
+        let numericValue = existing.value;
+        if (value !== undefined) {
+            if (value === null || value === '') {
+                return res.status(400).json({ error: 'value cannot be empty' });
+            }
+            numericValue = Number(value);
+            if (isNaN(numericValue as number) || (numericValue as number) <= 0) {
+                return res.status(400).json({ error: 'value must be a positive number' });
+            }
+        }
+
+        // Validation: opType
+        if (opType) {
+            const validOpTypes = ['PRODUCTION', 'WRITEOFF', 'ADJUSTMENT'];
+            if (!validOpTypes.includes(opType)) {
+                return res.status(400).json({ error: `opType must be one of: ${validOpTypes.join(', ')}` });
+            }
+        }
+
+        // Validation: reasonText required for WRITEOFF and ADJUSTMENT
+        const effectiveReasonText = reasonText !== undefined ? reasonText : existing.reasonText;
+        if ((effectiveOpType === 'WRITEOFF' || effectiveOpType === 'ADJUSTMENT') && !effectiveReasonText?.trim()) {
+            return res.status(400).json({
+                error: `reasonText is required for ${effectiveOpType} operations`
+            });
+        }
+
+        // Handle photo replacement (orphan old photo)
+        let oldPhotoOrphaned = false;
+        let oldPhotoUrl: string | null = null;
+
+        if (photoUrl && existing.photoUrl && photoUrl !== existing.photoUrl) {
+            oldPhotoUrl = existing.photoUrl;
+            // Try to delete old photo synchronously
+            try {
+                const { deletePhotoFile, logOrphanedPhoto } = await import('./uploads.controller');
+                const deleted = deletePhotoFile(existing.photoUrl);
+                if (!deleted) {
+                    oldPhotoOrphaned = true;
+                    logOrphanedPhoto({
+                        runId: existing.productionRunId,
+                        runValueId: existing.id,
+                        userId,
+                        oldPhotoUrl: existing.photoUrl,
+                        newPhotoUrl: photoUrl,
+                        reason: 'File not found or delete failed'
+                    });
+                }
+            } catch (err: any) {
+                oldPhotoOrphaned = true;
+                const { logOrphanedPhoto } = await import('./uploads.controller');
+                logOrphanedPhoto({
+                    runId: existing.productionRunId,
+                    runValueId: existing.id,
+                    userId,
+                    oldPhotoUrl: existing.photoUrl,
+                    newPhotoUrl: photoUrl,
+                    reason: err.message,
+                    stack: err.stack
+                });
+            }
+        }
+
+        // Build update data
+        const updateData: any = {};
+        if (value !== undefined) updateData.value = numericValue;
+        if (opType !== undefined) updateData.opType = opType;
+        if (reasonText !== undefined) updateData.reasonText = reasonText?.trim() || null;
+        if (photoUrl !== undefined) updateData.photoUrl = photoUrl || null;
+        if (photoMeta !== undefined) updateData.photoMeta = photoMeta || null;
 
         const updated = await prisma.productionRunValue.update({
             where: { id: valueId },
-            data: {
-                value: value !== null && value !== '' ? Number(value) : null
-            },
+            data: updateData,
             include: {
                 staff: {
                     select: { id: true, fullName: true }
@@ -1898,20 +2014,23 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
             }
         });
 
-        // Пересчитываем actualWeight
-        const allValues = await prisma.productionRunValue.findMany({
-            where: { productionRunId: existing.productionRunId },
+        // V3: Пересчитываем actualWeight (только PRODUCTION)
+        const productionValues = await prisma.productionRunValue.findMany({
+            where: {
+                productionRunId: existing.productionRunId,
+                opType: 'PRODUCTION'
+            },
             include: { node: true }
         });
 
-        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
+        const nodeIds = new Set(productionValues.map(v => v.mmlNodeId));
         const nodes = await prisma.productionMmlNode.findMany({
             where: { id: { in: Array.from(nodeIds) } }
         });
         const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
 
         let actualWeight = 0;
-        for (const val of allValues) {
+        for (const val of productionValues) {
             const n = nodes.find(x => x.id === val.mmlNodeId);
             const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
             if (shouldSum && val.value !== null) {
@@ -1940,12 +2059,20 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
             }
         })();
 
-        res.json(updated);
+        // Include orphan info in response
+        const response: any = updated;
+        if (oldPhotoOrphaned) {
+            response.oldPhotoOrphaned = true;
+            response.oldPhotoUrl = oldPhotoUrl;
+        }
+
+        res.json(response);
     } catch (error) {
         console.error('updateRunValueEntry error:', error);
         res.status(500).json({ error: 'Failed to update run value entry' });
     }
 };
+
 
 /**
  * Удалить запись значения выработки
@@ -2740,6 +2867,7 @@ async function deallocateRun(
 /**
  * Провести документ выработки (draft → posted)
  * POST /api/production-v2/runs/:id/post
+ * V3: FIFO расход = Σ(PRODUCTION) + Σ(WRITEOFF) + Σ(ADJUSTMENT)
  */
 export const postProductionRun = async (req: Request, res: Response) => {
     try {
@@ -2766,17 +2894,35 @@ export const postProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: `Cannot post run with status '${run.status}'` });
         }
 
-        if (!run.actualWeight || new Prisma.Decimal(run.actualWeight).lte(0)) {
-            return res.status(400).json({ error: 'Cannot post run with zero weight' });
+        // V3: Получаем все значения и считаем FIFO qty
+        const allValues = await prisma.productionRunValue.findMany({
+            where: { productionRunId: runId }
+        });
+
+        if (allValues.length === 0) {
+            return res.status(400).json({ error: 'Cannot post run with no values' });
+        }
+
+        // V3: FIFO расход = сумма всех операций (все типы)
+        // PRODUCTION, WRITEOFF, ADJUSTMENT - все считаются как расход сырья
+        let fifoQty = new Prisma.Decimal(0);
+        for (const val of allValues) {
+            if (val.value) {
+                fifoQty = fifoQty.add(new Prisma.Decimal(val.value));
+            }
+        }
+
+        if (fifoQty.lte(0)) {
+            return res.status(400).json({ error: 'Cannot post run with zero total weight' });
         }
 
         await prisma.$transaction(async (tx) => {
-            // 1. FIFO allocation
+            // 1. FIFO allocation (используем fifoQty, не actualWeight)
             await allocateRunToLots(
                 tx,
                 run.id,
                 run.productId,
-                new Prisma.Decimal(run.actualWeight!),
+                fifoQty,
                 run.productionDate
             );
 
@@ -2802,17 +2948,22 @@ export const postProductionRun = async (req: Request, res: Response) => {
                     productionDate: dayStart,
                     productId: run.productId,
                     performedBy: username,
-                    payload: { runId, actualWeight: run.actualWeight?.toString() }
+                    payload: {
+                        runId,
+                        actualWeight: run.actualWeight?.toString(),
+                        fifoQty: fifoQty.toString()
+                    }
                 }
             });
         });
 
-        res.json({ success: true, runId, status: 'posted' });
+        res.json({ success: true, runId, status: 'posted', fifoQty: fifoQty.toString() });
     } catch (error) {
         console.error('postProductionRun error:', error);
         res.status(500).json({ error: 'Failed to post production run' });
     }
 };
+
 
 /**
  * Аннулировать документ выработки (posted → voided)
