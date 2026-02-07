@@ -223,7 +223,9 @@ export default function ProductionV3Page() {
     const [adjDeltaWeight, setAdjDeltaWeight] = useState('');
     const [adjReason, setAdjReason] = useState('');
 
-    // V3: Operation type state (used in showAddValueModal)
+    // V3: Wizard modal state (TYPE → METHOD → FORM)
+    const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+    const [selectedMethod, setSelectedMethod] = useState<'manual' | 'photo'>('manual');
     const [selectedOpType, setSelectedOpType] = useState<ProductionOpType>('PRODUCTION');
     const [opReasonText, setOpReasonText] = useState('');
     const [opPhotoUrl, setOpPhotoUrl] = useState<string | null>(null);
@@ -697,6 +699,8 @@ export default function ProductionV3Page() {
             setNewValueAmount('');
             setSelectedNodeForValue(null);
             // V3: Reset operation state
+            setWizardStep(1);
+            setSelectedMethod('manual');
             setSelectedOpType('PRODUCTION');
             setOpReasonText('');
             setOpPhotoUrl(null);
@@ -843,7 +847,9 @@ export default function ProductionV3Page() {
             setShowAddValueModal(false);
             setNewValueAmount('');
             setEditingValueId(null);
-            // V3: Reset photo state
+            // V3: Reset wizard & photo state
+            setWizardStep(1);
+            setSelectedMethod('manual');
             setOpPhotoUrl(null);
             setOpPhotoMeta(null);
         } catch (err: any) {
@@ -1622,6 +1628,8 @@ export default function ProductionV3Page() {
                                                     setSelectedNodeForValue(activeCategoryNodes[0]);
                                                     setNewValueAmount('');
                                                     setEditingValueId(null);
+                                                    setWizardStep(1);
+                                                    setSelectedMethod('manual');
                                                     setShowAddValueModal(true);
                                                 } else {
                                                     setWarning('Сначала выберите категорию');
@@ -1758,6 +1766,8 @@ export default function ProductionV3Page() {
                                                                         setSelectedNodeForValue(node);
                                                                         setNewValueAmount('');
                                                                         setEditingValueId(null);
+                                                                        setWizardStep(1);
+                                                                        setSelectedMethod('manual');
                                                                         setShowAddValueModal(true);
                                                                     }}
                                                                     className="text-green-500 hover:text-green-700 p-0.5"
@@ -1805,6 +1815,7 @@ export default function ProductionV3Page() {
                                                                             setSelectedNodeForValue(node);
                                                                             setEditingValueId(entry.id);
                                                                             setNewValueAmount(String(entry.value));
+                                                                            setWizardStep(3);
                                                                             setShowAddValueModal(true);
                                                                         }}
                                                                         className="text-blue-400 hover:text-blue-600 p-0.5"
@@ -1933,7 +1944,7 @@ export default function ProductionV3Page() {
                                 <button onClick={() => setShowCategoryModal(false)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
                             </div>
                             <div className="p-4 border-b flex gap-2">
-                                <Button size="sm" onClick={() => { setShowAddValueModal(true); setSelectedNodeForValue(activeCategoryNodes[0] || null); }}
+                                <Button size="sm" onClick={() => { setWizardStep(1); setSelectedMethod('manual'); setEditingValueId(null); setShowAddValueModal(true); setSelectedNodeForValue(activeCategoryNodes[0] || null); }}
                                     className="bg-green-600 hover:bg-green-700" disabled={selectedRun?.isLocked}>
                                     <Plus size={14} className="mr-1" /> Добавить строку
                                 </Button>
@@ -2062,9 +2073,10 @@ export default function ProductionV3Page() {
                                                         <button onClick={() => {
                                                             setEditingValueId(entry.id);
                                                             setNewValueAmount(String(entry.value || ''));
-                                                            // V3: Load existing photo
+                                                            // V3: Load existing photo, skip wizard to step 3 (edit mode)
                                                             setOpPhotoUrl(entry.photoUrl || null);
                                                             setOpPhotoMeta(entry.photoMeta || null);
+                                                            setWizardStep(3);
                                                             setShowAddValueModal(true);
                                                         }}
                                                             className="text-blue-600 hover:text-blue-800" disabled={selectedRun?.isLocked}>
@@ -2101,277 +2113,381 @@ export default function ProductionV3Page() {
                 )
             }
 
-            {/* Модальное окно добавления/редактирования записи (V3: с типом операции) */}
+            {/* Модальное окно добавления/редактирования записи (V3: Wizard TYPE → METHOD → FORM) */}
             {
                 showAddValueModal && (
                     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60]">
-                        <div className="bg-white rounded-lg shadow-xl w-[500px]">
+                        <div className="bg-white rounded-lg shadow-xl w-[500px] max-h-[90vh] overflow-y-auto">
+                            {/* Header */}
                             <div className="p-4 border-b flex justify-between items-center">
-                                <h3 className="text-lg font-semibold">{editingValueId ? 'Редактировать запись' : 'Добавить операцию'}</h3>
+                                <div className="flex items-center gap-3">
+                                    {/* Back button for steps 2 and 3 */}
+                                    {!editingValueId && wizardStep > 1 && (
+                                        <button onClick={() => setWizardStep(wizardStep === 3 ? 2 : 1 as 1 | 2)}
+                                            className="text-gray-400 hover:text-gray-600 p-1">
+                                            ←
+                                        </button>
+                                    )}
+                                    <h3 className="text-lg font-semibold">
+                                        {editingValueId ? 'Редактировать запись' :
+                                            wizardStep === 1 ? 'Шаг 1: Тип операции' :
+                                                wizardStep === 2 ? 'Шаг 2: Способ ввода' :
+                                                    'Шаг 3: Данные операции'}
+                                    </h3>
+                                </div>
                                 <button onClick={() => {
                                     setShowAddValueModal(false);
                                     setEditingValueId(null);
                                     setNewValueAmount('');
                                     setSelectedOpType('PRODUCTION');
-                                    setOpReasonText('');
-                                    setOpPhotoUrl(null);
-                                    setOpPhotoMeta(null);
-                                }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
-                            </div>
-                            <div className="p-4 space-y-4">
-                                {/* V3: Operation Type Selection */}
-                                {!editingValueId && (
-                                    <div>
-                                        <label className="text-sm text-gray-500 block mb-2">Быстрые действия</label>
-                                        <div className="grid grid-cols-4 gap-2">
-                                            {/* Выработка ручн */}
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedOpType('PRODUCTION')}
-                                                className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${selectedOpType === 'PRODUCTION'
-                                                    ? 'bg-green-600 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                            >
-                                                ✅ Выработка
-                                            </button>
-                                            {/* Фото для любого типа */}
-                                            <label
-                                                className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer text-center ${opPhotoUrl
-                                                    ? 'bg-indigo-600 text-white'
-                                                    : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                                                    }`}
-                                            >
-                                                📷 Фото
-                                                <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    {...(isMobile ? { capture: 'environment' as const } : {})}
-                                                    onChange={handlePhotoUpload}
-                                                    className="hidden"
-                                                />
-                                            </label>
-                                            {/* Списание */}
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedOpType('WRITEOFF')}
-                                                className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${selectedOpType === 'WRITEOFF'
-                                                    ? 'bg-red-600 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                            >
-                                                ❌ Списание
-                                            </button>
-                                            {/* Корректировка */}
-                                            <button
-                                                type="button"
-                                                onClick={() => setSelectedOpType('ADJUSTMENT')}
-                                                className={`px-2 py-2 rounded-lg text-xs font-medium transition-colors ${selectedOpType === 'ADJUSTMENT'
-                                                    ? 'bg-orange-600 text-white'
-                                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                                    }`}
-                                            >
-                                                ⚖️ Коррект.
-                                            </button>
-                                        </div>
-                                        <div className="mt-1 text-xs text-gray-400">
-                                            {selectedOpType === 'PRODUCTION' && 'Выработка — готовая продукция'}
-                                            {selectedOpType === 'WRITEOFF' && 'Списание — отходы, брак'}
-                                            {selectedOpType === 'ADJUSTMENT' && 'Корректировка — расхождение веса'}
-                                        </div>
-                                    </div>
-                                )}
-
-                                <div>
-                                    <label className="text-sm text-gray-500 block mb-1">Сотрудник</label>
-                                    <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={currentStaff?.fullName || ''} disabled />
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-sm text-gray-500 block mb-1">Дата</label>
-                                        <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleDateString('ru-RU')} disabled />
-                                    </div>
-                                    <div>
-                                        <label className="text-sm text-gray-500 block mb-1">Время</label>
-                                        <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} disabled />
-                                    </div>
-                                </div>
-                                {!editingValueId && (
-                                    <div>
-                                        <label className="text-sm text-gray-500 block mb-1">Позиция</label>
-                                        <select className="w-full border rounded px-3 py-2" value={selectedNodeForValue?.id || ''}
-                                            onChange={e => setSelectedNodeForValue(activeCategoryNodes.find(n => n.id === Number(e.target.value)) || null)}>
-                                            {activeCategoryNodes.map(node => (
-                                                <option key={node.id} value={node.id}>{node.product.name}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
-                                <div>
-                                    <label className="text-sm text-gray-500 block mb-1">Значение (кг)</label>
-                                    <input type="number" className="w-full border rounded px-3 py-2 text-lg font-medium" placeholder="0.000" step="0.001"
-                                        value={newValueAmount} onChange={e => setNewValueAmount(e.target.value)} autoFocus />
-                                </div>
-
-                                {/* V3: Reason text for WRITEOFF/ADJUSTMENT */}
-                                {(selectedOpType === 'WRITEOFF' || selectedOpType === 'ADJUSTMENT') && !editingValueId && (
-                                    <div>
-                                        <label className="text-sm text-gray-500 block mb-1">
-                                            Причина <span className="text-red-500">*</span>
-                                        </label>
-                                        <input
-                                            type="text"
-                                            className="w-full border rounded px-3 py-2"
-                                            placeholder={selectedOpType === 'WRITEOFF' ? 'Причина списания...' : 'Причина корректировки...'}
-                                            value={opReasonText}
-                                            onChange={e => setOpReasonText(e.target.value)}
-                                        />
-                                    </div>
-                                )}
-
-                                {/* V3: Photo upload section (shown in both add and edit modes) */}
-                                <div>
-                                    <label className="text-sm text-gray-500 block mb-1">Фото весов (опционально)</label>
-                                    <div className="flex items-center gap-3">
-                                        {/* Photo preview or upload button */}
-                                        {opPhotoUrl ? (
-                                            <div className="relative flex items-center gap-2">
-                                                <img
-                                                    src={`${API_URL}${opPhotoUrl}`}
-                                                    alt="Фото весов"
-                                                    className="w-20 h-20 object-cover rounded-lg border"
-                                                />
-                                                {/* Перефото button */}
-                                                <label className="px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg cursor-pointer hover:bg-indigo-200 text-xs font-medium">
-                                                    📷 Перефото
-                                                    <input
-                                                        type="file"
-                                                        accept="image/*"
-                                                        {...(isMobile ? { capture: 'environment' as const } : {})}
-                                                        onChange={handlePhotoUpload}
-                                                        className="hidden"
-                                                    />
-                                                </label>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => { setOpPhotoUrl(null); setOpPhotoMeta(null); setOcrResult(null); }}
-                                                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
-                                                    title="Удалить фото"
-                                                >
-                                                    <X size={12} />
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <label className={`flex items-center gap-2 px-4 py-2 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${opPhotoLoading ? 'bg-gray-100 cursor-wait' : 'hover:bg-gray-50 hover:border-indigo-400'}`}>
-                                                {opPhotoLoading ? (
-                                                    <span className="animate-spin inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full"></span>
-                                                ) : (
-                                                    <Camera size={20} className="text-indigo-600" />
-                                                )}
-                                                <span className="text-sm text-gray-600">
-                                                    {opPhotoLoading ? 'Загрузка...' : 'Сделать фото'}
-                                                </span>
-                                                <input
-                                                    type="file"
-                                                    accept="image/*"
-                                                    {...(isMobile ? { capture: 'environment' as const } : {})}
-                                                    onChange={handlePhotoUpload}
-                                                    disabled={opPhotoLoading}
-                                                    className="hidden"
-                                                />
-                                            </label>
-                                        )}
-
-                                        {/* V3: OCR Result with Apply button - B1: color by confidence */}
-                                        {ocrResult && (
-                                            <div className={`p-3 border rounded-lg ${ocrResult.value > 0 && ocrResult.confidence >= 0.5
-                                                ? 'bg-green-50 border-green-200'
-                                                : ocrResult.value > 0
-                                                    ? 'bg-yellow-50 border-yellow-300'
-                                                    : 'bg-red-50 border-red-200'
-                                                }`}>
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <div>
-                                                        {ocrResult.value > 0 ? (
-                                                            <>
-                                                                <div className={`text-xs ${ocrResult.confidence >= 0.5 ? 'text-gray-500' : 'text-yellow-700'}`}>
-                                                                    {ocrResult.confidence >= 0.5 ? 'OCR распознал:' : '⚠️ Низкая уверенность:'}
-                                                                </div>
-                                                                <div className={`text-lg font-bold ${ocrResult.confidence >= 0.5 ? 'text-green-700' : 'text-yellow-700'}`}>
-                                                                    {ocrResult.value} кг
-                                                                </div>
-                                                                <div className="text-xs text-gray-400">
-                                                                    Уверенность: {Math.round(ocrResult.confidence * 100)}%
-                                                                    {ocrResult.confidence < 0.5 && ' — проверьте вручную'}
-                                                                </div>
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <div className="text-xs text-red-600">❌ Не распознано</div>
-                                                                <div className="text-sm text-gray-600">Введите вручную</div>
-                                                            </>
-                                                        )}
-                                                        {/* Show raw for debugging */}
-                                                        {ocrResult.raw && (
-                                                            <details className="mt-1">
-                                                                <summary className="text-xs text-gray-400 cursor-pointer">Raw: {ocrResult.raw.slice(0, 20)}...</summary>
-                                                                <pre className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{ocrResult.raw}</pre>
-                                                            </details>
-                                                        )}
-                                                    </div>
-                                                    {ocrResult.value > 0 && (
-                                                        <button
-                                                            onClick={() => {
-                                                                setNewValueAmount(String(ocrResult.value));
-                                                                setOcrResult(null);
-                                                            }}
-                                                            className={`px-3 py-2 text-white rounded-lg text-sm font-medium ${ocrResult.confidence >= 0.5
-                                                                ? 'bg-green-600 hover:bg-green-700'
-                                                                : 'bg-yellow-600 hover:bg-yellow-700'
-                                                                }`}
-                                                        >
-                                                            {ocrResult.confidence >= 0.5 ? '✓ Применить' : '⚠ Применить'}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="p-4 border-t flex justify-end gap-2">
-                                <Button variant="outline" onClick={() => {
-                                    setShowAddValueModal(false);
-                                    setEditingValueId(null);
-                                    setNewValueAmount('');
-                                    setSelectedOpType('PRODUCTION');
+                                    setSelectedMethod('manual');
+                                    setWizardStep(1);
                                     setOpReasonText('');
                                     setOpPhotoUrl(null);
                                     setOpPhotoMeta(null);
                                     setOcrResult(null);
-                                }} disabled={isSubmitting}>Отмена</Button>
-                                <Button
-                                    onClick={editingValueId ? updateValueEntry : addValueEntry}
-                                    className={
-                                        selectedOpType === 'PRODUCTION' ? 'bg-green-600 hover:bg-green-700' :
-                                            selectedOpType === 'WRITEOFF' ? 'bg-red-600 hover:bg-red-700' :
-                                                'bg-orange-600 hover:bg-orange-700'
+                                }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                            </div>
+
+                            {/* Step indicators (only for new entries) */}
+                            {!editingValueId && (
+                                <div className="px-4 pt-3 flex items-center gap-2">
+                                    {[1, 2, 3].map(step => (
+                                        <div key={step} className="flex items-center gap-2 flex-1">
+                                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${wizardStep === step ? 'bg-indigo-600 text-white' :
+                                                wizardStep > step ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                                                }`}>
+                                                {wizardStep > step ? '✓' : step}
+                                            </div>
+                                            {step < 3 && (
+                                                <div className={`flex-1 h-0.5 ${wizardStep > step ? 'bg-green-500' : 'bg-gray-200'}`} />
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="p-4 space-y-4">
+                                {/* ===== STEP 1: Type Selection ===== */}
+                                {!editingValueId && wizardStep === 1 && (
+                                    <>
+                                        {/* Position selector */}
+                                        <div>
+                                            <label className="text-sm text-gray-500 block mb-1">Позиция</label>
+                                            <select className="w-full border rounded px-3 py-2" value={selectedNodeForValue?.id || ''}
+                                                onChange={e => setSelectedNodeForValue(activeCategoryNodes.find(n => n.id === Number(e.target.value)) || null)}>
+                                                {activeCategoryNodes.map(node => (
+                                                    <option key={node.id} value={node.id}>{node.product.name}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <label className="text-sm text-gray-500 block">Тип операции</label>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedOpType('PRODUCTION')}
+                                                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${selectedOpType === 'PRODUCTION'
+                                                    ? 'border-green-500 bg-green-50 shadow-md'
+                                                    : 'border-gray-200 hover:border-green-300 hover:bg-green-50/50'
+                                                    }`}
+                                            >
+                                                <span className="text-2xl">✅</span>
+                                                <span className="text-sm font-semibold">Выработка</span>
+                                                <span className="text-[10px] text-gray-400">Готовая продукция</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedOpType('WRITEOFF')}
+                                                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${selectedOpType === 'WRITEOFF'
+                                                    ? 'border-red-500 bg-red-50 shadow-md'
+                                                    : 'border-gray-200 hover:border-red-300 hover:bg-red-50/50'
+                                                    }`}
+                                            >
+                                                <span className="text-2xl">❌</span>
+                                                <span className="text-sm font-semibold">Списание</span>
+                                                <span className="text-[10px] text-gray-400">Отходы, брак</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedOpType('ADJUSTMENT')}
+                                                className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${selectedOpType === 'ADJUSTMENT'
+                                                    ? 'border-orange-500 bg-orange-50 shadow-md'
+                                                    : 'border-gray-200 hover:border-orange-300 hover:bg-orange-50/50'
+                                                    }`}
+                                            >
+                                                <span className="text-2xl">⚖️</span>
+                                                <span className="text-sm font-semibold">Корректировка</span>
+                                                <span className="text-[10px] text-gray-400">Расхождение веса</span>
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+
+                                {/* ===== STEP 2: Method Selection ===== */}
+                                {!editingValueId && wizardStep === 2 && (
+                                    <>
+                                        <div className="text-sm text-gray-500 mb-1">
+                                            Тип: <span className={`font-semibold ${selectedOpType === 'PRODUCTION' ? 'text-green-600' : selectedOpType === 'WRITEOFF' ? 'text-red-600' : 'text-orange-600'}`}>
+                                                {selectedOpType === 'PRODUCTION' ? '✅ Выработка' : selectedOpType === 'WRITEOFF' ? '❌ Списание' : '⚖️ Корректировка'}
+                                            </span>
+                                        </div>
+                                        <label className="text-sm text-gray-500 block">Способ ввода</label>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedMethod('manual')}
+                                                className={`flex flex-col items-center gap-3 p-6 rounded-xl border-2 transition-all ${selectedMethod === 'manual'
+                                                    ? 'border-indigo-500 bg-indigo-50 shadow-md'
+                                                    : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50'
+                                                    }`}
+                                            >
+                                                <span className="text-3xl">⌨️</span>
+                                                <span className="text-sm font-semibold">Вручную</span>
+                                                <span className="text-[10px] text-gray-400 text-center">Ввод веса с клавиатуры</span>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedMethod('photo')}
+                                                className={`flex flex-col items-center gap-3 p-6 rounded-xl border-2 transition-all ${selectedMethod === 'photo'
+                                                    ? 'border-indigo-500 bg-indigo-50 shadow-md'
+                                                    : 'border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/50'
+                                                    }`}
+                                            >
+                                                <span className="text-3xl">📷</span>
+                                                <span className="text-sm font-semibold">Фото весов</span>
+                                                <span className="text-[10px] text-gray-400 text-center">OCR распознавание</span>
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+
+                                {/* ===== STEP 3: Data Entry Form (also used for Edit mode) ===== */}
+                                {(wizardStep === 3 || editingValueId) && (
+                                    <>
+                                        {/* Type badge (summary from step 1) */}
+                                        {!editingValueId && (
+                                            <div className="flex items-center gap-2 text-sm text-gray-500">
+                                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${selectedOpType === 'PRODUCTION' ? 'bg-green-100 text-green-700' :
+                                                    selectedOpType === 'WRITEOFF' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                                                    }`}>
+                                                    {selectedOpType === 'PRODUCTION' ? '✅ Выработка' : selectedOpType === 'WRITEOFF' ? '❌ Списание' : '⚖️ Корректировка'}
+                                                </span>
+                                                <span>•</span>
+                                                <span>{selectedMethod === 'photo' ? '📷 Фото' : '⌨️ Вручную'}</span>
+                                                <span>•</span>
+                                                <span className="font-medium">{selectedNodeForValue?.product.name}</span>
+                                            </div>
+                                        )}
+
+                                        {/* Staff (disabled) */}
+                                        <div>
+                                            <label className="text-sm text-gray-500 block mb-1">Сотрудник</label>
+                                            <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={currentStaff?.fullName || ''} disabled />
+                                        </div>
+
+                                        {/* Date & Time (disabled) */}
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-sm text-gray-500 block mb-1">Дата</label>
+                                                <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleDateString('ru-RU')} disabled />
+                                            </div>
+                                            <div>
+                                                <label className="text-sm text-gray-500 block mb-1">Время</label>
+                                                <input type="text" className="w-full border rounded px-3 py-2 bg-gray-50" value={new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} disabled />
+                                            </div>
+                                        </div>
+
+                                        {/* Photo section (if method=photo OR edit mode) */}
+                                        {(selectedMethod === 'photo' || editingValueId || opPhotoUrl) && (
+                                            <div>
+                                                <label className="text-sm text-gray-500 block mb-1">Фото весов</label>
+                                                <div className="flex items-center gap-3">
+                                                    {opPhotoUrl ? (
+                                                        <div className="relative flex items-center gap-2">
+                                                            <img
+                                                                src={`${API_URL}${opPhotoUrl}`}
+                                                                alt="Фото весов"
+                                                                className="w-20 h-20 object-cover rounded-lg border"
+                                                            />
+                                                            <label className="px-3 py-2 bg-indigo-100 text-indigo-700 rounded-lg cursor-pointer hover:bg-indigo-200 text-xs font-medium">
+                                                                📷 Перефото
+                                                                <input
+                                                                    type="file"
+                                                                    accept="image/*"
+                                                                    {...(isMobile ? { capture: 'environment' as const } : {})}
+                                                                    onChange={handlePhotoUpload}
+                                                                    className="hidden"
+                                                                />
+                                                            </label>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => { setOpPhotoUrl(null); setOpPhotoMeta(null); setOcrResult(null); }}
+                                                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                                                                title="Удалить фото"
+                                                            >
+                                                                <X size={12} />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <label className={`flex items-center gap-2 px-4 py-2 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${opPhotoLoading ? 'bg-gray-100 cursor-wait' : 'hover:bg-gray-50 hover:border-indigo-400'}`}>
+                                                            {opPhotoLoading ? (
+                                                                <span className="animate-spin inline-block w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full"></span>
+                                                            ) : (
+                                                                <Camera size={20} className="text-indigo-600" />
+                                                            )}
+                                                            <span className="text-sm text-gray-600">
+                                                                {opPhotoLoading ? 'Загрузка...' : 'Сделать фото'}
+                                                            </span>
+                                                            <input
+                                                                type="file"
+                                                                accept="image/*"
+                                                                {...(isMobile ? { capture: 'environment' as const } : {})}
+                                                                onChange={handlePhotoUpload}
+                                                                disabled={opPhotoLoading}
+                                                                className="hidden"
+                                                            />
+                                                        </label>
+                                                    )}
+
+                                                    {/* OCR Result with Apply button */}
+                                                    {ocrResult && (
+                                                        <div className={`p-3 border rounded-lg ${ocrResult.value > 0 && ocrResult.confidence >= 0.5
+                                                            ? 'bg-green-50 border-green-200'
+                                                            : ocrResult.value > 0
+                                                                ? 'bg-yellow-50 border-yellow-300'
+                                                                : 'bg-red-50 border-red-200'
+                                                            }`}>
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <div>
+                                                                    {ocrResult.value > 0 ? (
+                                                                        <>
+                                                                            <div className={`text-xs ${ocrResult.confidence >= 0.5 ? 'text-gray-500' : 'text-yellow-700'}`}>
+                                                                                {ocrResult.confidence >= 0.5 ? 'OCR распознал:' : '⚠️ Низкая уверенность:'}
+                                                                            </div>
+                                                                            <div className={`text-lg font-bold ${ocrResult.confidence >= 0.5 ? 'text-green-700' : 'text-yellow-700'}`}>
+                                                                                {ocrResult.value} кг
+                                                                            </div>
+                                                                            <div className="text-xs text-gray-400">
+                                                                                Уверенность: {Math.round(ocrResult.confidence * 100)}%
+                                                                                {ocrResult.confidence < 0.5 && ' — проверьте вручную'}
+                                                                            </div>
+                                                                        </>
+                                                                    ) : (
+                                                                        <>
+                                                                            <div className="text-xs text-red-600">❌ Не распознано</div>
+                                                                            <div className="text-sm text-gray-600">Введите вручную</div>
+                                                                        </>
+                                                                    )}
+                                                                    {ocrResult.raw && (
+                                                                        <details className="mt-1">
+                                                                            <summary className="text-xs text-gray-400 cursor-pointer">Raw: {ocrResult.raw.slice(0, 20)}...</summary>
+                                                                            <pre className="text-xs text-gray-500 mt-1 whitespace-pre-wrap">{ocrResult.raw}</pre>
+                                                                        </details>
+                                                                    )}
+                                                                </div>
+                                                                {ocrResult.value > 0 && (
+                                                                    <button
+                                                                        onClick={() => {
+                                                                            setNewValueAmount(String(ocrResult.value));
+                                                                            setOcrResult(null);
+                                                                        }}
+                                                                        className={`px-3 py-2 text-white rounded-lg text-sm font-medium ${ocrResult.confidence >= 0.5
+                                                                            ? 'bg-green-600 hover:bg-green-700'
+                                                                            : 'bg-yellow-600 hover:bg-yellow-700'
+                                                                            }`}
+                                                                    >
+                                                                        {ocrResult.confidence >= 0.5 ? '✓ Применить' : '⚠ Применить'}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Value input */}
+                                        <div>
+                                            <label className="text-sm text-gray-500 block mb-1">Значение (кг)</label>
+                                            <input type="number" className="w-full border rounded px-3 py-2 text-lg font-medium" placeholder="0.000" step="0.001"
+                                                value={newValueAmount} onChange={e => setNewValueAmount(e.target.value)} autoFocus />
+                                        </div>
+
+                                        {/* Reason text for WRITEOFF/ADJUSTMENT */}
+                                        {(selectedOpType === 'WRITEOFF' || selectedOpType === 'ADJUSTMENT') && !editingValueId && (
+                                            <div>
+                                                <label className="text-sm text-gray-500 block mb-1">
+                                                    Причина <span className="text-red-500">*</span>
+                                                </label>
+                                                <input
+                                                    type="text"
+                                                    className="w-full border rounded px-3 py-2"
+                                                    placeholder={selectedOpType === 'WRITEOFF' ? 'Причина списания...' : 'Причина корректировки...'}
+                                                    value={opReasonText}
+                                                    onChange={e => setOpReasonText(e.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Footer */}
+                            <div className="p-4 border-t flex justify-between">
+                                <Button variant="outline" onClick={() => {
+                                    if (!editingValueId && wizardStep > 1) {
+                                        setWizardStep(wizardStep === 3 ? 2 : 1 as 1 | 2);
+                                    } else {
+                                        setShowAddValueModal(false);
+                                        setEditingValueId(null);
+                                        setNewValueAmount('');
+                                        setSelectedOpType('PRODUCTION');
+                                        setSelectedMethod('manual');
+                                        setWizardStep(1);
+                                        setOpReasonText('');
+                                        setOpPhotoUrl(null);
+                                        setOpPhotoMeta(null);
+                                        setOcrResult(null);
                                     }
-                                    disabled={isSubmitting}
-                                >
-                                    {isSubmitting ? (
-                                        <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>Загрузка...</>
-                                    ) : (
-                                        editingValueId ? 'Сохранить' :
-                                            selectedOpType === 'PRODUCTION' ? 'Добавить выработку' :
-                                                selectedOpType === 'WRITEOFF' ? 'Списать' : 'Корректировать'
-                                    )}
+                                }} disabled={isSubmitting}>
+                                    {!editingValueId && wizardStep > 1 ? '← Назад' : 'Отмена'}
                                 </Button>
+
+                                {/* Next / Submit button */}
+                                {!editingValueId && wizardStep < 3 ? (
+                                    <Button
+                                        onClick={() => setWizardStep((wizardStep + 1) as 2 | 3)}
+                                        className="bg-indigo-600 hover:bg-indigo-700"
+                                    >
+                                        Далее →
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        onClick={editingValueId ? updateValueEntry : addValueEntry}
+                                        className={
+                                            selectedOpType === 'PRODUCTION' ? 'bg-green-600 hover:bg-green-700' :
+                                                selectedOpType === 'WRITEOFF' ? 'bg-red-600 hover:bg-red-700' :
+                                                    'bg-orange-600 hover:bg-orange-700'
+                                        }
+                                        disabled={isSubmitting}
+                                    >
+                                        {isSubmitting ? (
+                                            <><span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>Загрузка...</>
+                                        ) : (
+                                            editingValueId ? 'Сохранить' :
+                                                selectedOpType === 'PRODUCTION' ? 'Добавить выработку' :
+                                                    selectedOpType === 'WRITEOFF' ? 'Списать' : 'Корректировать'
+                                        )}
+                                    </Button>
+                                )}
                             </div>
                         </div>
                     </div>
                 )
             }
+
+
 
             {/* Модальное окно MML для закупок/остатков */}
             {
