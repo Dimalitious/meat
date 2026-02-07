@@ -43,6 +43,7 @@
     "multer": "^2.0.2",
     "prisma": "^6.8.2",
     "socket.io": "^4.8.3",
+    "tesseract.js": "^7.0.0",
     "unzipper": "^0.12.3",
     "xlsx": "^0.18.5"
   }

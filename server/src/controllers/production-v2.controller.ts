@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { getUtcRangeFromYmd } from '../utils/dateRange';
 
 const prisma = new PrismaClient();
 
@@ -773,23 +774,12 @@ export const createProductionRun = async (req: Request, res: Response) => {
 export const saveProductionRunValues = async (req: Request, res: Response) => {
     try {
         const runId = Number(req.params.id);
-        const { values, productionDate, plannedWeight } = req.body; // values: [{ mmlNodeId, value }]
-        console.log('saveProductionRunValues: runId=', runId, 'productionDate=', productionDate, 'typeof=', typeof productionDate);
+        const { productionDate, plannedWeight } = req.body;
+        console.log('saveProductionRunValues (meta-only): runId=', runId, 'productionDate=', productionDate);
 
-        // Проверка что выработка не заблокирована
+        // Проверка что выработка существует и не заблокирована
         const existingRun = await prisma.productionRun.findUnique({
-            where: { id: runId },
-            include: {
-                mml: {
-                    include: {
-                        nodes: {
-                            include: {
-                                product: { select: { id: true } }
-                            }
-                        }
-                    }
-                }
-            }
+            where: { id: runId }
         });
         if (!existingRun) {
             return res.status(404).json({ error: 'Production run not found' });
@@ -798,153 +788,24 @@ export const saveProductionRunValues = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'Production run is locked, cannot edit' });
         }
 
-        // Карта узлов для получения productId и parentNodeId
-        const nodesMap = new Map(existingRun.mml.nodes.map(n => [n.id, n]));
-
-        // Проверяем, есть ли иерархия (узлы с parentNodeId !== null)
-        const hasHierarchy = existingRun.mml.nodes.some(n => n.parentNodeId !== null);
-
-        // Если есть иерархия - считаем только не-корневые узлы
-        // Если структура плоская (все parentNodeId = null) - считаем все
-        const nodesToSum = hasHierarchy
-            ? new Set(existingRun.mml.nodes.filter(n => n.parentNodeId !== null).map(n => n.id))
-            : new Set(existingRun.mml.nodes.map(n => n.id));
-
-        // Подготовка данных для batch-операции (оптимизация производительности)
-        let calculatedActualWeight = 0;
-        const valuesToCreate: { productionRunId: number; mmlNodeId: number; value: number | null; snapshotProductId: number | null }[] = [];
-
-        for (const { mmlNodeId, value } of values) {
-            const node = nodesMap.get(Number(mmlNodeId));
-            const numericValue = value !== null && value !== '' ? Number(value) : null;
-
-            // Суммируем узлы согласно логике
-            if (nodesToSum.has(Number(mmlNodeId)) && numericValue !== null && !isNaN(numericValue)) {
-                calculatedActualWeight += numericValue;
-            }
-
-            valuesToCreate.push({
-                productionRunId: runId,
-                mmlNodeId: Number(mmlNodeId),
-                value: numericValue,
-                snapshotProductId: node?.productId || null
-            });
-        }
-
-        // ============================================
-        // TZ2: ВАЛИДАЦИЯ - проверка превышения доступного количества
-        // Допустимая погрешность: 300г (0.3 кг)
-        // ============================================
-        const TOLERANCE_KG = 0.3;
-        const productId = existingRun.productId;
-        const runDate = productionDate ? new Date(productionDate) : existingRun.productionDate;
-
-        // Устанавливаем диапазон дат для поиска закупок и остатков
-        const dateStart = new Date(runDate);
-        dateStart.setUTCHours(0, 0, 0, 0);
-        const dateEnd = new Date(runDate);
-        dateEnd.setUTCHours(23, 59, 59, 999);
-        const previousDate = new Date(runDate);
-        previousDate.setDate(previousDate.getDate() - 1);
-        previousDate.setUTCHours(23, 59, 59, 999);
-
-        // Параллельно получаем: закупки на дату + остаток из материального отчёта
-        const [purchaseTotal, openingBalanceResult] = await Promise.all([
-            // Сумма закупок продукта на дату
-            prisma.purchaseItem.aggregate({
-                where: {
-                    productId,
-                    purchase: {
-                        purchaseDate: { gte: dateStart, lte: dateEnd },
-                        isDisabled: false
-                    }
-                },
-                _sum: { qty: true }
-            }),
-            // Остаток из материального отчёта за предыдущий день
-            prisma.materialReportLine.findFirst({
-                where: {
-                    productId,
-                    materialReport: {
-                        reportDate: { lte: previousDate },
-                        warehouseId: null
-                    }
-                },
-                orderBy: { materialReport: { reportDate: 'desc' } },
-                select: {
-                    closingBalanceCalc: true,
-                    closingBalanceFact: true
-                }
-            })
-        ]);
-
-        const purchaseQty = Number(purchaseTotal._sum.qty || 0);
-        const openingBalance = openingBalanceResult
-            ? (openingBalanceResult.closingBalanceFact !== null
-                ? Number(openingBalanceResult.closingBalanceFact)
-                : Number(openingBalanceResult.closingBalanceCalc || 0))
-            : 0;
-
-        const availableQty = purchaseQty + openingBalance;
-        const producedQty = calculatedActualWeight;
-
-        console.log('[PRODUCTION VALIDATION]', {
-            productId,
-            producedQty,
-            availableQty,
-            purchaseQty,
-            openingBalance,
-            tolerance: TOLERANCE_KG,
-            exceeded: producedQty > availableQty + TOLERANCE_KG
-        });
-
-        // Проверка: если превышено более чем на допуск — отклоняем
-        if (producedQty > availableQty + TOLERANCE_KG) {
-            return res.status(400).json({
-                error: 'Количество выработки превышает доступное количество (закупка + остаток). Проверьте данные.',
-                details: {
-                    produced: Math.round(producedQty * 1000) / 1000,
-                    available: Math.round(availableQty * 1000) / 1000,
-                    purchase: Math.round(purchaseQty * 1000) / 1000,
-                    openingBalance: Math.round(openingBalance * 1000) / 1000,
-                    tolerance: TOLERANCE_KG,
-                    exceeded: Math.round((producedQty - availableQty - TOLERANCE_KG) * 1000) / 1000
-                }
-            });
-        }
-        // ============================================
-
-        // Атомарная транзакция: удаляем старые значения и создаём новые одним batch
-        await prisma.$transaction([
-            prisma.productionRunValue.deleteMany({
-                where: { productionRunId: runId }
-            }),
-            prisma.productionRunValue.createMany({
-                data: valuesToCreate
-            })
-        ]);
-
-        // Обновить actualWeight и другие поля выработки
-        const updateData: any = {
-            actualWeight: calculatedActualWeight
-        };
-
-        console.log('[DEBUG saveRunValues] productionDate from request:', productionDate, 'typeof:', typeof productionDate);
+        // V3: Meta-only update — НЕ трогаем ProductionRunValue строки
+        // Это предотвращает потерю operationAt, opType, photoUrl, reasonText, staffId
+        const updateData: any = {};
 
         if (productionDate !== undefined) {
             updateData.productionDate = new Date(productionDate);
-            console.log('[DEBUG saveRunValues] Setting productionDate to:', updateData.productionDate);
         }
         if (plannedWeight !== undefined) {
             updateData.plannedWeight = plannedWeight !== null ? Number(plannedWeight) : null;
         }
 
-        console.log('[DEBUG saveRunValues] Final updateData:', updateData);
-
         await prisma.productionRun.update({
             where: { id: runId },
             data: updateData
         });
+
+        // Пересчёт actualWeight из существующих values (PRODUCTION-only)
+        await recalcActualWeight(prisma, runId);
 
         // Вернуть обновлённые данные
         const run = await prisma.productionRun.findUnique({
@@ -1131,7 +992,14 @@ export const cloneProductionRun = async (req: Request, res: Response) => {
                     productionRunId: newRun.id,
                     mmlNodeId: v.mmlNodeId,
                     value: v.value,
-                    snapshotProductId: v.snapshotProductId
+                    snapshotProductId: v.snapshotProductId,
+                    // V3: Copy all operation metadata
+                    operationAt: v.operationAt,
+                    opType: v.opType,
+                    reasonText: v.reasonText,
+                    photoUrl: v.photoUrl,
+                    photoMeta: v.photoMeta as any,
+                    staffId: v.staffId
                 }))
             });
         }
@@ -1285,17 +1153,18 @@ export const unhideProductionRuns = async (req: Request, res: Response) => {
  */
 export const loadPurchasesToProduction = async (req: Request, res: Response) => {
     try {
-        const { dateFrom, dateTo } = req.query;
+        const { dateFrom, dateTo, onlyProduction } = req.query;
         const userId = (req as any).user?.userId;
 
         if (!dateFrom || !dateTo) {
             return res.status(400).json({ error: 'dateFrom and dateTo are required' });
         }
 
-        const fromDate = new Date(String(dateFrom));
-        fromDate.setUTCHours(0, 0, 0, 0);
-        const toDate = new Date(String(dateTo));
-        toDate.setUTCHours(23, 59, 59, 999);
+        // Use proper UTC boundaries from local timezone dates
+        const { from: fromDate, to: toDate } = getUtcRangeFromYmd(String(dateFrom), String(dateTo));
+
+        // Optional filter: only production-participating products
+        const filterOnlyProduction = String(onlyProduction) === 'true';
 
         // Получаем закупки за период с товарами
         const purchases = await prisma.purchase.findMany({
@@ -1308,11 +1177,11 @@ export const loadPurchasesToProduction = async (req: Request, res: Response) => 
             },
             include: {
                 items: {
-                    where: {
+                    where: filterOnlyProduction ? {
                         product: {
-                            participatesInProduction: true  // Только товары с флагом "участие в производстве"
+                            participatesInProduction: true
                         }
-                    },
+                    } : {},
                     include: {
                         product: {
                             select: { id: true, code: true, name: true, category: true, participatesInProduction: true }
@@ -1743,7 +1612,7 @@ export const getRunValuesWithStaff = async (req: Request, res: Response) => {
 export const addRunValueEntry = async (req: Request, res: Response) => {
     try {
         const runId = Number(req.params.id);
-        const { mmlNodeId, value, opType, reasonText, photoUrl, photoMeta } = req.body;
+        const { mmlNodeId, value, opType, reasonText, photoUrl, photoMeta, operationAt } = req.body;
         const userId = (req as any).user?.userId;
 
         // Validation: mmlNodeId required
@@ -1814,6 +1683,16 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'MML node not found' });
         }
 
+        // V3: operationAt validation
+        const opAt = operationAt ? new Date(operationAt) : new Date();
+        const runDay = toTashkentDayStart(run.productionDate);
+        const opDay = toTashkentDayStart(opAt);
+        if (runDay.getTime() !== opDay.getTime()) {
+            return res.status(400).json({
+                error: 'Время операции должно быть в пределах выбранного дня'
+            });
+        }
+
         // Создаём новую запись
         const newValue = await prisma.productionRunValue.create({
             data: {
@@ -1823,6 +1702,7 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
                 snapshotProductId: node.productId || null,
                 staffId: staff?.id || null,
                 recordedAt: new Date(),
+                operationAt: opAt,
                 // V3: Unified Operations
                 opType: effectiveOpType as any,
                 reasonText: reasonText?.trim() || null,
@@ -1843,35 +1723,8 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
             }
         });
 
-        // V3: Пересчитываем actualWeight (только PRODUCTION)
-        const productionValues = await prisma.productionRunValue.findMany({
-            where: {
-                productionRunId: runId,
-                opType: 'PRODUCTION'
-            },
-            include: { node: true }
-        });
-
-        // Проверяем есть ли иерархия
-        const nodeIds = new Set(productionValues.map(v => v.mmlNodeId));
-        const nodes = await prisma.productionMmlNode.findMany({
-            where: { id: { in: Array.from(nodeIds) } }
-        });
-        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
-
-        let actualWeight = 0;
-        for (const val of productionValues) {
-            const n = nodes.find(x => x.id === val.mmlNodeId);
-            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
-            if (shouldSum && val.value !== null) {
-                actualWeight += Number(val.value);
-            }
-        }
-
-        await prisma.productionRun.update({
-            where: { id: runId },
-            data: { actualWeight }
-        });
+        // V3: Пересчитываем actualWeight через единый helper
+        await recalcActualWeight(prisma, runId);
 
         // V3: Trigger closure recalculation in background
         const username = (req as any).user?.username || 'system';
@@ -1904,7 +1757,7 @@ export const addRunValueEntry = async (req: Request, res: Response) => {
 export const updateRunValueEntry = async (req: Request, res: Response) => {
     try {
         const valueId = Number(req.params.valueId);
-        const { value, opType, reasonText, photoUrl, photoMeta } = req.body;
+        const { value, opType, reasonText, photoUrl, photoMeta, operationAt } = req.body;
         const userId = (req as any).user?.userId;
 
         const existing = await prisma.productionRunValue.findUnique({
@@ -1996,6 +1849,15 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
         if (reasonText !== undefined) updateData.reasonText = reasonText?.trim() || null;
         if (photoUrl !== undefined) updateData.photoUrl = photoUrl || null;
         if (photoMeta !== undefined) updateData.photoMeta = photoMeta || null;
+        if (operationAt !== undefined) {
+            const opAt = new Date(operationAt);
+            const runDay = toTashkentDayStart(existing.run.productionDate);
+            const opDay = toTashkentDayStart(opAt);
+            if (runDay.getTime() !== opDay.getTime()) {
+                return res.status(400).json({ error: 'operationAt must be within production day (Asia/Tashkent)' });
+            }
+            updateData.operationAt = opAt;
+        }
 
         const updated = await prisma.productionRunValue.update({
             where: { id: valueId },
@@ -2014,34 +1876,8 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
             }
         });
 
-        // V3: Пересчитываем actualWeight (только PRODUCTION)
-        const productionValues = await prisma.productionRunValue.findMany({
-            where: {
-                productionRunId: existing.productionRunId,
-                opType: 'PRODUCTION'
-            },
-            include: { node: true }
-        });
-
-        const nodeIds = new Set(productionValues.map(v => v.mmlNodeId));
-        const nodes = await prisma.productionMmlNode.findMany({
-            where: { id: { in: Array.from(nodeIds) } }
-        });
-        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
-
-        let actualWeight = 0;
-        for (const val of productionValues) {
-            const n = nodes.find(x => x.id === val.mmlNodeId);
-            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
-            if (shouldSum && val.value !== null) {
-                actualWeight += Number(val.value);
-            }
-        }
-
-        await prisma.productionRun.update({
-            where: { id: existing.productionRunId },
-            data: { actualWeight }
-        });
+        // V3: Пересчитываем actualWeight через единый helper
+        await recalcActualWeight(prisma, existing.productionRunId);
 
         // V3: Trigger closure recalculation in background
         const username = (req as any).user?.username || 'system';
@@ -2097,31 +1933,8 @@ export const deleteRunValueEntry = async (req: Request, res: Response) => {
             where: { id: valueId }
         });
 
-        // Пересчитываем actualWeight
-        const allValues = await prisma.productionRunValue.findMany({
-            where: { productionRunId: existing.productionRunId },
-            include: { node: true }
-        });
-
-        const nodeIds = new Set(allValues.map(v => v.mmlNodeId));
-        const nodes = await prisma.productionMmlNode.findMany({
-            where: { id: { in: Array.from(nodeIds) } }
-        });
-        const hasHierarchy = nodes.some(n => n.parentNodeId !== null);
-
-        let actualWeight = 0;
-        for (const val of allValues) {
-            const n = nodes.find(x => x.id === val.mmlNodeId);
-            const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
-            if (shouldSum && val.value !== null) {
-                actualWeight += Number(val.value);
-            }
-        }
-
-        await prisma.productionRun.update({
-            where: { id: existing.productionRunId },
-            data: { actualWeight }
-        });
+        // V3: Пересчитываем actualWeight через единый helper (PRODUCTION-only)
+        await recalcActualWeight(prisma, existing.productionRunId);
 
         // V3: Trigger closure recalculation in background
         const username = (req as any).user?.username || 'system';
@@ -2188,13 +2001,45 @@ const LOOKBACK_DAYS = 90;
 const TOLERANCE = new Prisma.Decimal('0.01'); // 1%
 
 /**
- * Конвертация строки YYYY-MM-DD в начало дня по Ташкенту (UTC+5)
+ * Конвертация строки YYYY-MM-DD или Date в начало дня по Ташкенту (UTC+5)
  * Возвращает Date в UTC
  */
-function toTashkentDayStart(dateStr: string): Date {
-    const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+function toTashkentDayStart(input: string | Date): Date {
+    const iso = (input instanceof Date) ? input.toISOString() : input;
+    const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
     // Ташкент = UTC+5, так что 00:00 Ташкент = 19:00 UTC предыдущего дня
     return new Date(Date.UTC(y, m - 1, d, -5, 0, 0, 0));
+}
+
+/**
+ * V3: Единый пересчёт actualWeight (только PRODUCTION)
+ * Вызывается из add/update/delete/save
+ */
+async function recalcActualWeight(prismaClient: any, runId: number): Promise<void> {
+    const productionValues = await prismaClient.productionRunValue.findMany({
+        where: { productionRunId: runId, opType: 'PRODUCTION' },
+        include: { node: true }
+    });
+
+    const nodeIds = new Set(productionValues.map((v: any) => v.mmlNodeId));
+    const nodes = await prismaClient.productionMmlNode.findMany({
+        where: { id: { in: Array.from(nodeIds) } }
+    });
+    const hasHierarchy = nodes.some((n: any) => n.parentNodeId !== null);
+
+    let actualWeight = 0;
+    for (const val of productionValues) {
+        const n = nodes.find((x: any) => x.id === val.mmlNodeId);
+        const shouldSum = hasHierarchy ? (n?.parentNodeId !== null) : true;
+        if (shouldSum && val.value !== null) {
+            actualWeight += Number(val.value);
+        }
+    }
+
+    await prismaClient.productionRun.update({
+        where: { id: runId },
+        data: { actualWeight }
+    });
 }
 
 /**

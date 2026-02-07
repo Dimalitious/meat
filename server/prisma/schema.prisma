@@ -728,6 +728,14 @@ model SalesPriceItem {
   @@index([rowDate])
 }
 
+// ========== PRODUCTION V3: OPERATION TYPES ==========
+
+enum ProductionOpType {
+  PRODUCTION
+  WRITEOFF
+  ADJUSTMENT
+}
+
 // ========== PRODUCTION MODULE (v2 - Tree Structure) ==========
 
 // MML (калькуляция/техкарта) - шапка документа
@@ -831,7 +839,13 @@ model ProductionRunValue {
   snapshotProductId Int?      // Снимок productId узла на момент выработки (для истории)
   value             Decimal?  @db.Decimal(14, 3)  // Числовое значение (ввод пользователя)
   staffId           Int?      // FK → ProductionStaff (кто внёс значение)
-  recordedAt        DateTime  @default(now())  // Дата/время записи значения
+  recordedAt        DateTime  @default(now())  // Дата/время записи значения (аудит)
+  operationAt       DateTime  @default(now())  // Бизнес-время операции (для UI)
+  // V3: Unified Operations
+  opType            ProductionOpType @default(PRODUCTION)  // Тип операции
+  reasonText        String?   // Причина (обязательна для WRITEOFF/ADJUSTMENT)
+  photoUrl          String?   // Ссылка на фото
+  photoMeta         Json?     // {width,height,sizeBytes,mime,sha256,confidence?,ocrRaw?}
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
   
@@ -843,6 +857,8 @@ model ProductionRunValue {
   @@index([productionRunId])
   @@index([mmlNodeId])
   @@index([staffId])
+  @@index([opType])
+  @@index([recordedAt])
 }
 
 // ============================================
@@ -855,6 +871,7 @@ model ProductionAllocation {
   id              Int       @id @default(autoincrement())
   sourceType      String    // RUN | ADJ
   sourceId        Int       // productionRunId или productionAdjustmentId
+  opType          ProductionOpType?  // V3: Тип операции строки (PRODUCTION/WRITEOFF/ADJUSTMENT)
   purchaseItemId  Int       // FK → PurchaseItem (партия)
   productId       Int       // денормализация, MUST == document.productId
   qtyAllocated    Decimal   @db.Decimal(14, 3)  // Сколько списано из партии

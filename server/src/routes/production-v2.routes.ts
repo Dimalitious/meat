@@ -52,11 +52,24 @@ import {
     voidAdjustment,
     deleteAdjustment
 } from '../controllers/production-v2.controller';
+import { uploadMiddleware, uploadPhoto } from '../controllers/uploads.controller';
+import { ocrWeight } from '../controllers/ocr.controller';
 
 const router = Router();
 
 // Все роуты требуют авторизации
 router.use(authenticateToken);
+
+// ============================================
+// PRODUCTION V3 - Photo Uploads & OCR
+// ============================================
+
+// Upload photo
+router.post('/uploads/photo', uploadMiddleware.single('file'), uploadPhoto);
+
+// OCR weight recognition
+router.post('/ocr/weight', ocrWeight);
+
 
 // ============================================
 // MML - Техкарты
