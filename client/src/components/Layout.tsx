@@ -29,10 +29,14 @@ interface NavItem {
     path?: string;
     icon: React.ReactNode;
     children?: NavItem[];
+    /** Single permission required to see this item */
+    permission?: string;
+    /** Show if user has ANY of these permissions */
+    permissionsAny?: string[];
 }
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
-    const { user, logout } = useAuth();
+    const { user, logout, hasPermission, hasAnyPermission } = useAuth();
     const location = useLocation();
     const navigate = useNavigate();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -53,56 +57,82 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
     const navItems: NavItem[] = [
         { label: 'Главная', path: '/', icon: <LayoutDashboard size={20} /> },
-        { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} /> },
-        { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} /> },
-        { label: 'Распределение', path: '/dispatch', icon: <Truck size={20} /> },
-        { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} /> },
-        { label: 'Производство', path: '/production-v3', icon: <Warehouse size={20} /> },
-        { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} /> },
+        { label: 'Сводка заказов', path: '/summary-orders', icon: <BarChart3 size={20} />, permission: 'summary.read' },
+        { label: 'Сборка заказов', path: '/assembly-orders', icon: <Package size={20} />, permission: 'assembly.read' },
+        { label: 'Распределение', path: '/dispatch', icon: <Truck size={20} />, permission: 'orders.assign_expeditor' },
+        { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} />, permission: 'expedition.read' },
+        { label: 'Производство', path: '/production-v3', icon: <Warehouse size={20} />, permission: 'production.read' },
+        { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} />, permission: 'warehouses.read' },
         { label: 'Telegram заказы', path: '/telegram-orders', icon: <MessageCircle size={20} /> },
         {
             label: 'Прайсы',
             icon: <DollarSign size={20} />,
             children: [
-                { label: 'Закупочный прайс', path: '/purchase-price-lists', icon: <DollarSign size={18} /> },
-                { label: 'Продажный прайс', path: '/journals/sales-prices', icon: <DollarSign size={18} /> },
+                { label: 'Закупочный прайс', path: '/purchase-price-lists', icon: <DollarSign size={18} />, permission: 'prices.purchase.read' },
+                { label: 'Продажный прайс', path: '/journals/sales-prices', icon: <DollarSign size={18} />, permission: 'prices.sales.read' },
             ]
         },
         {
             label: 'Журналы',
             icon: <FolderOpen size={20} />,
             children: [
-                { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} /> },
-                { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} /> },
-                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} /> },
-                { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} /> },
+                { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} />, permission: 'orders.read' },
+                { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} />, permission: 'production.read' },
+                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} />, permission: 'purchases.read' },
+                { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} />, permission: 'prices.purchase.read' },
             ]
         },
         {
             label: 'Справочник',
             icon: <FolderOpen size={20} />,
             children: [
-                { label: 'Товары', path: '/products', icon: <Package size={18} /> },
-                { label: 'Клиенты', path: '/customers', icon: <Users size={18} /> },
-                { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} /> },
-                { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} /> },
-                { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} /> },
-                { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} /> },
-                { label: 'Произв. персонал', path: '/production/staff', icon: <UserCheck size={18} /> },
-                { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} /> },
+                { label: 'Товары', path: '/products', icon: <Package size={18} />, permission: 'catalog.products' },
+                { label: 'Клиенты', path: '/customers', icon: <Users size={18} />, permission: 'catalog.customers' },
+                { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} />, permission: 'catalog.suppliers' },
+                { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} />, permission: 'warehouses.read' },
+                { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} />, permission: 'mml.read' },
+                { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} />, permission: 'expedition.read' },
+                { label: 'Произв. персонал', path: '/production/staff', icon: <UserCheck size={18} />, permission: 'production.read' },
+                { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} />, permission: 'purchases.read' },
             ]
         },
         {
             label: 'Отчеты',
             icon: <FileText size={20} />,
             children: [
-                { label: 'Материальный отчет', path: '/reports/material', icon: <FileText size={18} /> },
-                { label: 'Отчет PL', path: '/reports/pl', icon: <FileText size={18} /> },
+                { label: 'Материальный отчет', path: '/reports/material', icon: <FileText size={18} />, permission: 'reports.read' },
+                { label: 'Отчет PL', path: '/reports/pl', icon: <FileText size={18} />, permission: 'reports.read' },
             ]
         },
 
-        { label: 'Импорт', path: '/import', icon: <Upload size={20} /> },
+        { label: 'Импорт', path: '/import', icon: <Upload size={20} />, permission: 'import.execute' },
     ];
+
+    /**
+     * Permission-based menu filtering.
+     * Policy: hide parent sections if they have no visible children after filtering.
+     * Avoid mixing permission checks on both parent and children unless you intentionally
+     * want "double gating".
+     */
+    const isVisible = (item: NavItem) => {
+        if (!item.permission && !item.permissionsAny) return true;
+        if (item.permission) return hasPermission(item.permission);
+        return hasAnyPermission(item.permissionsAny || []);
+    };
+
+    const filterTree = (items: NavItem[]): NavItem[] => {
+        return items
+            .map((it) => {
+                if (it.children?.length) {
+                    const children = filterTree(it.children);
+                    return { ...it, children };
+                }
+                return it;
+            })
+            .filter((it) => isVisible(it) && (!it.children || it.children.length > 0));
+    };
+
+    const visibleNavItems = filterTree(navItems);
 
 
     const renderNavItem = (item: NavItem, depth = 0) => {
@@ -193,7 +223,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 </div>
 
                 <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-                    {navItems.map(item => renderNavItem(item))}
+                    {visibleNavItems.map(item => renderNavItem(item))}
                 </nav>
 
                 <div className="p-4 border-t border-slate-800 bg-slate-900">

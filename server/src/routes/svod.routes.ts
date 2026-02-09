@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import {
     getSvodByDate,
     saveSvod,
@@ -12,36 +13,23 @@ import {
 } from '../controllers/svod.controller';
 
 const router = Router();
-
-// Все маршруты требуют аутентификации
 router.use(authenticateToken);
+router.use(loadUserContext);
 
-// Получить СВОД на дату (или сформировать предпросмотр)
-router.get('/', getSvodByDate);
+// Read
+router.get('/', requirePermission(PERM.REPORTS_READ), getSvodByDate);
 
-// Сохранить СВОД
-router.post('/', saveSvod);
-
-// Обновить данные свода из источников (сохраняя ручные правки)
-router.put('/:id/refresh', refreshSvod);
-
-// Обновить строку свода (ручные правки)
-router.patch('/lines/:lineId', updateSvodLine);
-
-// Удалить СВОД
-router.delete('/:id', deleteSvod);
+// Manage
+router.post('/', requirePermission(PERM.REPORTS_MANAGE), saveSvod);
+router.put('/:id/refresh', requirePermission(PERM.REPORTS_MANAGE), refreshSvod);
+router.patch('/lines/:lineId', requirePermission(PERM.REPORTS_MANAGE), updateSvodLine);
+router.delete('/:id', requirePermission(PERM.REPORTS_MANAGE), deleteSvod);
 
 // ============================================
 // РАСПРЕДЕЛЕНИЕ ВЕСА ОТГРУЗКИ
 // ============================================
-
-// Получить MML (техкарту) по productId для распределения
-router.get('/mml/:productId', getMmlForDistribution);
-
-// Получить распределение веса для строки свода
-router.get('/lines/:lineId/distribution', getShipmentDistribution);
-
-// Сохранить распределение веса для строки свода
-router.post('/lines/:lineId/distribution', saveShipmentDistribution);
+router.get('/mml/:productId', requirePermission(PERM.REPORTS_READ), getMmlForDistribution);
+router.get('/lines/:lineId/distribution', requirePermission(PERM.REPORTS_READ), getShipmentDistribution);
+router.post('/lines/:lineId/distribution', requirePermission(PERM.REPORTS_MANAGE), saveShipmentDistribution);
 
 export default router;

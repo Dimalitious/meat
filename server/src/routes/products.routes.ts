@@ -1,19 +1,19 @@
 import { Router } from 'express';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import { getProducts, getProduct, createProduct, updateProduct, deactivateProduct, upsertProduct, batchUpsertProducts } from '../controllers/products.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
+router.use(authenticateToken);
+router.use(loadUserContext);
 
-router.use(authenticateToken); // Protect all routes
-
-router.get('/', getProducts);
-router.post('/', createProduct);
-router.post('/upsert', upsertProduct);
-router.post('/batch-upsert', batchUpsertProducts);  // Пакетный импорт
-router.patch('/toggle/:code', deactivateProduct);  // Переключение статуса - /toggle/CODE
-router.get('/:code', getProduct);
-router.put('/:code', updateProduct);
-router.delete('/:code', deactivateProduct);
+router.get('/', requirePermission(PERM.CATALOG_PRODUCTS), getProducts);
+router.post('/', requirePermission(PERM.CATALOG_PRODUCTS), createProduct);
+router.post('/upsert', requirePermission(PERM.CATALOG_PRODUCTS), upsertProduct);
+router.post('/batch-upsert', requirePermission(PERM.CATALOG_PRODUCTS), batchUpsertProducts);
+router.patch('/toggle/:code', requirePermission(PERM.CATALOG_PRODUCTS), deactivateProduct);
+router.get('/:code', requirePermission(PERM.CATALOG_PRODUCTS), getProduct);
+router.put('/:code', requirePermission(PERM.CATALOG_PRODUCTS), updateProduct);
+router.delete('/:code', requirePermission(PERM.CATALOG_PRODUCTS), deactivateProduct);
 
 export default router;
-

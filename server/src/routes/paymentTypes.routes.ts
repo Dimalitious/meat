@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import {
     getPaymentTypes,
     getPaymentTypeById,
@@ -12,32 +13,19 @@ import {
 } from '../controllers/paymentTypes.controller';
 
 const router = Router();
-
-// Все роуты требуют авторизации
 router.use(authenticateToken);
+router.use(loadUserContext);
 
-// Получить список типов оплат
-router.get('/', getPaymentTypes);
+// Read (needed by operators creating purchases)
+router.get('/', requirePermission(PERM.PURCHASES_READ), getPaymentTypes);
+router.get('/default', requirePermission(PERM.PURCHASES_READ), getDefaultPaymentType);
+router.get('/:id', requirePermission(PERM.PURCHASES_READ), getPaymentTypeById);
 
-// Засеять базовые типы
-router.post('/seed', seedDefaultPaymentTypes);
-
-// Получить тип оплаты по умолчанию (ВАЖНО: до /:id!)
-router.get('/default', getDefaultPaymentType);
-
-// Получить тип оплаты по ID
-router.get('/:id', getPaymentTypeById);
-
-// Создать тип оплаты
-router.post('/', createPaymentType);
-
-// Обновить тип оплаты
-router.put('/:id', updatePaymentType);
-
-// Переключить статус
-router.patch('/:id/toggle', togglePaymentType);
-
-// Удалить тип оплаты
-router.delete('/:id', deletePaymentType);
+// Manage (admin only via ADMIN bypass, but explicit permission for audit)
+router.post('/seed', requirePermission(PERM.ADMIN_USERS), seedDefaultPaymentTypes);
+router.post('/', requirePermission(PERM.PURCHASES_MANAGE), createPaymentType);
+router.put('/:id', requirePermission(PERM.PURCHASES_MANAGE), updatePaymentType);
+router.patch('/:id/toggle', requirePermission(PERM.PURCHASES_MANAGE), togglePaymentType);
+router.delete('/:id', requirePermission(PERM.PURCHASES_MANAGE), deletePaymentType);
 
 export default router;

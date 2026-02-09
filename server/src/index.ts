@@ -3,8 +3,10 @@ import { createServer } from 'http';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { initializeSocketServer } from './socket';
+import { prisma } from './db';
+import { ensureRbacSeededRuntime } from './prisma/ensureRbacSeeded';
+import { getRbacHealthSnapshot } from './middleware/auth.middleware';
 
-// Force restart: 2026-01-22 00:36 - Socket.IO Integration
 dotenv.config();
 
 const app = express();
@@ -35,7 +37,7 @@ import telegramRoutes from './controllers/telegram.controller';
 import warehousesRoutes from './routes/warehouses.routes';
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));  // Increased limit for batch imports
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Middleware to attach Socket.IO to requests
@@ -99,17 +101,62 @@ app.use('/api', returnsRoutes);  // /api/orders/:orderId/returns
 
 app.use('/api', masterRoutes); // /api/customers etc.
 
-// Health check (also for telegram agent)
-app.get('/health', (req: Request, res: Response) => {
+// ============================================
+// Health endpoints
+// ============================================
+
+// Liveness: always 200 (for k8s / Railway / load balancers)
+app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/health', (req: Request, res: Response) => {
+app.get('/api/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-httpServer.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    console.log(`Socket.IO server ready`);
+// RBAC observability: returns degraded status if fallback is active
+let rbacSeeded = false;
+
+app.get('/api/health/rbac', (_req: Request, res: Response) => {
+    const snapshot = getRbacHealthSnapshot();
+    const status =
+        !rbacSeeded ? 'seed_failed' :
+            snapshot.fallbackCount > 0 ? 'degraded' :
+                'ok';
+
+    res.json({
+        status,
+        rbacSeeded,
+        ...snapshot,
+        timestamp: new Date().toISOString(),
+    });
 });
 
+// ============================================
+// Async bootstrap: RBAC seed + server start
+// ============================================
+
+async function bootstrap() {
+    // Ensure RBAC tables have permissions, roles, ADMIN→ALL linkage
+    try {
+        await ensureRbacSeededRuntime(prisma);
+        rbacSeeded = true;
+        console.log('RBAC: seeded successfully');
+    } catch (err) {
+        rbacSeeded = false;
+        console.error('RBAC: seed FAILED — running in fallback mode', err);
+    }
+
+    httpServer.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+        console.log(`Socket.IO server ready`);
+        if (!rbacSeeded) {
+            console.error('⚠ RBAC SEED FAILED — check database connectivity / migration state');
+        }
+    });
+}
+
+bootstrap().catch(err => {
+    console.error('Fatal bootstrap error:', err);
+    process.exit(1);
+});

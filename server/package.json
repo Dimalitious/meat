@@ -2,12 +2,17 @@
   "name": "server",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "npx nodemon --exec \"npx ts-node --transpile-only src/index.ts\"",
     "build": "tsc",
-    "start": "npx prisma db push && node dist/index.js",
-    "postinstall": "prisma generate"
+    "migrate": "npx prisma migrate deploy",
+    "start": "node dist/index.js",
+    "postinstall": "prisma generate",
+    "seed:dev": "npx ts-node --transpile-only src/prisma/seed.ts"
+  },
+  "prisma": {
+    "seed": "node dist/prisma/seed.js"
   },
   "keywords": [],
   "author": "",
@@ -39,6 +44,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "prisma": "^6.8.2",

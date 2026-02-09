@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import {
     getPurchasePriceLists,
     getPurchasePriceList,
@@ -8,27 +10,20 @@ import {
     getActivePurchasePrice,
     getLastPriceListTemplate
 } from '../controllers/purchasePriceLists.controller';
-import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
-
 router.use(authenticateToken);
+router.use(loadUserContext);
 
-// Журнал закупочных прайсов
-router.get('/', getPurchasePriceLists);
+// Read
+router.get('/', requirePermission(PERM.PRICES_PURCHASE_READ), getPurchasePriceLists);
+router.get('/template', requirePermission(PERM.PRICES_PURCHASE_READ), getLastPriceListTemplate);
+router.get('/active-price', requirePermission(PERM.PRICES_PURCHASE_READ), getActivePurchasePrice);
+router.get('/:id', requirePermission(PERM.PRICES_PURCHASE_READ), getPurchasePriceList);
 
-// Шаблон из последнего прайса для создания нового
-router.get('/template', getLastPriceListTemplate);
-
-// Получить актуальную цену (должен быть перед /:id)
-router.get('/active-price', getActivePurchasePrice);
-
-// Массовое отключение
-router.post('/deactivate', deactivatePurchasePriceLists);
-
-// CRUD
-router.get('/:id', getPurchasePriceList);
-router.post('/', createPurchasePriceList);
-router.put('/:id', updatePurchasePriceList);
+// Manage
+router.post('/deactivate', requirePermission(PERM.PRICES_PURCHASE_MANAGE), deactivatePurchasePriceLists);
+router.post('/', requirePermission(PERM.PRICES_PURCHASE_MANAGE), createPurchasePriceList);
+router.put('/:id', requirePermission(PERM.PRICES_PURCHASE_MANAGE), updatePurchasePriceList);
 
 export default router;

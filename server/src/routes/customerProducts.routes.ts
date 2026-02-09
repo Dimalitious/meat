@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import {
     getCustomerProducts,
     addCustomerProduct,
@@ -10,26 +11,17 @@ import {
 } from '../controllers/customerProducts.controller';
 
 const router = Router();
-
-// Все роуты требуют авторизации
 router.use(authenticateToken);
+router.use(loadUserContext);
 
-// GET /api/customer-products/customers-with-counts - Клиенты с количеством товаров
-router.get('/customers-with-counts', getCustomersWithProductCounts);
+// Read
+router.get('/customers-with-counts', requirePermission(PERM.CATALOG_CUSTOMERS), getCustomersWithProductCounts);
+router.get('/:customerId', requirePermission(PERM.CATALOG_CUSTOMERS), getCustomerProducts);
 
-// GET /api/customer-products/:customerId - Товары клиента
-router.get('/:customerId', getCustomerProducts);
-
-// POST /api/customer-products/:customerId - Добавить товар клиенту
-router.post('/:customerId', addCustomerProduct);
-
-// POST /api/customer-products/:customerId/bulk - Добавить несколько товаров клиенту
-router.post('/:customerId/bulk', addCustomerProductsBulk);
-
-// DELETE /api/customer-products/:customerId/:productId - Удалить товар у клиента
-router.delete('/:customerId/:productId', removeCustomerProduct);
-
-// PUT /api/customer-products/:customerId/reorder - Изменить порядок товаров
-router.put('/:customerId/reorder', reorderCustomerProducts);
+// Manage
+router.post('/:customerId', requirePermission(PERM.CATALOG_CUSTOMERS), addCustomerProduct);
+router.post('/:customerId/bulk', requirePermission(PERM.CATALOG_CUSTOMERS), addCustomerProductsBulk);
+router.delete('/:customerId/:productId', requirePermission(PERM.CATALOG_CUSTOMERS), removeCustomerProduct);
+router.put('/:customerId/reorder', requirePermission(PERM.CATALOG_CUSTOMERS), reorderCustomerProducts);
 
 export default router;

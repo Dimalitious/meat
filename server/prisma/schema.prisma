@@ -14,11 +14,15 @@ model User {
   name            String
   role            String            @default("USER")
   telegramId      String?           @unique
+  isActive        Boolean           @default(true)    // RBAC: can be disabled by admin
+  authVersion     Int               @default(1)       // RBAC: increment to force re-login
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   productionStaff ProductionStaff?
   // Expeditor link (optional 1:1)
   expeditor       Expeditor?
+  // RBAC: User -> Role assignments
+  userRoles       UserRole[]
   // Production Module v2 relations
   createdMmls     ProductionMml[]   @relation("MmlCreator")
   productionRuns  ProductionRun[]   @relation("RunUser")
@@ -1533,4 +1537,57 @@ model ProductionClosureAudit {
   @@index([productId])
   @@index([purchaseItemId])
   @@index([createdAt])
+}
+
+// ============================================
+// RBAC — Role-Based Access Control
+// ============================================
+
+model Role {
+  id              Int               @id @default(autoincrement())
+  code            String            @unique      // 'ADMIN', 'OPERATOR', etc.
+  name            String                         // Human-readable name
+  isSystem        Boolean           @default(false)  // System roles can't be deleted
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+}
+
+model Permission {
+  id              Int               @id @default(autoincrement())
+  code            String            @unique      // 'orders.read', 'production.create', etc.
+  module          String                         // 'orders', 'production', 'admin', etc.
+  description     String?                        // Optional human-readable description
+  createdAt       DateTime          @default(now())
+
+  rolePermissions RolePermission[]
+}
+
+model UserRole {
+  id              Int               @id @default(autoincrement())
+  userId          Int
+  roleId          Int
+  assignedAt      DateTime          @default(now())
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            Role              @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model RolePermission {
+  id              Int               @id @default(autoincrement())
+  roleId          Int
+  permissionId    Int
+
+  role            Role              @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission      Permission        @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
 }

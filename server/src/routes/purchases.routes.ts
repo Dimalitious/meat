@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { authenticateToken } from '../middleware/auth.middleware';
+import { authenticateToken, loadUserContext, requirePermission } from '../middleware/auth.middleware';
+import { PERM } from '../prisma/rbac.constants';
 import {
     getPurchases,
     getPurchaseById,
@@ -13,39 +14,26 @@ import {
 
 const router = Router();
 
-// Все роуты требуют авторизации
+// All routes require authentication + RBAC context
 router.use(authenticateToken);
+router.use(loadUserContext);
 
 // ============================================
 // Вспомогательные эндпоинты (ВАЖНО: до /:id!)
 // ============================================
 
-// Получить MML (товары) поставщика из закупочного прайса
-router.get('/supplier/:supplierId/mml', getSupplierMml);
-
-// Получить последнюю цену товара для поставщика
-router.get('/supplier/:supplierId/product/:productId/price', getLastPrice);
-
-// Массовое отключение (скрытие) - до /:id
-router.post('/disable', disablePurchases);
+router.get('/supplier/:supplierId/mml', requirePermission(PERM.PURCHASES_READ), getSupplierMml);
+router.get('/supplier/:supplierId/product/:productId/price', requirePermission(PERM.PURCHASES_READ), getLastPrice);
+router.post('/disable', requirePermission(PERM.PURCHASES_MANAGE), disablePurchases);
 
 // ============================================
 // Журнал закупок
 // ============================================
 
-// Список закупок (с фильтрацией)
-router.get('/', getPurchases);
-
-// Создать закупку
-router.post('/', createPurchase);
-
-// Закупка по ID - ПОСЛЕ специфичных роутов
-router.get('/:id', getPurchaseById);
-
-// Обновить закупку
-router.put('/:id', updatePurchase);
-
-// Удалить закупку
-router.delete('/:id', deletePurchase);
+router.get('/', requirePermission(PERM.PURCHASES_READ), getPurchases);
+router.post('/', requirePermission(PERM.PURCHASES_CREATE), createPurchase);
+router.get('/:id', requirePermission(PERM.PURCHASES_READ), getPurchaseById);
+router.put('/:id', requirePermission(PERM.PURCHASES_MANAGE), updatePurchase);
+router.delete('/:id', requirePermission(PERM.PURCHASES_MANAGE), deletePurchase);
 
 export default router;
