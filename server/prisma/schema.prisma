@@ -37,6 +37,10 @@ model User {
   // Production V3: Adjustments
   createdAdjustments  ProductionAdjustment[]  @relation("AdjustmentCreator")
   voidedAdjustments   ProductionAdjustment[]  @relation("AdjustmentVoider")
+  // Supplier Account Module
+  supplierReturnsCreated   SupplierReturn[]   @relation("SupplierReturnCreator")
+  supplierPaymentsCreated  SupplierPayment[]  @relation("SupplierPaymentCreator")
+  supplierPaymentsDeleted  SupplierPayment[]  @relation("SupplierPaymentDeleter")
 }
 
 model District {
@@ -102,6 +106,8 @@ model Product {
   productionClosures       ProductionClosure[]       @relation("ProductionClosures")
   // Production V3: Adjustments
   productionAdjustments    ProductionAdjustment[]
+  // Supplier Account Module
+  supplierReturnItems      SupplierReturnItem[]
 }
 
 model Customer {
@@ -215,6 +221,10 @@ model Supplier {
   // SVOD Module relations
   svodSupplierCols    SvodSupplierCol[]
   svodSupplierValues  SvodSupplierValue[]
+  // Supplier Account Module
+  supplierReturns     SupplierReturn[]
+  supplierPayments    SupplierPayment[]
+  supplierLedger      SupplierLedger[]
 }
 
 model SupplierProduct {
@@ -1590,4 +1600,95 @@ model RolePermission {
   @@unique([roleId, permissionId])
   @@index([roleId])
   @@index([permissionId])
+}
+
+// ============================================
+// МОДУЛЬ РАСЧЁТОВ С ПОСТАВЩИКАМИ
+// ============================================
+
+enum SupplierLedgerSourceType {
+  PURCHASE
+  SUPPLIER_RETURN
+  SUPPLIER_PAYMENT
+  OPENING_BALANCE
+}
+
+enum SupplierPaymentMethod {
+  CASH
+  BANK
+  CARD
+  OTHER
+}
+
+model SupplierLedger {
+  id            Int                        @id @default(autoincrement())
+  supplierId    Int
+  sourceType    SupplierLedgerSourceType
+  sourceId      Int                        // id документа (purchaseId / returnId / paymentId / 0 для opening)
+  sourceLineId  Int                        @default(0) // 0 = весь документ, >0 = строка
+  operationName String                     // "Покупка", "Возврат поставщику", "Оплата", "Начальное сальдо"
+  opDate        DateTime                   // дата операции
+  debit         Decimal                    @default(0) @db.Decimal(14, 2) // уменьшает долг (оплата/возврат)
+  credit        Decimal                    @default(0) @db.Decimal(14, 2) // увеличивает долг (закупка)
+  isHidden      Boolean                    @default(false)
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  supplier      Supplier                   @relation(fields: [supplierId], references: [id])
+
+  @@unique([supplierId, sourceType, sourceId, sourceLineId])
+  @@index([supplierId, opDate])
+  @@index([sourceType, sourceId])
+}
+
+model SupplierReturn {
+  id              Int       @id @default(autoincrement())
+  supplierId      Int
+  returnDate      DateTime
+  totalAmount     Decimal   @default(0) @db.Decimal(14, 2)
+  isDisabled      Boolean   @default(false)
+  createdByUserId Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  supplier        Supplier  @relation(fields: [supplierId], references: [id])
+  createdByUser   User?     @relation("SupplierReturnCreator", fields: [createdByUserId], references: [id])
+  items           SupplierReturnItem[]
+
+  @@index([supplierId, returnDate])
+}
+
+model SupplierReturnItem {
+  id              Int            @id @default(autoincrement())
+  returnId        Int
+  productId       Int
+  price           Decimal        @db.Decimal(14, 2)
+  qty             Decimal        @db.Decimal(14, 3)
+  amount          Decimal        @db.Decimal(14, 2)
+
+  supplierReturn  SupplierReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  product         Product        @relation(fields: [productId], references: [id])
+
+  @@index([returnId])
+}
+
+model SupplierPayment {
+  id              Int                    @id @default(autoincrement())
+  supplierId      Int
+  paymentDate     DateTime
+  amount          Decimal                @db.Decimal(14, 2)
+  method          SupplierPaymentMethod  @default(CASH)
+  reference       String?                // номер платёжки / документа
+  comment         String?
+  createdByUserId Int?
+  deletedAt       DateTime?
+  deletedByUserId Int?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  supplier        Supplier               @relation(fields: [supplierId], references: [id])
+  createdByUser   User?                  @relation("SupplierPaymentCreator", fields: [createdByUserId], references: [id])
+  deletedByUser   User?                  @relation("SupplierPaymentDeleter", fields: [deletedByUserId], references: [id])
+
+  @@index([supplierId, paymentDate])
 }

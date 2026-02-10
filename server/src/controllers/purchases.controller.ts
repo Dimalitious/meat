@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { syncPurchaseLedger } from '../services/supplierLedger.service';
 
 const prisma = new PrismaClient();
 
@@ -236,6 +237,9 @@ export const createPurchase = async (req: Request, res: Response) => {
                 });
             }
 
+            // 4. Sync ledger
+            await syncPurchaseLedger(tx, newPurchase.id);
+
             return newPurchase;
         });
 
@@ -340,6 +344,9 @@ export const updatePurchase = async (req: Request, res: Response) => {
                     });
                 }
             }
+
+            // 4. Sync ledger
+            await syncPurchaseLedger(tx, id);
         });
 
         // Вернуть обновлённую закупку
@@ -370,9 +377,16 @@ export const disablePurchases = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'ids array is required' });
         }
 
-        await prisma.purchase.updateMany({
-            where: { id: { in: ids.map(Number) } },
-            data: { isDisabled: true }
+        await prisma.$transaction(async (tx) => {
+            await tx.purchase.updateMany({
+                where: { id: { in: ids.map(Number) } },
+                data: { isDisabled: true }
+            });
+
+            // Sync ledger for each disabled purchase
+            for (const purchaseId of ids) {
+                await syncPurchaseLedger(tx, Number(purchaseId));
+            }
         });
 
         res.json({ success: true, disabledCount: ids.length });
@@ -394,8 +408,14 @@ export const deletePurchase = async (req: Request, res: Response) => {
             return res.status(404).json({ error: 'Purchase not found' });
         }
 
-        // Каскадное удаление настроено в схеме
-        await prisma.purchase.delete({ where: { id } });
+        // Удалить ledger + каскадное удаление
+        await prisma.$transaction(async (tx) => {
+            // Удалить ledger записи перед удалением закупки
+            await tx.supplierLedger.deleteMany({
+                where: { sourceType: 'PURCHASE', sourceId: id },
+            });
+            await tx.purchase.delete({ where: { id } });
+        });
 
         res.json({ success: true });
     } catch (error) {

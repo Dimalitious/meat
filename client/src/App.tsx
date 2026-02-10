@@ -30,7 +30,7 @@ import ProductionV3Page from './pages/ProductionV3Page';
 
 
 import PurchasePricePage from './pages/PurchasePricePage';
-import PurchasePriceJournalPage from './pages/PurchasePriceJournalPage';
+
 import SalesPricePage from './pages/SalesPricePage';
 import SalesPriceJournalPage from './pages/SalesPriceJournalPage';
 import PurchasePriceListsPage from './pages/PurchasePriceListsPage';
@@ -45,6 +45,7 @@ import DispatchPage from './pages/DispatchPage';
 import MmlReferencePage from './pages/MmlReferencePage';
 import MaterialReportPage from './pages/MaterialReportPage';
 import AdminUsersPage from './pages/AdminUsersPage';
+import SupplierAccountPage from './pages/SupplierAccountPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -121,7 +122,7 @@ function App() {
             {/* Price routes */}
             <Route path="/prices/purchase" element={<ProtectedRoute><PurchasePricePage /></ProtectedRoute>} />
             <Route path="/prices/sales" element={<ProtectedRoute><SalesPricePage /></ProtectedRoute>} />
-            <Route path="/journals/purchase-prices" element={<ProtectedRoute><PurchasePriceJournalPage /></ProtectedRoute>} />
+
             <Route path="/journals/sales-prices" element={<ProtectedRoute><SalesPriceJournalPage /></ProtectedRoute>} />
             {/* NEW: Purchase Price Lists (Journal style) */}
             <Route path="/purchase-price-lists" element={<ProtectedRoute><PurchasePriceListsPage /></ProtectedRoute>} />
@@ -141,6 +142,8 @@ function App() {
             <Route path="/reports/material" element={<ProtectedRoute><MaterialReportPage /></ProtectedRoute>} />
             {/* Admin Module */}
             <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
+            {/* Supplier Account Module (Расчёты с поставщиками) */}
+            <Route path="/supplier-account" element={<ProtectedRoute><SupplierAccountPage /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </SocketProvider>

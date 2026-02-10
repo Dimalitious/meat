@@ -79,7 +79,8 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} />, permission: 'orders.read' },
 
                 { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} />, permission: 'purchases.read' },
-                { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} />, permission: 'prices.purchase.read' },
+                { label: 'Расчёты с поставщиками', path: '/supplier-account', icon: <DollarSign size={18} />, permissionsAny: ['supplier.returns.read', 'supplier.payments.read', 'supplier.statement.read'] },
+
             ]
         },
         {

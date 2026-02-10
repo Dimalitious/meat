@@ -52,6 +52,13 @@ export const PERM = {
     PURCHASES_CREATE: 'purchases.create',
     PURCHASES_MANAGE: 'purchases.manage',
 
+    // Supplier Account
+    SUPPLIER_RETURNS_READ: 'supplier.returns.read',
+    SUPPLIER_RETURNS_MANAGE: 'supplier.returns.manage',
+    SUPPLIER_PAYMENTS_READ: 'supplier.payments.read',
+    SUPPLIER_PAYMENTS_MANAGE: 'supplier.payments.manage',
+    SUPPLIER_STATEMENT_READ: 'supplier.statement.read',
+
     // Import
     IMPORT_EXECUTE: 'import.execute',
 
@@ -177,6 +184,11 @@ export const DEFAULT_ROLE_PERMS_FALLBACK: Record<RoleCode, string[]> = {
         PERM.PRICES_SALES_READ,
         PERM.CATALOG_SUPPLIERS,
         PERM.CATALOG_PRODUCTS,
+        PERM.SUPPLIER_RETURNS_READ,
+        PERM.SUPPLIER_RETURNS_MANAGE,
+        PERM.SUPPLIER_PAYMENTS_READ,
+        PERM.SUPPLIER_PAYMENTS_MANAGE,
+        PERM.SUPPLIER_STATEMENT_READ,
     ],
     [ROLE_CODES.ACCOUNTANT]: [
         PERM.ORDERS_READ,
@@ -185,6 +197,9 @@ export const DEFAULT_ROLE_PERMS_FALLBACK: Record<RoleCode, string[]> = {
         PERM.PRICES_SALES_MANAGE,
         PERM.RETURNS_READ,
         PERM.REPORTS_READ,
+        PERM.SUPPLIER_RETURNS_READ,
+        PERM.SUPPLIER_PAYMENTS_READ,
+        PERM.SUPPLIER_STATEMENT_READ,
         // P2 reserved: admin.audit is not issued by default until AuditLog endpoints exist.
     ],
 };
@@ -254,6 +269,11 @@ export const DEFAULT_ROLE_PERMS_SEED: Record<string, string[]> = {
         PERM.PRICES_SALES_READ,
         PERM.CATALOG_SUPPLIERS,
         PERM.CATALOG_PRODUCTS,
+        PERM.SUPPLIER_RETURNS_READ,
+        PERM.SUPPLIER_RETURNS_MANAGE,
+        PERM.SUPPLIER_PAYMENTS_READ,
+        PERM.SUPPLIER_PAYMENTS_MANAGE,
+        PERM.SUPPLIER_STATEMENT_READ,
     ],
     [ROLE_CODES.EXPEDITOR]: [
         PERM.ORDERS_READ,
@@ -270,6 +290,9 @@ export const DEFAULT_ROLE_PERMS_SEED: Record<string, string[]> = {
         PERM.PRICES_SALES_MANAGE,
         PERM.RETURNS_READ,
         PERM.REPORTS_READ,
+        PERM.SUPPLIER_RETURNS_READ,
+        PERM.SUPPLIER_PAYMENTS_READ,
+        PERM.SUPPLIER_STATEMENT_READ,
         // P2 reserved: admin.audit is not issued by default until AuditLog endpoints exist.
     ],
 };

@@ -103,6 +103,10 @@ app.use('/api/customer-cards', customerCardsRoutes);
 import returnsRoutes from './routes/returns.routes';
 app.use('/api', returnsRoutes);  // /api/orders/:orderId/returns
 
+// Supplier Account Module (Расчёты с поставщиками)
+import supplierRoutes from './routes/supplier.routes';
+app.use('/api/suppliers', supplierRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // ============================================
