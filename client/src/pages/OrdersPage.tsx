@@ -545,15 +545,7 @@ const OrdersPage = () => {
                                 ))
                             )}
                         </div>
-                        <div className="p-3 border-t text-center">
-                            <Link
-                                to="/expeditors"
-                                className="text-purple-600 hover:underline text-sm"
-                                onClick={() => setShowExpeditorModal(false)}
-                            >
-                                Открыть справочник экспедиторов
-                            </Link>
-                        </div>
+
                     </div>
                 </div>
             )}

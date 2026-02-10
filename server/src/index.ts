@@ -27,7 +27,7 @@ import assemblyRoutes from './routes/assembly.routes';
 import warehouseRoutes from './routes/warehouse.routes';
 import summaryOrdersRoutes from './routes/summaryOrders.routes';
 import journalsRoutes from './routes/journals.routes';
-import productionRoutes from './routes/production.routes';
+
 import pricesRoutes from './routes/prices.routes';
 import purchasePriceListsRoutes from './routes/purchasePriceLists.routes';
 import mmlBatchRoutes from './routes/mmlBatch.routes';
@@ -56,7 +56,7 @@ app.use('/api/assembly', assemblyRoutes);
 app.use('/api/warehouse', warehouseRoutes);
 app.use('/api/summary-orders', summaryOrdersRoutes);
 app.use('/api/journals', journalsRoutes);
-app.use('/api/production', productionRoutes);
+
 app.use('/api/prices', pricesRoutes);
 app.use('/api/purchase-price-lists', purchasePriceListsRoutes);
 app.use('/api/production-module', mmlBatchRoutes);
@@ -74,6 +74,10 @@ app.use('/api/telegram', telegramRoutes);
 
 // Warehouses Module (Справочник складов)
 app.use('/api/warehouses', warehousesRoutes);
+
+// Admin Module (User & Role Management)
+import adminRoutes from './routes/admin.routes';
+app.use('/api/admin', adminRoutes);
 
 // Customer Products (Персональный каталог товаров клиента)
 import customerProductsRoutes from './routes/customerProducts.routes';

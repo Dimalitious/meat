@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
@@ -366,15 +366,7 @@ export default function OrderViewPage() {
                                 ))
                             )}
                         </div>
-                        <div className="p-3 border-t text-center">
-                            <Link
-                                to="/expeditors"
-                                className="text-blue-600 hover:underline text-sm"
-                                onClick={() => setShowExpeditorModal(false)}
-                            >
-                                Открыть справочник экспедиторов
-                            </Link>
-                        </div>
+
                     </div>
                 </div>
             )}

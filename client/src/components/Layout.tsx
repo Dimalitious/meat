@@ -8,7 +8,7 @@ import {
     Package,
     Truck,
     Users,
-    UserCheck,
+
     Building2,
     BookOpen,
     Upload,
@@ -77,7 +77,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             icon: <FolderOpen size={20} />,
             children: [
                 { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} />, permission: 'orders.read' },
-                { label: 'Журнал производства', path: '/journals/production', icon: <BookOpen size={18} />, permission: 'production.read' },
+
                 { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} />, permission: 'purchases.read' },
                 { label: 'Журнал закупочных прайсов', path: '/journals/purchase-prices', icon: <BookOpen size={18} />, permission: 'prices.purchase.read' },
             ]
@@ -91,8 +91,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Поставщики', path: '/suppliers', icon: <Building2 size={18} />, permission: 'catalog.suppliers' },
                 { label: 'Склады', path: '/warehouses', icon: <Warehouse size={18} />, permission: 'warehouses.read' },
                 { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} />, permission: 'mml.read' },
-                { label: 'Водители', path: '/expeditors', icon: <UserCheck size={18} />, permission: 'expedition.read' },
-                { label: 'Произв. персонал', path: '/production/staff', icon: <UserCheck size={18} />, permission: 'production.read' },
+
                 { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} />, permission: 'purchases.read' },
             ]
         },
@@ -106,6 +105,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         },
 
         { label: 'Импорт', path: '/import', icon: <Upload size={20} />, permission: 'import.execute' },
+        { label: 'Пользователи', path: '/admin/users', icon: <Users size={20} />, permission: 'admin.users' },
     ];
 
     /**

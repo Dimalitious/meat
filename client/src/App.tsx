@@ -5,7 +5,7 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import SvodPage from './pages/SvodPage';
 import ShipmentsPage from './pages/ShipmentsPage';
-import ExpeditorsPage from './pages/ExpeditorsPage';
+
 import ProductsPage from './pages/ProductsPage';
 import CustomersPage from './pages/CustomersPage';
 import SuppliersPage from './pages/SuppliersPage';
@@ -27,8 +27,8 @@ import ExpeditionPage from './pages/ExpeditionPage';
 import ExpeditionInvoicePage from './pages/ExpeditionInvoicePage';
 import ProductionV2Page from './pages/ProductionV2Page';
 import ProductionV3Page from './pages/ProductionV3Page';
-import ProductionJournalPage from './pages/ProductionJournalPage';
-import ProductionStaffPage from './pages/ProductionStaffPage';
+
+
 import PurchasePricePage from './pages/PurchasePricePage';
 import PurchasePriceJournalPage from './pages/PurchasePriceJournalPage';
 import SalesPricePage from './pages/SalesPricePage';
@@ -44,6 +44,7 @@ import WarehousesPage from './pages/WarehousesPage';
 import DispatchPage from './pages/DispatchPage';
 import MmlReferencePage from './pages/MmlReferencePage';
 import MaterialReportPage from './pages/MaterialReportPage';
+import AdminUsersPage from './pages/AdminUsersPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -98,7 +99,7 @@ function App() {
             <Route path="/orders/:id/print" element={<ProtectedRoute><OrderPrintPage /></ProtectedRoute>} />
             <Route path="/svod" element={<ProtectedRoute><SvodPage /></ProtectedRoute>} />
             <Route path="/shipments" element={<ProtectedRoute><ShipmentsPage /></ProtectedRoute>} />
-            <Route path="/expeditors" element={<ProtectedRoute><ExpeditorsPage /></ProtectedRoute>} />
+
             <Route path="/dicts" element={<ProtectedRoute><DictsPage /></ProtectedRoute>} />
             <Route path="/warehouse" element={<ProtectedRoute><WarehousePage /></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><ImportPage /></ProtectedRoute>} />
@@ -114,9 +115,9 @@ function App() {
             {/* Production routes */}
             <Route path="/production" element={<ProtectedRoute><ProductionV2Page /></ProtectedRoute>} />
             <Route path="/production-v3" element={<ProtectedRoute><ProductionV3Page /></ProtectedRoute>} />
-            <Route path="/production/staff" element={<ProtectedRoute><ProductionStaffPage /></ProtectedRoute>} />
+
             <Route path="/production/module" element={<ProtectedRoute><ProductionModulePage /></ProtectedRoute>} />
-            <Route path="/journals/production" element={<ProtectedRoute><ProductionJournalPage /></ProtectedRoute>} />
+
             {/* Price routes */}
             <Route path="/prices/purchase" element={<ProtectedRoute><PurchasePricePage /></ProtectedRoute>} />
             <Route path="/prices/sales" element={<ProtectedRoute><SalesPricePage /></ProtectedRoute>} />
@@ -138,6 +139,8 @@ function App() {
             <Route path="/mmls" element={<ProtectedRoute><MmlReferencePage /></ProtectedRoute>} />
             {/* Reports (Отчеты) */}
             <Route path="/reports/material" element={<ProtectedRoute><MaterialReportPage /></ProtectedRoute>} />
+            {/* Admin Module */}
+            <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </SocketProvider>
