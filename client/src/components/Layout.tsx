@@ -22,6 +22,7 @@ import {
     DollarSign,
     MessageCircle,
     FileText,
+    Briefcase,
 } from 'lucide-react';
 
 interface NavItem {
@@ -63,6 +64,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         { label: 'Экспедиция', path: '/expedition', icon: <Truck size={20} />, permission: 'expedition.read' },
         { label: 'Производство', path: '/production-v3', icon: <Warehouse size={20} />, permission: 'production.read' },
         { label: 'Склад', path: '/warehouse', icon: <Warehouse size={20} />, permission: 'warehouses.read' },
+        { label: 'Менеджер продаж', path: '/sales-manager', icon: <Briefcase size={20} />, permissionsAny: ['salesManager.customers.read', 'salesManager.drafts.read'] },
         { label: 'Telegram заказы', path: '/telegram-orders', icon: <MessageCircle size={20} /> },
         {
             label: 'Прайсы',

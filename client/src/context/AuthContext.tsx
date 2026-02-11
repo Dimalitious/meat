@@ -88,12 +88,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     // RBAC permission helpers (stable refs via useCallback)
     const hasPermission = useCallback(
-        (code: string) => permissions.includes(code),
+        (code: string) => permissions.includes('*') || permissions.includes(code),
         [permissions]
     );
 
     const hasAnyPermission = useCallback(
-        (codes: string[]) => codes.some(c => permissions.includes(c)),
+        (codes: string[]) => permissions.includes('*') || codes.some(c => permissions.includes(c)),
         [permissions]
     );
 

@@ -33,10 +33,11 @@ import purchasePriceListsRoutes from './routes/purchasePriceLists.routes';
 import mmlBatchRoutes from './routes/mmlBatch.routes';
 import paymentTypesRoutes from './routes/paymentTypes.routes';
 import purchasesRoutes from './routes/purchases.routes';
-import telegramRoutes from './controllers/telegram.controller';
+import telegramRoutes from './routes/telegram.routes';
 import warehousesRoutes from './routes/warehouses.routes';
 
 app.use(cors());
+app.set('trust proxy', 1); // Railway/Nginx proxy support
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -69,7 +70,7 @@ app.use('/api/production-v2', productionV2Routes);
 app.use('/api/payment-types', paymentTypesRoutes);
 app.use('/api/purchases', purchasesRoutes);
 
-// Telegram Agent Module
+// Telegram Bot Module (webhook + CRM API)
 app.use('/api/telegram', telegramRoutes);
 
 // Warehouses Module (Справочник складов)
@@ -106,6 +107,10 @@ app.use('/api', returnsRoutes);  // /api/orders/:orderId/returns
 // Supplier Account Module (Расчёты с поставщиками)
 import supplierRoutes from './routes/supplier.routes';
 app.use('/api/suppliers', supplierRoutes);
+
+// Sales Manager Module (Менеджер по продажам + Аксверк + Возврат денег)
+import salesManagerRoutes from './routes/salesManager.routes';
+app.use('/api/sales-manager', salesManagerRoutes);
 
 app.use('/api', masterRoutes); // /api/customers etc.
 
@@ -160,6 +165,16 @@ async function bootstrap() {
         console.log(`Socket.IO server ready`);
         if (!rbacSeeded) {
             console.error('⚠ RBAC SEED FAILED — check database connectivity / migration state');
+        }
+
+        // Start Telegram workers
+        try {
+            const { startInboxProcessor } = require('./telegram/inboxProcessor');
+            const { startOutboxWorker } = require('./telegram/outboxWorker');
+            startInboxProcessor();
+            startOutboxWorker();
+        } catch (err) {
+            console.warn('[Telegram] Workers failed to start:', err);
         }
     });
 }

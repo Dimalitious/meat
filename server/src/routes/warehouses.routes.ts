@@ -33,7 +33,7 @@ router.get('/', requirePermission(PERM.WAREHOUSES_READ), async (req: Request, re
 // GET /api/warehouses/:code - Get warehouse by code
 router.get('/:code', requirePermission(PERM.WAREHOUSES_READ), async (req: Request, res: Response) => {
     try {
-        const { code } = req.params;
+        const code = req.params.code as string;
         const warehouse = await prisma.warehouse.findUnique({
             where: { code },
             include: {
@@ -96,7 +96,7 @@ router.post('/', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: Request,
 // PUT /api/warehouses/:code - Update warehouse
 router.put('/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: Request, res: Response) => {
     try {
-        const { code } = req.params;
+        const code = req.params.code as string;
         const { name, address, phone, responsibleUserId, comment } = req.body;
 
         const existing = await prisma.warehouse.findUnique({ where: { code } });
@@ -105,7 +105,7 @@ router.put('/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: Requ
         }
 
         const warehouse = await prisma.warehouse.update({
-            where: { code },
+            where: { code: code as string },
             data: {
                 ...(name !== undefined && { name }),
                 ...(address !== undefined && { address }),
@@ -130,7 +130,7 @@ router.put('/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: Requ
 // PUT /api/warehouses/toggle/:code - Toggle warehouse status
 router.put('/toggle/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: Request, res: Response) => {
     try {
-        const { code } = req.params;
+        const code = req.params.code as string;
 
         const existing = await prisma.warehouse.findUnique({ where: { code } });
         if (!existing) {
@@ -138,7 +138,7 @@ router.put('/toggle/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (re
         }
 
         const warehouse = await prisma.warehouse.update({
-            where: { code },
+            where: { code: code as string },
             data: { isDisabled: !existing.isDisabled }
         });
 
@@ -177,7 +177,7 @@ router.delete('/:code', requirePermission(PERM.WAREHOUSES_MANAGE), async (req: R
         const { code } = req.params;
 
         const warehouse = await prisma.warehouse.update({
-            where: { code },
+            where: { code: req.params.code as string },
             data: { isDisabled: true }
         });
 

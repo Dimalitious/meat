@@ -41,6 +41,18 @@ model User {
   supplierReturnsCreated   SupplierReturn[]   @relation("SupplierReturnCreator")
   supplierPaymentsCreated  SupplierPayment[]  @relation("SupplierPaymentCreator")
   supplierPaymentsDeleted  SupplierPayment[]  @relation("SupplierPaymentDeleter")
+  // Telegram Bot Module
+  telegramBoundCustomers   Customer[]              @relation("TelegramBoundBy")
+  telegramBindRequests     TelegramBindRequest[]   @relation("BindRequestCreator")
+  // Sales Manager Module
+  customerSalesManagers     CustomerSalesManager[]
+  csmAssignedBy             CustomerSalesManager[] @relation("CSM_AssignedBy")
+  csmUnassignedBy           CustomerSalesManager[] @relation("CSM_UnassignedBy")
+  draftRejectedBy           OrderDraft[]           @relation("OrderDraftRejectedBy")
+  draftAcceptedBy           OrderDraft[]           @relation("OrderDraftAcceptedBy")
+  customerRefundsCreated    CustomerMoneyRefund[]  @relation("CustomerRefundCreator")
+  customerRefundsUpdated    CustomerMoneyRefund[]  @relation("CustomerRefundUpdater")
+  customerRefundsDeleted    CustomerMoneyRefund[]  @relation("CustomerRefundDeleter")
 }
 
 model District {
@@ -116,14 +128,22 @@ model Customer {
   name       String
   legalName  String?
   inn        String?   @db.VarChar(9)  // ИНН клиента (до 9 символов)
+  // Telegram — витрина (не для логики бота)
   telegramGroupName     String?  // Название группы в Telegram
   telegramGroupUsername String?  // Никнейм группы (@username)
+  // Telegram — binding (ключ связки с ботом)
+  telegramChatId        BigInt?   @unique       // chat.id из Bot API — единственный стабильный ключ
+  telegramChatType      String?                 // "group" | "supergroup"
+  telegramIsEnabled     Boolean   @default(true) // можно выключить без отвязки
+  telegramBoundAt       DateTime?
+  telegramBoundByUserId Int?                     // FK → User.id (кто привязал)
   districtId String?
   managerId  String?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
   district              District? @relation(fields: [districtId], references: [code])
   manager               Manager?  @relation(fields: [managerId], references: [code])
+  telegramBoundByUser   User?     @relation("TelegramBoundBy", fields: [telegramBoundByUserId], references: [id])
   orders                Order[]
   summaryJournalEntries SummaryOrderJournal[]
   salesPriceLists       SalesPriceList[]
@@ -131,6 +151,13 @@ model Customer {
   customerProducts      CustomerProduct[]
   // Карточки клиента (MML с описаниями и фото)
   customerCards         CustomerCard[]
+  // Telegram Bot Module
+  telegramBindRequests  TelegramBindRequest[]
+  orderDrafts           OrderDraft[]
+  telegramOutbox        TelegramOutbox[]
+  // Sales Manager Module
+  salesManagers         CustomerSalesManager[]
+  moneyRefunds          CustomerMoneyRefund[]
 }
 
 // Карточка клиента - набор позиций MML с описаниями и фото для конкретного клиента
@@ -289,6 +316,9 @@ model Order {
   attachments       OrderAttachment[]
   returns           OrderReturn[]      // Документы возвратов
   returnAuditLogs   ReturnAuditLog[]   // Аудит-лог возвратов
+  // Telegram Bot — источник заказа
+  draftId           Int?               @unique
+  draft             OrderDraft?        @relation(fields: [draftId], references: [id])
   
   @@index([date])
   @@index([isDisabled])
@@ -948,6 +978,7 @@ model PaymentType {
   updatedAt   DateTime  @updatedAt
   
   purchaseItems PurchaseItem[]
+  customerRefunds CustomerMoneyRefund[]
 }
 
 // Шапка закупки (документ)
@@ -1027,76 +1058,200 @@ model PurchaseItem {
 // ============================================
 
 // Группы Telegram для мониторинга
-model TelegramGroup {
+// ============================================
+// TELEGRAM BOT MODULE
+// ============================================
+
+// Одноразовый код привязки группы к клиенту
+model TelegramBindRequest {
+  id              Int       @id @default(autoincrement())
+  customerId      Int
+  code            String    @unique
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+  createdByUserId Int?
+
+  usedAt          DateTime?
+  usedByChatId    BigInt?
+
+  customer        Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdBy       User?     @relation("BindRequestCreator", fields: [createdByUserId], references: [id])
+
+  @@index([customerId, createdAt])
+  @@index([code, expiresAt])
+}
+
+// Лог входящих Telegram-сообщений (идемпотентность через @@unique)
+model TelegramInbox {
+  id          Int       @id @default(autoincrement())
+  chatId      BigInt
+  messageId   Int
+  messageDate DateTime? // из Telegram update.message.date (UTC)
+  fromUserId  BigInt?
+  text        String?
+  raw         Json      // полный Telegram update
+
+  status      String    @default("NEW")
+  // NEW | PROMPTED | IGNORED | DRAFT_CREATED | ERROR
+  error       String?
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  links       OrderDraftMessage[]
+
+  @@unique([chatId, messageId])
+  @@index([status, createdAt])
+}
+
+// Черновик заказа из Telegram (до подтверждения → Order)
+model OrderDraft {
   id            Int       @id @default(autoincrement())
-  chatId        String    @unique  // Telegram chat ID (может быть отрицательным)
-  title         String              // Название группы
-  username      String?             // @username группы (если публичная)
-  isActive      Boolean   @default(true)   // Активен ли мониторинг
-  lastMessageId Int?                // ID последнего обработанного сообщения
-  parsePatterns Json?               // Кастомные regex-шаблоны для парсинга заказов
+  customerId    Int
+  sourceChatId  BigInt?
+  status        String    @default("NEW")
+  // NEW | CLARIFY | WAIT_CONFIRM | CONFIRMED | CANCELED | ERROR
+
+  note          String?   // пожелания / комментарии
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  
-  orderDrafts   TelegramOrderDraft[]
-  
-  @@index([isActive])
+
+  createdByUserId   Int?
+  confirmedByUserId Int?
+  confirmedByChatId BigInt?
+
+  // Sales Manager workflow (ТЗ §3.2)
+  managerDecisionNote String?
+  rejectedAt          DateTime?
+  rejectedByUserId    Int?
+  acceptedAt          DateTime?
+  acceptedByUserId    Int?
+
+  items         OrderDraftItem[]
+  messages      OrderDraftMessage[]
+  order         Order?
+
+  customer      Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  rejectedByUser User?   @relation("OrderDraftRejectedBy", fields: [rejectedByUserId], references: [id])
+  acceptedByUser User?   @relation("OrderDraftAcceptedBy", fields: [acceptedByUserId], references: [id])
+
+  @@index([customerId, status, createdAt])
+  @@index([status, createdAt])
 }
 
-// Черновики заказов из Telegram (перед переносом в Order)
-model TelegramOrderDraft {
-  id              Int       @id @default(autoincrement())
-  groupId         Int       // FK -> TelegramGroup
-  messageId       String    // Telegram message ID
-  messageText     String    // Оригинальный текст сообщения
-  messageDate     DateTime  // Дата сообщения в Telegram
-  senderName      String?   // Имя отправителя
-  senderId        String?   // Telegram ID отправителя
-  
-  // Распознанные данные
-  parsedOrderNumber String?  // Номер заказа (если распознан)
-  parsedCustomer    String?  // Клиент (если распознан)
-  parsedAddress     String?  // Адрес доставки (если распознан)
-  
-  status          String    @default("pending")  // pending, approved, rejected, transferred
-  transferredOrderId Int?   // FK -> Order (если заказ перенесён)
-  approvedBy      String?   // Кто одобрил
-  approvedAt      DateTime?
-  rejectedReason  String?   // Причина отклонения
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  group           TelegramGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  items           TelegramOrderDraftItem[]
-  
-  @@unique([groupId, messageId])
-  @@index([status])
-  @@index([createdAt])
-}
+// Позиция черновика
+model OrderDraftItem {
+  id        Int     @id @default(autoincrement())
+  draftId   Int
 
-// Строки черновика заказа
-model TelegramOrderDraftItem {
-  id              Int       @id @default(autoincrement())
-  draftId         Int       // FK -> TelegramOrderDraft
-  
-  // Распознанные данные из сообщения
-  rawProductName  String    // Как написано в сообщении
-  rawQuantity     String    // Как написано в сообщении (например "10кг" или "5 шт")
-  rawPrice        String?   // Цена (если указана)
-  
-  // Связь с реальными данными (заполняется при подтверждении)
-  productId       Int?      // FK -> Product (если сопоставлен)
-  quantity        Float?    // Преобразованное количество
-  price           Decimal?  @db.Decimal(14, 2)
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  
-  draft           TelegramOrderDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  
+  productId Int?    // null = не распознано
+  rawText   String  // исходная строка/фрагмент
+  title     String? // нормализованное имя (если распознали)
+  quantity  Float?
+  unit      String? // KG | PCS | BOX | OTHER
+
+  draft     OrderDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
   @@index([draftId])
-  @@index([productId])
+}
+
+// Join: несколько сообщений → один draft
+model OrderDraftMessage {
+  id      Int @id @default(autoincrement())
+  draftId Int
+  inboxId Int
+  kind    String? // ORIGINAL | FOLLOWUP | CLARIFICATION
+
+  draft   OrderDraft    @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  inbox   TelegramInbox @relation(fields: [inboxId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, inboxId])
+  @@index([draftId])
+  @@index([inboxId])
+}
+
+// Очередь исходящих Telegram-сообщений
+model TelegramOutbox {
+  id            Int      @id @default(autoincrement())
+  customerId    Int?
+  chatId        BigInt
+  status        String   @default("QUEUED")
+  // QUEUED | SENDING | SENT | FAILED | CANCELED
+
+  text          String?
+  documentType  String?  // "ACT_RECONCILIATION" etc
+  documentParams Json?
+
+  attempts      Int      @default(0)
+  maxAttempts   Int      @default(5)
+  nextAttemptAt DateTime @default(now())
+  lastError     String?
+
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  sentAt        DateTime?
+
+  customer      Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([status, nextAttemptAt])
+  @@index([chatId, createdAt])
+}
+
+// ============================================
+// SALES MANAGER MODULE
+// ============================================
+
+// Связка Клиент ↔ Менеджер (m2m с историей назначений)
+model CustomerSalesManager {
+  id                 Int       @id @default(autoincrement())
+  customerId         Int
+  userId             Int
+
+  assignedAt         DateTime  @default(now())
+  assignedByUserId   Int?
+  unassignedAt       DateTime?
+  unassignedByUserId Int?
+
+  customer           Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedByUser     User?     @relation("CSM_AssignedBy", fields: [assignedByUserId], references: [id])
+  unassignedByUser   User?     @relation("CSM_UnassignedBy", fields: [unassignedByUserId], references: [id])
+
+  @@index([userId, unassignedAt])
+  @@index([customerId, unassignedAt])
+  @@unique([customerId, userId, assignedAt])
+}
+
+// Возврат денег клиенту (банк/касса)
+model CustomerMoneyRefund {
+  id              Int       @id @default(autoincrement())
+  customerId      Int
+  refundDate      DateTime
+  amount          Decimal   @db.Decimal(14, 2)
+
+  paymentTypeId   Int?
+  reference       String?   // номер платежки/документа
+  comment         String?
+  proofUrl        String?   // скан/фото документа
+
+  createdByUserId Int?
+  updatedByUserId Int?
+  deletedAt       DateTime?
+  deletedByUserId Int?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer        Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  paymentType     PaymentType? @relation(fields: [paymentTypeId], references: [id])
+  createdByUser   User?        @relation("CustomerRefundCreator", fields: [createdByUserId], references: [id])
+  updatedByUser   User?        @relation("CustomerRefundUpdater", fields: [updatedByUserId], references: [id])
+  deletedByUser   User?        @relation("CustomerRefundDeleter", fields: [deletedByUserId], references: [id])
+
+  @@index([customerId, refundDate])
+  @@index([deletedAt])
 }
 
 // ============================================

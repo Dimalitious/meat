@@ -83,7 +83,7 @@ export const getLastPriceListTemplate = async (req: Request, res: Response) => {
                 items: {
                     include: {
                         product: {
-                            select: { id: true, code: true, name: true, unit: true }
+                            select: { id: true, code: true, name: true }
                         },
                         supplier: {
                             select: { id: true, code: true, name: true }
@@ -101,8 +101,9 @@ export const getLastPriceListTemplate = async (req: Request, res: Response) => {
         }
 
         // Группируем товары по поставщикам
+        const pl = lastPriceList as any;
         const supplierItems: Record<number, any[]> = {};
-        for (const item of lastPriceList.items) {
+        for (const item of pl.items) {
             if (!supplierItems[item.supplierId]) {
                 supplierItems[item.supplierId] = [];
             }
@@ -116,10 +117,10 @@ export const getLastPriceListTemplate = async (req: Request, res: Response) => {
         // Формируем структуру шаблона
         const template = {
             hasTemplate: true,
-            sourceId: lastPriceList.id,
-            sourceDate: lastPriceList.date,
-            sourceName: lastPriceList.name,
-            suppliers: lastPriceList.suppliers.map(s => ({
+            sourceId: pl.id,
+            sourceDate: pl.date,
+            sourceName: pl.name,
+            suppliers: pl.suppliers.map((s: any) => ({
                 supplierId: s.supplierId,
                 supplier: s.supplier,
                 primaryMmlId: s.primaryMmlId,
@@ -128,9 +129,9 @@ export const getLastPriceListTemplate = async (req: Request, res: Response) => {
             }))
         };
 
-        console.log('[getLastPriceListTemplate] Template from price list:', lastPriceList.id,
+        console.log('[getLastPriceListTemplate] Template from price list:', pl.id,
             'suppliers:', template.suppliers.length,
-            'total items:', lastPriceList.items.length);
+            'total items:', pl.items.length);
 
         res.json(template);
     } catch (error) {

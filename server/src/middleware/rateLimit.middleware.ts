@@ -20,12 +20,6 @@ export const loginLimiter = rateLimit({
     message: {
         error: 'Too many login attempts. Please try again after 15 minutes.',
     },
-    keyGenerator: (req) => {
-        // Use X-Forwarded-For behind proxy (Railway, nginx), fallback to IP
-        return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim()
-            || req.ip
-            || 'unknown';
-    },
 });
 
 /**

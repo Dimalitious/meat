@@ -12,6 +12,7 @@ const LEGACY_ROLE_PRIORITY: Record<string, number> = {
     [ROLE_CODES.ACCOUNTANT]: 3,
     [ROLE_CODES.EXPEDITOR]: 4,
     [ROLE_CODES.OPERATOR]: 5,
+    [ROLE_CODES.SALES_MANAGER]: 6,
 };
 
 function inferLegacyRole(roleCodes: string[]): string | null {

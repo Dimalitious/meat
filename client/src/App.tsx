@@ -46,6 +46,7 @@ import MmlReferencePage from './pages/MmlReferencePage';
 import MaterialReportPage from './pages/MaterialReportPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import SupplierAccountPage from './pages/SupplierAccountPage';
+import SalesManagerPage from './pages/SalesManagerPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useAuth();
@@ -144,6 +145,8 @@ function App() {
             <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
             {/* Supplier Account Module (Расчёты с поставщиками) */}
             <Route path="/supplier-account" element={<ProtectedRoute><SupplierAccountPage /></ProtectedRoute>} />
+            {/* Sales Manager Module */}
+            <Route path="/sales-manager" element={<ProtectedRoute><SalesManagerPage /></ProtectedRoute>} />
           </Routes>
         </BrowserRouter>
       </SocketProvider>

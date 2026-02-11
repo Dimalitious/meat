@@ -9,6 +9,7 @@ export const ROLE_CODES = {
     EXPEDITOR: 'EXPEDITOR',
     BUYER: 'BUYER',
     ACCOUNTANT: 'ACCOUNTANT',
+    SALES_MANAGER: 'SALES_MANAGER',
 } as const;
 
 export const PERM = {
@@ -97,6 +98,24 @@ export const PERM = {
     // P2: reserved for future AuditLog endpoint (view audit entries).
     // Keep code here to avoid breaking changes later, but do not rely on it in P0/P1.
     ADMIN_AUDIT: 'admin.audit',
+
+    // Telegram Bot
+    TELEGRAM_BIND: 'telegram.bind',
+    TELEGRAM_DRAFTS_READ: 'telegram.drafts.read',
+    TELEGRAM_DRAFTS_MANAGE: 'telegram.drafts.manage',
+    TELEGRAM_OUTBOX: 'telegram.outbox',
+
+    // Sales Manager Module
+    SALES_MANAGER_CUSTOMERS_READ: 'salesManager.customers.read',
+    SALES_MANAGER_CUSTOMERS_ASSIGN: 'salesManager.customers.assign',
+    SALES_MANAGER_DRAFTS_READ: 'salesManager.drafts.read',
+    SALES_MANAGER_DRAFTS_ACCEPT: 'salesManager.drafts.accept',
+    SALES_MANAGER_DRAFTS_REJECT: 'salesManager.drafts.reject',
+    SALES_MANAGER_DRAFTS_EDIT: 'salesManager.drafts.edit',
+    SALES_MANAGER_STATEMENT_READ: 'salesManager.statement.read',
+    SALES_MANAGER_STATEMENT_SEND: 'salesManager.statement.send',
+    SALES_MANAGER_REFUNDS_READ: 'salesManager.refunds.read',
+    SALES_MANAGER_REFUNDS_MANAGE: 'salesManager.refunds.manage',
 } as const;
 
 type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
@@ -117,6 +136,7 @@ export function mapLegacyRoleToRoleCode(legacyRoleRaw: string | null | undefined
     // Legacy codebase had lower-case adhoc roles in requireRole:
     // 'manager', 'dispatcher' — treat as OPERATOR for fallback.
     if (legacy === 'MANAGER' || legacy === 'DISPATCHER' || legacy === 'USER' || legacy === 'OPERATOR') return ROLE_CODES.OPERATOR;
+    if (legacy === 'SALES_MANAGER' || legacy === 'SALES') return ROLE_CODES.SALES_MANAGER;
 
     return ROLE_CODES.OPERATOR;
 }
@@ -149,6 +169,8 @@ export const DEFAULT_ROLE_PERMS_FALLBACK: Record<RoleCode, string[]> = {
         PERM.CATALOG_PRODUCTS,
         PERM.CATALOG_CUSTOMERS,
         PERM.REPORTS_READ,
+        PERM.TELEGRAM_DRAFTS_READ,
+        PERM.TELEGRAM_DRAFTS_MANAGE,
     ],
     [ROLE_CODES.PRODUCTION]: [
         PERM.PRODUCTION_READ,
@@ -200,7 +222,21 @@ export const DEFAULT_ROLE_PERMS_FALLBACK: Record<RoleCode, string[]> = {
         PERM.SUPPLIER_RETURNS_READ,
         PERM.SUPPLIER_PAYMENTS_READ,
         PERM.SUPPLIER_STATEMENT_READ,
+        PERM.TELEGRAM_OUTBOX,
         // P2 reserved: admin.audit is not issued by default until AuditLog endpoints exist.
+    ],
+    [ROLE_CODES.SALES_MANAGER]: [
+        PERM.SALES_MANAGER_CUSTOMERS_READ,
+        PERM.SALES_MANAGER_DRAFTS_READ,
+        PERM.SALES_MANAGER_DRAFTS_ACCEPT,
+        PERM.SALES_MANAGER_DRAFTS_REJECT,
+        PERM.SALES_MANAGER_DRAFTS_EDIT,
+        PERM.SALES_MANAGER_STATEMENT_READ,
+        PERM.SALES_MANAGER_STATEMENT_SEND,
+        PERM.SALES_MANAGER_REFUNDS_READ,
+        PERM.ORDERS_READ,
+        PERM.CATALOG_CUSTOMERS,
+        PERM.TELEGRAM_DRAFTS_READ,
     ],
 };
 
@@ -214,6 +250,7 @@ export const SYSTEM_ROLES: { code: string; name: string; isSystem: boolean }[] =
     { code: ROLE_CODES.EXPEDITOR, name: 'Экспедитор', isSystem: true },
     { code: ROLE_CODES.BUYER, name: 'Закупщик', isSystem: true },
     { code: ROLE_CODES.ACCOUNTANT, name: 'Бухгалтер', isSystem: true },
+    { code: ROLE_CODES.SALES_MANAGER, name: 'Менеджер по продажам', isSystem: true },
 ];
 
 /**
@@ -242,6 +279,8 @@ export const DEFAULT_ROLE_PERMS_SEED: Record<string, string[]> = {
         PERM.CATALOG_PRODUCTS,
         PERM.CATALOG_CUSTOMERS,
         PERM.REPORTS_READ,
+        PERM.TELEGRAM_DRAFTS_READ,
+        PERM.TELEGRAM_DRAFTS_MANAGE,
     ],
     [ROLE_CODES.PRODUCTION]: [
         PERM.PRODUCTION_READ,
@@ -293,6 +332,20 @@ export const DEFAULT_ROLE_PERMS_SEED: Record<string, string[]> = {
         PERM.SUPPLIER_RETURNS_READ,
         PERM.SUPPLIER_PAYMENTS_READ,
         PERM.SUPPLIER_STATEMENT_READ,
+        PERM.TELEGRAM_OUTBOX,
         // P2 reserved: admin.audit is not issued by default until AuditLog endpoints exist.
+    ],
+    [ROLE_CODES.SALES_MANAGER]: [
+        PERM.SALES_MANAGER_CUSTOMERS_READ,
+        PERM.SALES_MANAGER_DRAFTS_READ,
+        PERM.SALES_MANAGER_DRAFTS_ACCEPT,
+        PERM.SALES_MANAGER_DRAFTS_REJECT,
+        PERM.SALES_MANAGER_DRAFTS_EDIT,
+        PERM.SALES_MANAGER_STATEMENT_READ,
+        PERM.SALES_MANAGER_STATEMENT_SEND,
+        PERM.SALES_MANAGER_REFUNDS_READ,
+        PERM.ORDERS_READ,
+        PERM.CATALOG_CUSTOMERS,
+        PERM.TELEGRAM_DRAFTS_READ,
     ],
 };

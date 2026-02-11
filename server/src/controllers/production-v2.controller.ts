@@ -1779,13 +1779,13 @@ export const updateRunValueEntry = async (req: Request, res: Response) => {
         const effectiveOpType = opType || existing.opType;
 
         // Validation: value must be > 0 if provided
-        let numericValue = existing.value;
+        let numericValue: number = Number(existing.value);
         if (value !== undefined) {
             if (value === null || value === '') {
                 return res.status(400).json({ error: 'value cannot be empty' });
             }
             numericValue = Number(value);
-            if (isNaN(numericValue as number) || (numericValue as number) <= 0) {
+            if (isNaN(numericValue) || numericValue <= 0) {
                 return res.status(400).json({ error: 'value must be a positive number' });
             }
         }

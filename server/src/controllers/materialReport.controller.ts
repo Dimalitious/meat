@@ -648,7 +648,7 @@ export const updateMaterialReportLine = async (req: Request, res: Response) => {
             where: {
                 draftId_productId: {
                     draftId: draft.id,
-                    productId: parseInt(productId)
+                    productId: parseInt(String(productId))
                 }
             },
             update: {
@@ -656,7 +656,7 @@ export const updateMaterialReportLine = async (req: Request, res: Response) => {
             },
             create: {
                 draftId: draft.id,
-                productId: parseInt(productId),
+                productId: parseInt(String(productId)),
                 closingBalanceFact: closingBalanceFact !== null ? closingBalanceFact : null
             }
         });
@@ -782,7 +782,7 @@ export const deleteMaterialReport = async (req: Request, res: Response) => {
         const { id } = req.params;
 
         await prisma.materialReport.delete({
-            where: { id: parseInt(id) }
+            where: { id: parseInt(String(id)) }
         });
 
         res.json({ success: true, message: 'Отчёт удалён' });

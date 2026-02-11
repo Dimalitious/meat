@@ -13,7 +13,7 @@ const prisma = new PrismaClient();
  */
 export const getCustomerProducts = async (req: Request, res: Response) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
 
         if (isNaN(customerId)) {
             return res.status(400).json({ error: 'Invalid customer ID' });
@@ -50,7 +50,7 @@ export const getCustomerProducts = async (req: Request, res: Response) => {
  */
 export const addCustomerProduct = async (req: Request, res: Response) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productId, sortOrder = 0 } = req.body;
 
         if (isNaN(customerId)) {
@@ -116,7 +116,7 @@ export const addCustomerProduct = async (req: Request, res: Response) => {
  */
 export const addCustomerProductsBulk = async (req: Request, res: Response) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productIds } = req.body;
 
         if (isNaN(customerId)) {
@@ -185,8 +185,8 @@ export const addCustomerProductsBulk = async (req: Request, res: Response) => {
  */
 export const removeCustomerProduct = async (req: Request, res: Response) => {
     try {
-        const customerId = parseInt(req.params.customerId);
-        const productId = parseInt(req.params.productId);
+        const customerId = parseInt(String(req.params.customerId));
+        const productId = parseInt(String(req.params.productId));
 
         if (isNaN(customerId) || isNaN(productId)) {
             return res.status(400).json({ error: 'Invalid customer or product ID' });
@@ -211,7 +211,7 @@ export const removeCustomerProduct = async (req: Request, res: Response) => {
  */
 export const reorderCustomerProducts = async (req: Request, res: Response) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productIds } = req.body;
 
         if (isNaN(customerId)) {
