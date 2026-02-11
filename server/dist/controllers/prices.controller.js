@@ -19,13 +19,13 @@ const getPurchasePriceLists = async (req, res) => {
                 where.createdAt.lte = new Date(dateTo);
         }
         if (supplierId) {
-            where.supplierId = Number(supplierId);
+            where.suppliers = { some: { supplierId: Number(supplierId) } };
         }
         const lists = await prisma.purchasePriceList.findMany({
             where,
             orderBy: { createdAt: 'desc' },
             include: {
-                supplier: true,
+                suppliers: { include: { supplier: true } },
                 _count: { select: { items: true } }
             }
         });
@@ -42,9 +42,10 @@ const getCurrentPurchasePrice = async (req, res) => {
     try {
         const supplierId = Number(req.params.supplierId);
         let priceList = await prisma.purchasePriceList.findFirst({
-            where: { supplierId, isCurrent: true },
+            where: { suppliers: { some: { supplierId } }, isActive: true },
+            orderBy: { date: 'desc' },
             include: {
-                supplier: true,
+                suppliers: { include: { supplier: true } },
                 items: {
                     include: { product: true },
                     orderBy: { createdAt: 'asc' }
@@ -66,7 +67,7 @@ const getPurchasePriceById = async (req, res) => {
         const priceList = await prisma.purchasePriceList.findUnique({
             where: { id },
             include: {
-                supplier: true,
+                suppliers: { include: { supplier: true } },
                 items: {
                     include: { product: true },
                     orderBy: { createdAt: 'asc' }
@@ -84,18 +85,18 @@ exports.getPurchasePriceById = getPurchasePriceById;
 // Создать новый закупочный прайс
 const createPurchasePrice = async (req, res) => {
     try {
-        const { supplierId, title } = req.body;
+        const { supplierId, name } = req.body;
         const user = req.user?.username || 'system';
         const priceList = await prisma.purchasePriceList.create({
             data: {
-                supplierId,
-                title,
-                status: 'draft',
+                date: new Date(),
+                name,
                 createdBy: user,
-                updatedBy: user
+                updatedBy: user,
+                ...(supplierId ? { suppliers: { create: { supplierId } } } : {})
             },
             include: {
-                supplier: true,
+                suppliers: { include: { supplier: true } },
                 items: { include: { product: true } }
             }
         });
@@ -111,26 +112,23 @@ exports.createPurchasePrice = createPurchasePrice;
 const savePurchasePrice = async (req, res) => {
     try {
         const id = Number(req.params.id);
-        const { title, items, makeCurrent } = req.body;
+        const { name, items, makeCurrent } = req.body;
         const user = req.user?.username || 'system';
         await prisma.$transaction(async (tx) => {
-            // Если делаем текущим - снять флаг с других
+            // Если делаем текущим - деактивировать другие
             if (makeCurrent) {
-                const current = await tx.purchasePriceList.findUnique({ where: { id } });
-                if (current) {
-                    await tx.purchasePriceList.updateMany({
-                        where: { supplierId: current.supplierId, isCurrent: true },
-                        data: { isCurrent: false }
-                    });
-                }
+                // Deactivate other active price lists
+                await tx.purchasePriceList.updateMany({
+                    where: { id: { not: id }, isActive: true },
+                    data: { isActive: false }
+                });
             }
             // Обновить шапку
             await tx.purchasePriceList.update({
                 where: { id },
                 data: {
-                    title,
-                    status: 'saved',
-                    isCurrent: makeCurrent || false,
+                    name,
+                    isActive: makeCurrent || undefined,
                     updatedBy: user
                 }
             });
@@ -142,9 +140,8 @@ const savePurchasePrice = async (req, res) => {
                         data: {
                             priceListId: id,
                             productId: item.productId,
+                            supplierId: item.supplierId,
                             purchasePrice: item.purchasePrice,
-                            rowDate: item.rowDate ? new Date(item.rowDate) : new Date(),
-                            updatedBy: user
                         }
                     });
                 }
@@ -153,7 +150,7 @@ const savePurchasePrice = async (req, res) => {
         const updated = await prisma.purchasePriceList.findUnique({
             where: { id },
             include: {
-                supplier: true,
+                suppliers: { include: { supplier: true } },
                 items: { include: { product: true } }
             }
         });

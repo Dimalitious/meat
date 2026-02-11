@@ -25,6 +25,7 @@ export const getProducts = async (req: Request, res: Response) => {
 
         const products = await prisma.product.findMany({
             where,
+            include: { uom: true, country: true, subcategory: true },
             orderBy: { name: 'asc' }
         });
         res.json(products);
@@ -48,25 +49,124 @@ export const getProduct = async (req: Request, res: Response) => {
 
 export const createProduct = async (req: Request, res: Response) => {
     try {
+        const { code, name, altName, priceListName, category, status, coefficient, lossNorm, participatesInProduction, uomId, countryId, subcategoryId } = req.body;
+
+        // Validate country & subcategory (required for manual create)
+        if (!countryId) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Страна обязательна.' });
+        }
+        if (!subcategoryId) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Подкатегория обязательна.' });
+        }
+
+        // Validate referenced entities are active
+        const [country, subcategory] = await Promise.all([
+            prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true } }),
+        ]);
+        if (!country?.isActive) {
+            return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
+        }
+        if (!subcategory?.isActive) {
+            return res.status(400).json({ error: 'INACTIVE_SUBCATEGORY', message: 'Нельзя выбрать архивную подкатегорию.' });
+        }
+
         const product = await prisma.product.create({
-            data: req.body
+            data: {
+                code,
+                name,
+                altName,
+                priceListName,
+                category,
+                status,
+                coefficient,
+                lossNorm,
+                participatesInProduction,
+                uomId: uomId ? Number(uomId) : null,
+                countryId: Number(countryId),
+                subcategoryId: Number(subcategoryId),
+            },
+            include: { uom: true, country: true, subcategory: true }
         });
         res.status(201).json(product);
-    } catch (error) {
-        res.status(400).json({ error: 'Failed to create product. Code might be unique.' });
+    } catch (error: any) {
+        console.error('createProduct error:', error);
+        if (error.code === 'P2002') {
+            return res.status(409).json({ error: 'DUPLICATE', message: 'Товар с таким кодом уже существует.' });
+        }
+        res.status(500).json({ error: 'Failed to create product' });
     }
 };
 
 export const updateProduct = async (req: Request, res: Response) => {
     try {
         const { code } = req.params as { code: string };
+        const { name, altName, priceListName, category, status, coefficient, lossNorm, participatesInProduction, uomId, countryId, subcategoryId } = req.body;
+
+        // Validate country & subcategory (required for manual update)
+        if (!countryId) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Страна обязательна.' });
+        }
+        if (!subcategoryId) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Подкатегория обязательна.' });
+        }
+
+        // Validate referenced entities are active
+        const [country, subcategory] = await Promise.all([
+            prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true } }),
+        ]);
+        if (!country?.isActive) {
+            return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
+        }
+        if (!subcategory?.isActive) {
+            return res.status(400).json({ error: 'INACTIVE_SUBCATEGORY', message: 'Нельзя выбрать архивную подкатегорию.' });
+        }
+
+        // Guard: changing subcategoryId is blocked if active variants exist
+        const existing = await prisma.product.findUnique({ where: { code }, select: { id: true, subcategoryId: true } });
+        if (existing && existing.subcategoryId && existing.subcategoryId !== Number(subcategoryId)) {
+            const activeVariants = await prisma.customerProductVariant.count({
+                where: {
+                    isActive: true,
+                    customerProduct: { productId: existing.id },
+                },
+            });
+            if (activeVariants > 0) {
+                return res.status(409).json({
+                    error: 'SUBCATEGORY_CHANGE_BLOCKED',
+                    message: `Сначала деактивируйте ${activeVariants} вариантов в персональных каталогах клиентов.`,
+                });
+            }
+        }
+
         const product = await prisma.product.update({
             where: { code },
-            data: req.body
+            data: {
+                name,
+                altName,
+                priceListName,
+                category,
+                status,
+                coefficient,
+                lossNorm,
+                participatesInProduction,
+                uomId: uomId ? Number(uomId) : null,
+                countryId: Number(countryId),
+                subcategoryId: Number(subcategoryId),
+            },
+            include: { uom: true, country: true, subcategory: true }
         });
         res.json(product);
-    } catch (error) {
-        res.status(400).json({ error: 'Failed to update product' });
+    } catch (error: any) {
+        console.error('updateProduct error:', error);
+        if (error.code === 'P2025') {
+            return res.status(404).json({ error: 'NOT_FOUND', message: 'Товар не найден.' });
+        }
+        if (error.code === 'P2002') {
+            return res.status(409).json({ error: 'DUPLICATE', message: 'Конфликт уникальности.' });
+        }
+        res.status(500).json({ error: 'Failed to update product' });
     }
 };
 
@@ -102,7 +202,7 @@ export const deactivateProduct = async (req: Request, res: Response) => {
 // Upsert: создать или обновить товар по коду
 export const upsertProduct = async (req: Request, res: Response) => {
     try {
-        const { code, name, altName, priceListName, category, status, coefficient, lossNorm, participatesInProduction } = req.body;
+        const { code, name, altName, priceListName, category, status, coefficient, lossNorm, participatesInProduction, uomId } = req.body;
 
         if (!code || !name) {
             return res.status(400).json({ error: 'Code and name are required' });
@@ -119,6 +219,7 @@ export const upsertProduct = async (req: Request, res: Response) => {
                 coefficient: coefficient ?? 1.0,
                 lossNorm: lossNorm ?? 0.0,
                 participatesInProduction: participatesInProduction ?? false,
+                uomId: uomId ? Number(uomId) : null,
             },
             create: {
                 code,
@@ -130,7 +231,9 @@ export const upsertProduct = async (req: Request, res: Response) => {
                 coefficient: coefficient ?? 1.0,
                 lossNorm: lossNorm ?? 0.0,
                 participatesInProduction: participatesInProduction ?? false,
-            }
+                uomId: uomId ? Number(uomId) : null,
+            },
+            include: { uom: true, country: true, subcategory: true }
         });
         res.json(product);
     } catch (error) {

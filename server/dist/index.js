@@ -8,7 +8,9 @@ const http_1 = require("http");
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const socket_1 = require("./socket");
-// Force restart: 2026-01-22 00:36 - Socket.IO Integration
+const db_1 = require("./db");
+const ensureRbacSeeded_1 = require("./prisma/ensureRbacSeeded");
+const auth_middleware_1 = require("./middleware/auth.middleware");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const httpServer = (0, http_1.createServer)(app);
@@ -26,16 +28,16 @@ const assembly_routes_1 = __importDefault(require("./routes/assembly.routes"));
 const warehouse_routes_1 = __importDefault(require("./routes/warehouse.routes"));
 const summaryOrders_routes_1 = __importDefault(require("./routes/summaryOrders.routes"));
 const journals_routes_1 = __importDefault(require("./routes/journals.routes"));
-const production_routes_1 = __importDefault(require("./routes/production.routes"));
 const prices_routes_1 = __importDefault(require("./routes/prices.routes"));
 const purchasePriceLists_routes_1 = __importDefault(require("./routes/purchasePriceLists.routes"));
 const mmlBatch_routes_1 = __importDefault(require("./routes/mmlBatch.routes"));
 const paymentTypes_routes_1 = __importDefault(require("./routes/paymentTypes.routes"));
 const purchases_routes_1 = __importDefault(require("./routes/purchases.routes"));
-const telegram_controller_1 = __importDefault(require("./controllers/telegram.controller"));
+const telegram_routes_1 = __importDefault(require("./routes/telegram.routes"));
 const warehouses_routes_1 = __importDefault(require("./routes/warehouses.routes"));
 app.use((0, cors_1.default)());
-app.use(express_1.default.json({ limit: '50mb' })); // Increased limit for batch imports
+app.set('trust proxy', 1); // Railway/Nginx proxy support
+app.use(express_1.default.json({ limit: '50mb' }));
 app.use(express_1.default.urlencoded({ limit: '50mb', extended: true }));
 // Middleware to attach Socket.IO to requests
 app.use((req, res, next) => {
@@ -52,7 +54,6 @@ app.use('/api/assembly', assembly_routes_1.default);
 app.use('/api/warehouse', warehouse_routes_1.default);
 app.use('/api/summary-orders', summaryOrders_routes_1.default);
 app.use('/api/journals', journals_routes_1.default);
-app.use('/api/production', production_routes_1.default);
 app.use('/api/prices', prices_routes_1.default);
 app.use('/api/purchase-price-lists', purchasePriceLists_routes_1.default);
 app.use('/api/production-module', mmlBatch_routes_1.default);
@@ -62,10 +63,13 @@ app.use('/api/production-v2', production_v2_routes_1.default);
 // Purchase Module
 app.use('/api/payment-types', paymentTypes_routes_1.default);
 app.use('/api/purchases', purchases_routes_1.default);
-// Telegram Agent Module
-app.use('/api/telegram', telegram_controller_1.default);
+// Telegram Bot Module (webhook + CRM API)
+app.use('/api/telegram', telegram_routes_1.default);
 // Warehouses Module (Справочник складов)
 app.use('/api/warehouses', warehouses_routes_1.default);
+// Admin Module (User & Role Management)
+const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
+app.use('/api/admin', admin_routes_1.default);
 // Customer Products (Персональный каталог товаров клиента)
 const customerProducts_routes_1 = __importDefault(require("./routes/customerProducts.routes"));
 app.use('/api/customer-products', customerProducts_routes_1.default);
@@ -81,15 +85,87 @@ app.use('/api/material-report', materialReport_routes_1.default);
 // Customer Cards Module (Карточки клиентов с MML и фото)
 const customerCards_routes_1 = __importDefault(require("./routes/customerCards.routes"));
 app.use('/api/customer-cards', customerCards_routes_1.default);
+// Returns Module (Возвраты из точек)
+const returns_routes_1 = __importDefault(require("./routes/returns.routes"));
+app.use('/api', returns_routes_1.default); // /api/orders/:orderId/returns
+// Supplier Account Module (Расчёты с поставщиками)
+const supplier_routes_1 = __importDefault(require("./routes/supplier.routes"));
+app.use('/api/suppliers', supplier_routes_1.default);
+// Sales Manager Module (Менеджер по продажам + Аксверк + Возврат денег)
+const salesManager_routes_1 = __importDefault(require("./routes/salesManager.routes"));
+app.use('/api/sales-manager', salesManager_routes_1.default);
+// UoM Module
+const uom_routes_1 = __importDefault(require("./routes/uom.routes"));
+app.use('/api/uom', uom_routes_1.default);
+// Product Catalog: Countries, Subcategories, ParamValues, ProductParams, Variants
+const countries_routes_1 = __importDefault(require("./routes/countries.routes"));
+app.use('/api/countries', countries_routes_1.default);
+const subcategories_routes_1 = __importDefault(require("./routes/subcategories.routes"));
+app.use('/api/subcategories', subcategories_routes_1.default);
+const paramValues_routes_1 = __importDefault(require("./routes/paramValues.routes"));
+app.use('/api/param-values', paramValues_routes_1.default);
+const productParams_routes_1 = __importDefault(require("./routes/productParams.routes"));
+app.use('/api/product-params', productParams_routes_1.default);
+const customerProductVariants_routes_1 = __importDefault(require("./routes/customerProductVariants.routes"));
+app.use('/api/customer-product-variants', customerProductVariants_routes_1.default);
 app.use('/api', master_routes_1.default); // /api/customers etc.
-// Health check (also for telegram agent)
-app.get('/health', (req, res) => {
+// ============================================
+// Health endpoints
+// ============================================
+// Liveness: always 200 (for k8s / Railway / load balancers)
+app.get('/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
-httpServer.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    console.log(`Socket.IO server ready`);
+// RBAC observability: returns degraded status if fallback is active
+let rbacSeeded = false;
+app.get('/api/health/rbac', (_req, res) => {
+    const snapshot = (0, auth_middleware_1.getRbacHealthSnapshot)();
+    const status = !rbacSeeded ? 'seed_failed' :
+        snapshot.fallbackCount > 0 ? 'degraded' :
+            'ok';
+    res.json({
+        status,
+        rbacSeeded,
+        ...snapshot,
+        timestamp: new Date().toISOString(),
+    });
+});
+// ============================================
+// Async bootstrap: RBAC seed + server start
+// ============================================
+async function bootstrap() {
+    // Ensure RBAC tables have permissions, roles, ADMIN→ALL linkage
+    try {
+        await (0, ensureRbacSeeded_1.ensureRbacSeededRuntime)(db_1.prisma);
+        rbacSeeded = true;
+        console.log('RBAC: seeded successfully');
+    }
+    catch (err) {
+        rbacSeeded = false;
+        console.error('RBAC: seed FAILED — running in fallback mode', err);
+    }
+    httpServer.listen(PORT, () => {
+        console.log(`Server is running on port ${PORT}`);
+        console.log(`Socket.IO server ready`);
+        if (!rbacSeeded) {
+            console.error('⚠ RBAC SEED FAILED — check database connectivity / migration state');
+        }
+        // Start Telegram workers
+        try {
+            const { startInboxProcessor } = require('./telegram/inboxProcessor');
+            const { startOutboxWorker } = require('./telegram/outboxWorker');
+            startInboxProcessor();
+            startOutboxWorker();
+        }
+        catch (err) {
+            console.warn('[Telegram] Workers failed to start:', err);
+        }
+    });
+}
+bootstrap().catch(err => {
+    console.error('Fatal bootstrap error:', err);
+    process.exit(1);
 });

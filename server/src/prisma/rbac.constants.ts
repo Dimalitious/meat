@@ -116,6 +116,7 @@ export const PERM = {
     SALES_MANAGER_STATEMENT_SEND: 'salesManager.statement.send',
     SALES_MANAGER_REFUNDS_READ: 'salesManager.refunds.read',
     SALES_MANAGER_REFUNDS_MANAGE: 'salesManager.refunds.manage',
+    SALES_MANAGER_ADDRESSES_MANAGE: 'salesManager.addresses.manage',
 } as const;
 
 type RoleCode = (typeof ROLE_CODES)[keyof typeof ROLE_CODES];
@@ -234,6 +235,7 @@ export const DEFAULT_ROLE_PERMS_FALLBACK: Record<RoleCode, string[]> = {
         PERM.SALES_MANAGER_STATEMENT_READ,
         PERM.SALES_MANAGER_STATEMENT_SEND,
         PERM.SALES_MANAGER_REFUNDS_READ,
+        PERM.SALES_MANAGER_ADDRESSES_MANAGE,
         PERM.ORDERS_READ,
         PERM.CATALOG_CUSTOMERS,
         PERM.TELEGRAM_DRAFTS_READ,
@@ -344,6 +346,7 @@ export const DEFAULT_ROLE_PERMS_SEED: Record<string, string[]> = {
         PERM.SALES_MANAGER_STATEMENT_READ,
         PERM.SALES_MANAGER_STATEMENT_SEND,
         PERM.SALES_MANAGER_REFUNDS_READ,
+        PERM.SALES_MANAGER_ADDRESSES_MANAGE,
         PERM.ORDERS_READ,
         PERM.CATALOG_CUSTOMERS,
         PERM.TELEGRAM_DRAFTS_READ,

@@ -24,6 +24,12 @@ interface Product {
     coefficient?: number;
     lossNorm?: number;
     participatesInProduction?: boolean; // Участие в производстве
+    uomId?: number | null;
+    uom?: { id: number; name: string } | null;
+    countryId?: number | null;
+    country?: { id: number; name: string; isActive: boolean } | null;
+    subcategoryId?: number | null;
+    subcategory?: { id: number; name: string; isActive: boolean } | null;
 }
 
 const ProductsPage = () => {
@@ -54,6 +60,44 @@ const ProductsPage = () => {
         fetchProducts();
     }, []);
 
+    const [uoms, setUoms] = useState<{ id: number; name: string; isDefault: boolean }[]>([]);
+    const [countries, setCountries] = useState<{ id: number; name: string; isActive: boolean }[]>([]);
+    const [subcategories, setSubcategories] = useState<{ id: number; name: string; isActive: boolean }[]>([]);
+
+    useEffect(() => {
+        fetchProducts();
+        fetchUoms();
+        fetchCountries();
+        fetchSubcategories();
+    }, []);
+
+    const fetchUoms = async () => {
+        try {
+            const res = await api.get('/api/uom');
+            setUoms(res.data);
+        } catch (error) {
+            console.error('Failed to fetch UoMs', error);
+        }
+    };
+
+    const fetchCountries = async () => {
+        try {
+            const res = await api.get('/api/countries?active=true');
+            setCountries(res.data.items);
+        } catch (error) {
+            console.error('Failed to fetch countries', error);
+        }
+    };
+
+    const fetchSubcategories = async () => {
+        try {
+            const res = await api.get('/api/subcategories?active=true');
+            setSubcategories(res.data.items);
+        } catch (error) {
+            console.error('Failed to fetch subcategories', error);
+        }
+    };
+
     const fetchProducts = async () => {
         try {
             const res = await api.get('/api/products');
@@ -73,6 +117,8 @@ const ProductsPage = () => {
 
     const handleCreate = () => {
         setEditingProduct(null);
+        // Find default UoM
+        const defaultUom = uoms.find(u => u.isDefault);
         setFormData({
             code: '',
             name: '',
@@ -83,6 +129,9 @@ const ProductsPage = () => {
             coefficient: 1.0,
             lossNorm: 0.0,
             participatesInProduction: false,
+            uomId: defaultUom ? defaultUom.id : undefined,
+            countryId: undefined,
+            subcategoryId: undefined,
         });
         setIsModalOpen(true);
     };
@@ -155,7 +204,10 @@ const ProductsPage = () => {
                 ...formData,
                 coefficient: Number(formData.coefficient),
                 lossNorm: Number(formData.lossNorm),
-                participatesInProduction: Boolean(formData.participatesInProduction)
+                participatesInProduction: Boolean(formData.participatesInProduction),
+                uomId: formData.uomId ? Number(formData.uomId) : null,
+                countryId: formData.countryId ? Number(formData.countryId) : null,
+                subcategoryId: formData.subcategoryId ? Number(formData.subcategoryId) : null,
             };
 
             if (editingProduct) {
@@ -332,6 +384,9 @@ const ProductsPage = () => {
                                 <TableHead className="text-slate-400 font-normal">Альт. название</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Название прайс-листа</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Категория</TableHead>
+                                <TableHead className="text-slate-200 font-semibold">Страна</TableHead>
+                                <TableHead className="text-slate-200 font-semibold">Подкатегория</TableHead>
+                                <TableHead className="text-slate-200 font-semibold" title="Единица измерения">Ед.</TableHead>
                                 <TableHead className="text-slate-200 font-semibold">Статус</TableHead>
                                 <TableHead className="text-slate-200 font-semibold text-center" title="Участие в производстве">Пр-во</TableHead>
                                 <TableHead className="text-slate-400 font-normal">Коэфф.</TableHead>
@@ -366,13 +421,13 @@ const ProductsPage = () => {
                                         onChange={e => setFilterCategory(e.target.value)}
                                     />
                                 </TableHead>
-                                <TableHead colSpan={5}></TableHead>
+                                <TableHead colSpan={8}></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filteredProducts.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={11} className="h-24 text-center text-slate-500">
+                                    <TableCell colSpan={14} className="h-24 text-center text-slate-500">
                                         Нет данных
                                     </TableCell>
                                 </TableRow>
@@ -395,6 +450,11 @@ const ProductsPage = () => {
                                             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-800">
                                                 {p.category || '-'}
                                             </span>
+                                        </TableCell>
+                                        <TableCell className="text-xs text-slate-600">{p.country?.name || '-'}</TableCell>
+                                        <TableCell className="text-xs text-slate-600">{p.subcategory?.name || '-'}</TableCell>
+                                        <TableCell className="text-xs text-slate-600">
+                                            {p.uom?.name || '-'}
                                         </TableCell>
                                         <TableCell>
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide ${p.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
@@ -491,6 +551,49 @@ const ProductsPage = () => {
                                     >
                                         <option value="active">Активен</option>
                                         <option value="inactive">Неактивен</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Единица измерения</label>
+                                    <select
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        value={formData.uomId || ''}
+                                        onChange={e => setFormData({ ...formData, uomId: Number(e.target.value) || undefined })}
+                                    >
+                                        <option value="">Не выбрано</option>
+                                        {uoms.map(u => (
+                                            <option key={u.id} value={u.id}>
+                                                {u.name} {u.isDefault ? '(по умолч.)' : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Страна *</label>
+                                    <select
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        value={formData.countryId || ''}
+                                        onChange={e => setFormData({ ...formData, countryId: Number(e.target.value) || undefined })}
+                                        required
+                                    >
+                                        <option value="">Выберите страну</option>
+                                        {countries.map(c => (
+                                            <option key={c.id} value={c.id}>{c.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Подкатегория *</label>
+                                    <select
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        value={formData.subcategoryId || ''}
+                                        onChange={e => setFormData({ ...formData, subcategoryId: Number(e.target.value) || undefined })}
+                                        required
+                                    >
+                                        <option value="">Выберите подкатегорию</option>
+                                        {subcategories.map(s => (
+                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
                                     </select>
                                 </div>
                             </div>

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
 import { Button } from '../components/ui/Button';
-import { Eye, Check, Truck, Edit2, Calendar, RefreshCw, RotateCcw } from 'lucide-react';
+import { Eye, Check, Truck, Edit2, Calendar, RefreshCw, RotateCcw, MapPin } from 'lucide-react';
 import { ReturnModal } from '../components/ReturnModal';
 
 interface OrderItem {
@@ -34,6 +34,11 @@ interface ExpeditionOrder {
     totalWeight: number;
     expeditionId: number | null;
     expeditionStatus: ExpeditionStatus;
+    // Delivery geo snapshot
+    deliveryLat: string | null;
+    deliveryLng: string | null;
+    deliveryAccuracyM: number | null;
+    deliveryComment: string | null;
     customer: {
         id: number;
         name: string;
@@ -356,6 +361,42 @@ function OrderCard({
                     <div className="text-gray-600">{order.customer.name}</div>
                     {order.deliveryAddress && (
                         <div className="text-sm text-gray-500 mt-1">📍 {order.deliveryAddress}</div>
+                    )}
+                    {/* Geo display */}
+                    {order.deliveryLat != null && order.deliveryLng != null && (
+                        <div className="mt-2 p-2 bg-gray-50 rounded">
+                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                                <MapPin size={12} />
+                                <span>
+                                    {(() => {
+                                        const lat = parseFloat(String(order.deliveryLat).replace(',', '.'));
+                                        const lng = parseFloat(String(order.deliveryLng).replace(',', '.'));
+                                        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                                            return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+                                        }
+                                        return `${order.deliveryLat}, ${order.deliveryLng}`;
+                                    })()}
+                                </span>
+                                {order.deliveryAccuracyM != null && Number(order.deliveryAccuracyM) > 500 && (
+                                    <span className="text-orange-600 font-medium">⚠ ~{order.deliveryAccuracyM}м</span>
+                                )}
+                            </div>
+                            {order.deliveryComment && (
+                                <div className="text-xs text-gray-500 mt-1">💬 {order.deliveryComment}</div>
+                            )}
+                            <div className="flex gap-2 mt-1">
+                                <a
+                                    href={`geo:${String(order.deliveryLat).replace(',', '.')},${String(order.deliveryLng).replace(',', '.')}`}
+                                    className="text-xs text-blue-600 underline"
+                                >🧭 Навигатор</a>
+                                <a
+                                    href={`https://www.google.com/maps?q=${String(order.deliveryLat).replace(',', '.')},${String(order.deliveryLng).replace(',', '.')}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-xs text-blue-600 underline"
+                                >📍 Google Maps</a>
+                            </div>
+                        </div>
                     )}
                     {/* Дата заказа */}
                     <div className="text-xs text-gray-400 mt-1">

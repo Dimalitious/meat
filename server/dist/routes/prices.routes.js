@@ -2,47 +2,34 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const prices_controller_1 = require("../controllers/prices.controller");
 const router = (0, express_1.Router)();
-// Все роуты требуют авторизации
+// All routes require authentication + RBAC context
 router.use(auth_middleware_1.authenticateToken);
+router.use(auth_middleware_1.loadUserContext);
 // ============================================
-// ЗАКУПОЧНЫЙ ПРАЙС
+// ЗАКУПОЧНЫЙ ПРАЙС (cost-data — prices.purchase.read / manage)
 // ============================================
-// Журнал закупочных прайсов
-router.get('/purchase', prices_controller_1.getPurchasePriceLists); // GET /api/prices/purchase?dateFrom=&dateTo=&supplierId=
-// Закупочные цены поставщиков по товару (для формы продажного прайса)
-router.get('/purchase/product-prices', prices_controller_1.getPurchasePricesForProduct); // GET /api/prices/purchase/product-prices?productId=&targetDate=
-// Текущий прайс поставщика
-router.get('/purchase/supplier/:supplierId/current', prices_controller_1.getCurrentPurchasePrice);
-// Прайс по ID
-router.get('/purchase/:id', prices_controller_1.getPurchasePriceById);
-// Создать новый закупочный прайс
-router.post('/purchase', prices_controller_1.createPurchasePrice); // POST /api/prices/purchase { supplierId, title }
-// Сохранить закупочный прайс
-router.put('/purchase/:id', prices_controller_1.savePurchasePrice); // PUT /api/prices/purchase/:id { title, items, makeCurrent }
+router.get('/purchase', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_READ), prices_controller_1.getPurchasePriceLists);
+router.get('/purchase/product-prices', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_READ), prices_controller_1.getPurchasePricesForProduct);
+router.get('/purchase/supplier/:supplierId/current', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_READ), prices_controller_1.getCurrentPurchasePrice);
+router.get('/purchase/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_READ), prices_controller_1.getPurchasePriceById);
+router.post('/purchase', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_MANAGE), prices_controller_1.createPurchasePrice);
+router.put('/purchase/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_PURCHASE_MANAGE), prices_controller_1.savePurchasePrice);
 // ============================================
-// ПРОДАЖНЫЙ ПРАЙС
+// ПРОДАЖНЫЙ ПРАЙС (prices.sales.read / manage)
 // ============================================
-// Журнал продажных прайсов
-router.get('/sales', prices_controller_1.getSalesPriceLists); // GET /api/prices/sales?dateFrom=&dateTo=&listType=&customerId=&showHidden=
-// Текущий общий прайс
-router.get('/sales/general/current', prices_controller_1.getCurrentGeneralPrice);
-// Текущий прайс заказчика
-router.get('/sales/customer/:customerId/current', prices_controller_1.getCurrentCustomerPrice);
-// Прайс по ID
-router.get('/sales/:id', prices_controller_1.getSalesPriceById);
-// Создать новый продажный прайс
-router.post('/sales', prices_controller_1.createSalesPrice); // POST /api/prices/sales { listType, customerId, title, effectiveDate }
-// Скрыть выбранные прайс-листы
-router.post('/sales/hide', prices_controller_1.hideSalesPriceLists); // POST /api/prices/sales/hide { ids: number[] }
-// Сохранить продажный прайс
-router.put('/sales/:id', prices_controller_1.saveSalesPrice); // PUT /api/prices/sales/:id { title, items, makeCurrent, effectiveDate }
+router.get('/sales', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.getSalesPriceLists);
+router.get('/sales/general/current', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.getCurrentGeneralPrice);
+router.get('/sales/customer/:customerId/current', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.getCurrentCustomerPrice);
+router.get('/sales/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.getSalesPriceById);
+router.post('/sales', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_MANAGE), prices_controller_1.createSalesPrice);
+router.post('/sales/hide', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_MANAGE), prices_controller_1.hideSalesPriceLists);
+router.put('/sales/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_MANAGE), prices_controller_1.saveSalesPrice);
 // ============================================
-// МЕХАНИЗМ ПОЛУЧЕНИЯ ЦЕНЫ
+// МЕХАНИЗМ ПОЛУЧЕНИЯ ЦЕНЫ (sales.read — needed for order creation)
 // ============================================
-// Получить цену для заказчика и товара
-router.get('/resolve/:customerId/:productId', prices_controller_1.resolveSalePrice);
-// Получить все цены для заказчика
-router.get('/resolve/:customerId', prices_controller_1.resolveAllPricesForCustomer);
+router.get('/resolve/:customerId/:productId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.resolveSalePrice);
+router.get('/resolve/:customerId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRICES_SALES_READ), prices_controller_1.resolveAllPricesForCustomer);
 exports.default = router;

@@ -96,6 +96,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Техкарты (MML)', path: '/mmls', icon: <FolderOpen size={18} />, permission: 'mml.read' },
 
                 { label: 'Типы оплат', path: '/payment-types', icon: <DollarSign size={18} />, permission: 'purchases.read' },
+                { label: 'Ед. измерения', path: '/dicts/uom', icon: <FileText size={18} />, permission: 'catalog.products' },
+                { label: 'Страны', path: '/dicts/countries', icon: <FileText size={18} />, permission: 'catalog.products' },
+                { label: 'Подкатегории', path: '/dicts/subcategories', icon: <FileText size={18} />, permission: 'catalog.products' },
             ]
         },
         {

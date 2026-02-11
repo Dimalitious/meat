@@ -80,7 +80,7 @@ const getLastPriceListTemplate = async (req, res) => {
                 items: {
                     include: {
                         product: {
-                            select: { id: true, code: true, name: true, unit: true }
+                            select: { id: true, code: true, name: true }
                         },
                         supplier: {
                             select: { id: true, code: true, name: true }
@@ -96,8 +96,9 @@ const getLastPriceListTemplate = async (req, res) => {
             });
         }
         // Группируем товары по поставщикам
+        const pl = lastPriceList;
         const supplierItems = {};
-        for (const item of lastPriceList.items) {
+        for (const item of pl.items) {
             if (!supplierItems[item.supplierId]) {
                 supplierItems[item.supplierId] = [];
             }
@@ -110,10 +111,10 @@ const getLastPriceListTemplate = async (req, res) => {
         // Формируем структуру шаблона
         const template = {
             hasTemplate: true,
-            sourceId: lastPriceList.id,
-            sourceDate: lastPriceList.date,
-            sourceName: lastPriceList.name,
-            suppliers: lastPriceList.suppliers.map(s => ({
+            sourceId: pl.id,
+            sourceDate: pl.date,
+            sourceName: pl.name,
+            suppliers: pl.suppliers.map((s) => ({
                 supplierId: s.supplierId,
                 supplier: s.supplier,
                 primaryMmlId: s.primaryMmlId,
@@ -121,7 +122,7 @@ const getLastPriceListTemplate = async (req, res) => {
                 items: supplierItems[s.supplierId] || []
             }))
         };
-        console.log('[getLastPriceListTemplate] Template from price list:', lastPriceList.id, 'suppliers:', template.suppliers.length, 'total items:', lastPriceList.items.length);
+        console.log('[getLastPriceListTemplate] Template from price list:', pl.id, 'suppliers:', template.suppliers.length, 'total items:', pl.items.length);
         res.json(template);
     }
     catch (error) {

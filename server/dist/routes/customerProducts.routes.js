@@ -2,20 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const customerProducts_controller_1 = require("../controllers/customerProducts.controller");
 const router = (0, express_1.Router)();
-// Все роуты требуют авторизации
 router.use(auth_middleware_1.authenticateToken);
-// GET /api/customer-products/customers-with-counts - Клиенты с количеством товаров
-router.get('/customers-with-counts', customerProducts_controller_1.getCustomersWithProductCounts);
-// GET /api/customer-products/:customerId - Товары клиента
-router.get('/:customerId', customerProducts_controller_1.getCustomerProducts);
-// POST /api/customer-products/:customerId - Добавить товар клиенту
-router.post('/:customerId', customerProducts_controller_1.addCustomerProduct);
-// POST /api/customer-products/:customerId/bulk - Добавить несколько товаров клиенту
-router.post('/:customerId/bulk', customerProducts_controller_1.addCustomerProductsBulk);
-// DELETE /api/customer-products/:customerId/:productId - Удалить товар у клиента
-router.delete('/:customerId/:productId', customerProducts_controller_1.removeCustomerProduct);
-// PUT /api/customer-products/:customerId/reorder - Изменить порядок товаров
-router.put('/:customerId/reorder', customerProducts_controller_1.reorderCustomerProducts);
+router.use(auth_middleware_1.loadUserContext);
+// Read
+router.get('/customers-with-counts', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.getCustomersWithProductCounts);
+router.get('/:customerId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.getCustomerProducts);
+// Manage
+router.post('/:customerId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.addCustomerProduct);
+router.post('/:customerId/bulk', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.addCustomerProductsBulk);
+router.delete('/:customerId/:productId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.removeCustomerProduct);
+router.put('/:customerId/reorder', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_CUSTOMERS), customerProducts_controller_1.reorderCustomerProducts);
 exports.default = router;

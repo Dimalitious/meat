@@ -34,10 +34,11 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const assemblyController = __importStar(require("../controllers/assembly.controller"));
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
+const assemblyController = __importStar(require("../controllers/assembly.controller"));
 const router = (0, express_1.Router)();
-router.get('/', auth_middleware_1.authenticateToken, assemblyController.getOrdersForAssembly);
-router.get('/:id', auth_middleware_1.authenticateToken, assemblyController.getAssemblyOrder);
-router.put('/:id', auth_middleware_1.authenticateToken, assemblyController.completeAssembly);
+router.get('/', auth_middleware_1.authenticateToken, auth_middleware_1.loadUserContext, (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_READ), assemblyController.getOrdersForAssembly);
+router.get('/:id', auth_middleware_1.authenticateToken, auth_middleware_1.loadUserContext, (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_READ), assemblyController.getAssemblyOrder);
+router.put('/:id', auth_middleware_1.authenticateToken, auth_middleware_1.loadUserContext, (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_MANAGE), assemblyController.completeAssembly);
 exports.default = router;

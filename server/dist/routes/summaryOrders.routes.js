@@ -35,21 +35,26 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const summaryOrders = __importStar(require("../controllers/summaryOrders.controller"));
 const router = (0, express_1.Router)();
 router.use(auth_middleware_1.authenticateToken);
-router.get('/', summaryOrders.getSummaryOrders);
-router.get('/filter-options', summaryOrders.getFilterOptions);
-router.post('/', summaryOrders.createSummaryOrder);
-router.post('/bulk', summaryOrders.bulkCreateSummaryOrders); // Fast Excel import
-router.put('/:id', summaryOrders.updateSummaryOrder);
-router.delete('/:id', summaryOrders.deleteSummaryOrder);
-router.post('/bulk-delete', summaryOrders.bulkDeleteSummaryOrders); // Bulk delete by IDs or date
-router.post('/sync', summaryOrders.syncToOrders);
-router.post('/rework', summaryOrders.sendToRework);
+router.use(auth_middleware_1.loadUserContext);
+// Read
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_READ), summaryOrders.getSummaryOrders);
+router.get('/filter-options', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_READ), summaryOrders.getFilterOptions);
+// Create / Edit
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_CREATE), summaryOrders.createSummaryOrder);
+router.post('/bulk', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_CREATE), summaryOrders.bulkCreateSummaryOrders);
+router.put('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_CREATE), summaryOrders.updateSummaryOrder);
+router.delete('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_CREATE), summaryOrders.deleteSummaryOrder);
+router.post('/bulk-delete', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_CREATE), summaryOrders.bulkDeleteSummaryOrders);
+// Sync
+router.post('/sync', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_SYNC), summaryOrders.syncToOrders);
+router.post('/rework', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_SYNC), summaryOrders.sendToRework);
 // Assembly management routes (Управление сборкой)
-router.post('/:id/assembly/start', summaryOrders.startAssembly);
-router.post('/:id/assembly/return', summaryOrders.returnFromAssembly);
-router.post('/assembly/return-batch', summaryOrders.returnFromAssemblyBatch);
-router.get('/:id/events', summaryOrders.getOrderEvents);
+router.post('/:id/assembly/start', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_MANAGE), summaryOrders.startAssembly);
+router.post('/:id/assembly/return', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_MANAGE), summaryOrders.returnFromAssembly);
+router.post('/assembly/return-batch', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.ASSEMBLY_MANAGE), summaryOrders.returnFromAssemblyBatch);
+router.get('/:id/events', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.SUMMARY_READ), summaryOrders.getOrderEvents);
 exports.default = router;

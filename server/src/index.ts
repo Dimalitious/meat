@@ -112,6 +112,26 @@ app.use('/api/suppliers', supplierRoutes);
 import salesManagerRoutes from './routes/salesManager.routes';
 app.use('/api/sales-manager', salesManagerRoutes);
 
+// UoM Module
+import uomRoutes from './routes/uom.routes';
+app.use('/api/uom', uomRoutes);
+
+// Product Catalog: Countries, Subcategories, ParamValues, ProductParams, Variants
+import countriesRoutes from './routes/countries.routes';
+app.use('/api/countries', countriesRoutes);
+
+import subcategoriesRoutes from './routes/subcategories.routes';
+app.use('/api/subcategories', subcategoriesRoutes);
+
+import paramValuesRoutes from './routes/paramValues.routes';
+app.use('/api/param-values', paramValuesRoutes);
+
+import productParamsRoutes from './routes/productParams.routes';
+app.use('/api/product-params', productParamsRoutes);
+
+import customerProductVariantsRoutes from './routes/customerProductVariants.routes';
+app.use('/api/customer-product-variants', customerProductVariantsRoutes);
+
 app.use('/api', masterRoutes); // /api/customers etc.
 
 // ============================================

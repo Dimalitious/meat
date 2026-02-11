@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getAllowedCustomerIds, assertCustomerAccess } from '../services/salesManagerAccess.service';
 import { buildStatement } from '../services/salesManagerStatement.service';
+import { resolveGeoSnapshot } from '../services/geoSnapshot.service';
 
 // Cast to any: new models (CustomerSalesManager, CustomerMoneyRefund, OrderDraft fields)
 // are not in the generated client until `npx prisma generate` is re-run.
@@ -278,6 +279,11 @@ export const acceptDraft = async (req: Request, res: Response) => {
                 new Prisma.Decimal(0),
             );
 
+            // ── Resolve delivery geo snapshot (shared helper) ──
+            // acceptDraft passes only customerId → falls through to default address (priority 3)
+            // When OrderDraft gains geo fields, extend input here.
+            const geoSnap = await resolveGeoSnapshot(tx, { customerId: draft.customerId });
+
             // Create Order
             const order = await tx.order.create({
                 data: {
@@ -286,6 +292,7 @@ export const acceptDraft = async (req: Request, res: Response) => {
                     date: new Date(),
                     totalAmount,
                     draftId: draft.id,
+                    ...geoSnap,
                     items: {
                         create: orderItems.map(i => ({
                             productId: i.productId,

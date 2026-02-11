@@ -2,28 +2,23 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const productionDoc_controller_1 = require("../controllers/productionDoc.controller");
 const router = (0, express_1.Router)();
-// Все роуты требуют авторизации
 router.use(auth_middleware_1.authenticateToken);
-// GET /api/production-docs - Список документов
-router.get('/', productionDoc_controller_1.getProductionDocs);
-// GET /api/production-docs/available-purchases - Закупки для загрузки
-router.get('/available-purchases', productionDoc_controller_1.getAvailablePurchases);
-// GET /api/production-docs/:id - Получить документ
-router.get('/:id', productionDoc_controller_1.getProductionDoc);
-// POST /api/production-docs - Создать документ
-router.post('/', productionDoc_controller_1.createProductionDoc);
-// POST /api/production-docs/:id/load-from-purchase - Загрузить сырьё из закупок
-router.post('/:id/load-from-purchase', productionDoc_controller_1.loadFromPurchase);
-// POST /api/production-docs/:id/clear-inputs - Очистить загруженное сырьё
-router.post('/:id/clear-inputs', productionDoc_controller_1.clearInputs);
-// POST /api/production-docs/:id/apply-cutting - Применить разделку
-router.post('/:id/apply-cutting', productionDoc_controller_1.applyCutting);
-// POST /api/production-docs/:id/finalize - Провести документ
-router.post('/:id/finalize', productionDoc_controller_1.finalizeDoc);
-// POST /api/production-docs/:id/cancel - Отменить документ
-router.post('/:id/cancel', productionDoc_controller_1.cancelDoc);
-// DELETE /api/production-docs/:id - Удалить документ (только draft)
-router.delete('/:id', productionDoc_controller_1.deleteProductionDoc);
+router.use(auth_middleware_1.loadUserContext);
+// Read
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_READ), productionDoc_controller_1.getProductionDocs);
+router.get('/available-purchases', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_READ), productionDoc_controller_1.getAvailablePurchases);
+router.get('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_READ), productionDoc_controller_1.getProductionDoc);
+// Create / Edit
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_CREATE), productionDoc_controller_1.createProductionDoc);
+router.post('/:id/load-from-purchase', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_EDIT), productionDoc_controller_1.loadFromPurchase);
+router.post('/:id/clear-inputs', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_EDIT), productionDoc_controller_1.clearInputs);
+router.post('/:id/apply-cutting', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_EDIT), productionDoc_controller_1.applyCutting);
+// Finalize / Cancel
+router.post('/:id/finalize', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_POST), productionDoc_controller_1.finalizeDoc);
+router.post('/:id/cancel', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_VOID), productionDoc_controller_1.cancelDoc);
+// Delete
+router.delete('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.PRODUCTION_DELETE), productionDoc_controller_1.deleteProductionDoc);
 exports.default = router;

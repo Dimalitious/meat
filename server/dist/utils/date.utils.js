@@ -9,6 +9,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDateRangeForTashkent = getDateRangeForTashkent;
 exports.getDateComponentsInTashkent = getDateComponentsInTashkent;
 exports.formatIdnFromDate = formatIdnFromDate;
+exports.getTashkentToday = getTashkentToday;
+exports.parseDispatchDay = parseDispatchDay;
 const TASHKENT_OFFSET_HOURS = 5; // UTC+5, без перехода на летнее время
 /**
  * Конвертирует календарную дату (YYYY-MM-DD) в диапазон UTC
@@ -60,4 +62,21 @@ function getDateComponentsInTashkent(utcDate) {
 function formatIdnFromDate(utcDate) {
     const { day, month, year } = getDateComponentsInTashkent(utcDate);
     return `${String(day).padStart(2, '0')}${String(month).padStart(2, '0')}${year}`;
+}
+/**
+ * Получает текущий бизнес-день в Asia/Tashkent как строку YYYY-MM-DD
+ */
+function getTashkentToday() {
+    const now = new Date();
+    // Asia/Tashkent = UTC+5
+    const tashkentTime = new Date(now.getTime() + TASHKENT_OFFSET_HOURS * 60 * 60 * 1000);
+    return tashkentTime.toISOString().slice(0, 10);
+}
+/**
+ * Конвертирует строку YYYY-MM-DD в Date для поля dispatchDay (Prisma @db.Date)
+ * Возвращает дату в формате UTC (без времени)
+ */
+function parseDispatchDay(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
 }

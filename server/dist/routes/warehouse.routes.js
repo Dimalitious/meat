@@ -1,10 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const warehouse_controller_1 = require("../controllers/warehouse.controller");
 const router = (0, express_1.Router)();
-router.get('/stock', warehouse_controller_1.getStock);
-router.post('/arrival', warehouse_controller_1.createArrival);
-router.post('/adjustment', warehouse_controller_1.createAdjustment);
-router.get('/history', warehouse_controller_1.getHistory);
+router.use(auth_middleware_1.authenticateToken);
+router.use(auth_middleware_1.loadUserContext);
+router.get('/stock', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_READ), warehouse_controller_1.getStock);
+router.post('/arrival', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), warehouse_controller_1.createArrival);
+router.post('/adjustment', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), warehouse_controller_1.createAdjustment);
+router.get('/history', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_READ), warehouse_controller_1.getHistory);
 exports.default = router;

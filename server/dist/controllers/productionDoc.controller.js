@@ -586,7 +586,7 @@ const getAvailablePurchases = async (req, res) => {
             id: p.id,
             date: p.purchaseDate,
             totalAmount: p.totalAmount,
-            createdBy: p.createdByUser.name,
+            createdBy: p.createdByUser?.name,
             items: p.items.map(item => {
                 const loaded = item.productionInputs.reduce((sum, pi) => sum + Number(pi.qtyIn), 0);
                 const available = Number(item.qty) - loaded;

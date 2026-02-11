@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getLastPrice = exports.getSupplierMml = exports.deletePurchase = exports.disablePurchases = exports.updatePurchase = exports.createPurchase = exports.getPurchaseById = exports.getPurchases = void 0;
 const client_1 = require("@prisma/client");
+const supplierLedger_service_1 = require("../services/supplierLedger.service");
 const prisma = new client_1.PrismaClient();
 // ============================================
 // ЖУРНАЛ ЗАКУПОК
@@ -215,6 +216,8 @@ const createPurchase = async (req, res) => {
                     }
                 });
             }
+            // 4. Sync ledger
+            await (0, supplierLedger_service_1.syncPurchaseLedger)(tx, newPurchase.id);
             return newPurchase;
         });
         // Вернуть полную закупку (с защитой от ошибки если пользователь удалён)
@@ -312,6 +315,8 @@ const updatePurchase = async (req, res) => {
                     });
                 }
             }
+            // 4. Sync ledger
+            await (0, supplierLedger_service_1.syncPurchaseLedger)(tx, id);
         });
         // Вернуть обновлённую закупку
         const fullPurchase = await prisma.purchase.findUnique({
@@ -339,9 +344,15 @@ const disablePurchases = async (req, res) => {
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ error: 'ids array is required' });
         }
-        await prisma.purchase.updateMany({
-            where: { id: { in: ids.map(Number) } },
-            data: { isDisabled: true }
+        await prisma.$transaction(async (tx) => {
+            await tx.purchase.updateMany({
+                where: { id: { in: ids.map(Number) } },
+                data: { isDisabled: true }
+            });
+            // Sync ledger for each disabled purchase
+            for (const purchaseId of ids) {
+                await (0, supplierLedger_service_1.syncPurchaseLedger)(tx, Number(purchaseId));
+            }
         });
         res.json({ success: true, disabledCount: ids.length });
     }
@@ -361,8 +372,14 @@ const deletePurchase = async (req, res) => {
         if (!existing) {
             return res.status(404).json({ error: 'Purchase not found' });
         }
-        // Каскадное удаление настроено в схеме
-        await prisma.purchase.delete({ where: { id } });
+        // Удалить ledger + каскадное удаление
+        await prisma.$transaction(async (tx) => {
+            // Удалить ledger записи перед удалением закупки
+            await tx.supplierLedger.deleteMany({
+                where: { sourceType: 'PURCHASE', sourceId: id },
+            });
+            await tx.purchase.delete({ where: { id } });
+        });
         res.json({ success: true });
     }
     catch (error) {

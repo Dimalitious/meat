@@ -12,7 +12,7 @@ const prisma = new client_1.PrismaClient();
  */
 const getCustomerProducts = async (req, res) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         if (isNaN(customerId)) {
             return res.status(400).json({ error: 'Invalid customer ID' });
         }
@@ -26,9 +26,16 @@ const getCustomerProducts = async (req, res) => {
                         name: true,
                         priceListName: true,
                         category: true,
-                        status: true
+                        status: true,
+                        subcategoryId: true,
+                        subcategory: { select: { id: true, name: true, isActive: true } },
                     }
-                }
+                },
+                _count: {
+                    select: {
+                        variants: { where: { isActive: true } },
+                    },
+                },
             },
             orderBy: { sortOrder: 'asc' }
         });
@@ -47,7 +54,7 @@ exports.getCustomerProducts = getCustomerProducts;
  */
 const addCustomerProduct = async (req, res) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productId, sortOrder = 0 } = req.body;
         if (isNaN(customerId)) {
             return res.status(400).json({ error: 'Invalid customer ID' });
@@ -108,7 +115,7 @@ exports.addCustomerProduct = addCustomerProduct;
  */
 const addCustomerProductsBulk = async (req, res) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productIds } = req.body;
         if (isNaN(customerId)) {
             return res.status(400).json({ error: 'Invalid customer ID' });
@@ -170,8 +177,8 @@ exports.addCustomerProductsBulk = addCustomerProductsBulk;
  */
 const removeCustomerProduct = async (req, res) => {
     try {
-        const customerId = parseInt(req.params.customerId);
-        const productId = parseInt(req.params.productId);
+        const customerId = parseInt(String(req.params.customerId));
+        const productId = parseInt(String(req.params.productId));
         if (isNaN(customerId) || isNaN(productId)) {
             return res.status(400).json({ error: 'Invalid customer or product ID' });
         }
@@ -194,7 +201,7 @@ exports.removeCustomerProduct = removeCustomerProduct;
  */
 const reorderCustomerProducts = async (req, res) => {
     try {
-        const customerId = parseInt(req.params.customerId);
+        const customerId = parseInt(String(req.params.customerId));
         const { productIds } = req.body;
         if (isNaN(customerId)) {
             return res.status(400).json({ error: 'Invalid customer ID' });

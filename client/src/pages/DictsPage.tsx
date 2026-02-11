@@ -8,7 +8,21 @@ const DictsPage = () => {
                 <p className="text-slate-500">Управление справочниками районов и менеджеров.</p>
             </div>
 
+
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card className="hover:shadow-md transition-shadow cursor-pointer" onClick={() => window.location.href = '/dicts/uom'}>
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-green-100 text-green-600 rounded-lg">
+                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-medium text-slate-900">Единицы измерения</h3>
+                            <p className="text-sm text-slate-500">Справочник единиц измерения (кг, шт и т.д.)</p>
+                        </div>
+                    </div>
+                </Card>
+
                 <Card className="hover:shadow-md transition-shadow cursor-pointer">
                     <div className="flex items-center gap-4">
                         <div className="p-3 bg-blue-100 text-blue-600 rounded-lg">
@@ -37,7 +51,7 @@ const DictsPage = () => {
             <div className="p-4 bg-yellow-50 text-yellow-800 rounded-lg text-sm border border-yellow-200">
                 Функционал справочников находится в разработке.
             </div>
-        </div>
+        </div >
     );
 };
 

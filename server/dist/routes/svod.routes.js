@@ -2,27 +2,22 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const svod_controller_1 = require("../controllers/svod.controller");
 const router = (0, express_1.Router)();
-// Все маршруты требуют аутентификации
 router.use(auth_middleware_1.authenticateToken);
-// Получить СВОД на дату (или сформировать предпросмотр)
-router.get('/', svod_controller_1.getSvodByDate);
-// Сохранить СВОД
-router.post('/', svod_controller_1.saveSvod);
-// Обновить данные свода из источников (сохраняя ручные правки)
-router.put('/:id/refresh', svod_controller_1.refreshSvod);
-// Обновить строку свода (ручные правки)
-router.patch('/lines/:lineId', svod_controller_1.updateSvodLine);
-// Удалить СВОД
-router.delete('/:id', svod_controller_1.deleteSvod);
+router.use(auth_middleware_1.loadUserContext);
+// Read
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_READ), svod_controller_1.getSvodByDate);
+// Manage
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_MANAGE), svod_controller_1.saveSvod);
+router.put('/:id/refresh', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_MANAGE), svod_controller_1.refreshSvod);
+router.patch('/lines/:lineId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_MANAGE), svod_controller_1.updateSvodLine);
+router.delete('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_MANAGE), svod_controller_1.deleteSvod);
 // ============================================
 // РАСПРЕДЕЛЕНИЕ ВЕСА ОТГРУЗКИ
 // ============================================
-// Получить MML (техкарту) по productId для распределения
-router.get('/mml/:productId', svod_controller_1.getMmlForDistribution);
-// Получить распределение веса для строки свода
-router.get('/lines/:lineId/distribution', svod_controller_1.getShipmentDistribution);
-// Сохранить распределение веса для строки свода
-router.post('/lines/:lineId/distribution', svod_controller_1.saveShipmentDistribution);
+router.get('/mml/:productId', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_READ), svod_controller_1.getMmlForDistribution);
+router.get('/lines/:lineId/distribution', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_READ), svod_controller_1.getShipmentDistribution);
+router.post('/lines/:lineId/distribution', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.REPORTS_MANAGE), svod_controller_1.saveShipmentDistribution);
 exports.default = router;

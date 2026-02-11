@@ -1,10 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
 const expeditors_controller_1 = require("../controllers/expeditors.controller");
 const router = (0, express_1.Router)();
-router.get('/', expeditors_controller_1.getExpeditors);
-router.post('/', expeditors_controller_1.createExpeditor);
-router.put('/:id', expeditors_controller_1.updateExpeditor);
-router.delete('/:id', expeditors_controller_1.deleteExpeditor);
+router.use(auth_middleware_1.authenticateToken);
+router.use(auth_middleware_1.loadUserContext);
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.EXPEDITION_READ), expeditors_controller_1.getExpeditors);
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.EXPEDITION_MANAGE), expeditors_controller_1.createExpeditor);
+router.put('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.EXPEDITION_MANAGE), expeditors_controller_1.updateExpeditor);
+router.delete('/:id', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.EXPEDITION_MANAGE), expeditors_controller_1.deleteExpeditor);
 exports.default = router;

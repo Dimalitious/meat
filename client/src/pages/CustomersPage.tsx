@@ -11,7 +11,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Plus, X, Save, Settings, FileText, Trash2, Upload, Image, Download, Archive } from 'lucide-react';
+import { Plus, X, Save, Settings, FileText, Trash2, Upload, Image, Download, Archive, Layers } from 'lucide-react';
 
 interface District {
     id: number;
@@ -69,6 +69,31 @@ interface CustomerCard {
     items: CardItem[];
 }
 
+interface ParamValueOption {
+    id: number;
+    paramType: string;
+    valueNum?: string | null;
+    valueInt?: number | null;
+    valueText?: string | null;
+    label: string | null;
+    sortOrder: number;
+    isActive: boolean;
+}
+
+interface VariantItem {
+    id: number;
+    customerProductId: number;
+    lengthParamValueId: number | null;
+    widthParamValueId: number | null;
+    weightParamValueId: number | null;
+    processingParamValueId: number | null;
+    lengthParamValue?: ParamValueOption | null;
+    widthParamValue?: ParamValueOption | null;
+    weightParamValue?: ParamValueOption | null;
+    processingParamValue?: ParamValueOption | null;
+    isActive: boolean;
+}
+
 const CustomersPage = () => {
     const [customers, setCustomers] = useState<Customer[]>([]);
     const [districts, setDistricts] = useState<District[]>([]);
@@ -105,6 +130,14 @@ const CustomersPage = () => {
     const [products, setProducts] = useState<Product[]>([]);
     const [productSearch, setProductSearch] = useState('');
     const [showProductPicker, setShowProductPicker] = useState(false);
+
+    // Variant Modal state
+    const [isVariantModalOpen, setIsVariantModalOpen] = useState(false);
+    const [variantCardItem, setVariantCardItem] = useState<CardItem | null>(null);
+    const [variants, setVariants] = useState<VariantItem[]>([]);
+    const [variantLoading, setVariantLoading] = useState(false);
+    const [availableParams, setAvailableParams] = useState<{ lengths: ParamValueOption[]; widths: ParamValueOption[]; weights: ParamValueOption[]; processings: ParamValueOption[] } | null>(null);
+    const [newVariant, setNewVariant] = useState({ lengthId: '', widthId: '', weightId: '', processingId: '' });
 
     useEffect(() => {
         Promise.all([
@@ -335,6 +368,110 @@ const CustomersPage = () => {
             )
             .slice(0, 20);
     }, [products, customerCard, productSearch]);
+
+    // === VARIANT FUNCTIONS ===
+    const openVariantModal = async (item: CardItem) => {
+        setVariantCardItem(item);
+        setIsVariantModalOpen(true);
+        setVariantLoading(true);
+        setNewVariant({ lengthId: '', widthId: '', weightId: '', processingId: '' });
+
+        try {
+            const token = localStorage.getItem('token');
+            // Find the customerProduct ID - we need to find it via the customer card
+            // The customerProduct links customer to product, but card items use productId
+            // We'll use customer-product-variants API by customerProductId
+            // First, get the customerProduct for this customer + product combo
+            const cpRes = await axios.get(`${API_URL}/api/customer-products?customerId=${selectedCustomerForCard!.id}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const customerProduct = cpRes.data.find((cp: any) => cp.productId === item.productId || cp.product?.id === item.productId);
+
+            if (!customerProduct) {
+                alert('Персональный товар клиента не найден. Сначала добавьте товар в ассортимент клиента.');
+                setIsVariantModalOpen(false);
+                setVariantLoading(false);
+                return;
+            }
+
+            // Fetch variants
+            const varRes = await axios.get(`${API_URL}/api/customer-product-variants/customer-product/${customerProduct.id}?active=all`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setVariants(varRes.data.items || []);
+
+            // Fetch available param values for this product
+            const paramRes = await axios.get(`${API_URL}/api/product-params/${item.productId}/available`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setAvailableParams(paramRes.data);
+
+            // Store the customerProductId on the card item for later use
+            (item as any)._customerProductId = customerProduct.id;
+        } catch (err) {
+            console.error('Failed to load variants:', err);
+            alert('Ошибка загрузки вариантов');
+        } finally {
+            setVariantLoading(false);
+        }
+    };
+
+    const createVariant = async () => {
+        if (!variantCardItem) return;
+        const cpId = (variantCardItem as any)._customerProductId;
+        if (!cpId) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const body: any = {};
+            if (newVariant.lengthId) body.lengthParamValueId = Number(newVariant.lengthId);
+            if (newVariant.widthId) body.widthParamValueId = Number(newVariant.widthId);
+            if (newVariant.weightId) body.weightParamValueId = Number(newVariant.weightId);
+            if (newVariant.processingId) body.processingParamValueId = Number(newVariant.processingId);
+
+            await axios.post(`${API_URL}/api/customer-product-variants/customer-product/${cpId}`, body, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            // Refresh variants
+            const varRes = await axios.get(`${API_URL}/api/customer-product-variants/customer-product/${cpId}?active=all`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setVariants(varRes.data.items || []);
+            setNewVariant({ lengthId: '', widthId: '', weightId: '', processingId: '' });
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Ошибка создания варианта');
+        }
+    };
+
+    const toggleVariantActive = async (variantId: number, currentActive: boolean) => {
+        if (!variantCardItem) return;
+        const cpId = (variantCardItem as any)._customerProductId;
+        if (!cpId) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            await axios.patch(`${API_URL}/api/customer-product-variants/${variantId}`, {
+                isActive: !currentActive
+            }, { headers: { Authorization: `Bearer ${token}` } });
+
+            // Refresh variants
+            const varRes = await axios.get(`${API_URL}/api/customer-product-variants/customer-product/${cpId}?active=all`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setVariants(varRes.data.items || []);
+        } catch (err: any) {
+            alert(err.response?.data?.message || 'Ошибка обновления варианта');
+        }
+    };
+
+    const formatParamValue = (pv?: ParamValueOption | null) => {
+        if (!pv) return '-';
+        if (pv.valueNum != null) return `${pv.valueNum} см`;
+        if (pv.valueInt != null) return pv.valueInt >= 1000 && pv.valueInt % 1000 === 0 ? `${pv.valueInt / 1000} кг` : `${pv.valueInt} г`;
+        return pv.valueText || '-';
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         try {
@@ -841,6 +978,13 @@ const CustomersPage = () => {
                                                             <span className="font-semibold text-lg text-slate-800">{item.product.name}</span>
                                                         </div>
                                                         <button
+                                                            onClick={() => openVariantModal(item)}
+                                                            className="text-blue-400 hover:text-blue-600 mr-2"
+                                                            title="Варианты"
+                                                        >
+                                                            <Layers size={18} />
+                                                        </button>
+                                                        <button
                                                             onClick={() => deleteCardItem(item.id)}
                                                             className="text-red-400 hover:text-red-600"
                                                             title="Удалить позицию"
@@ -921,6 +1065,100 @@ const CustomersPage = () => {
                             <Button variant="outline" onClick={() => { setIsCardModalOpen(false); setCustomerCard(null); }}>
                                 Закрыть
                             </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Variant Modal */}
+            {isVariantModalOpen && variantCardItem && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+                        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-blue-50">
+                            <div>
+                                <h2 className="text-lg font-bold text-slate-800">Варианты: {variantCardItem.product.name}</h2>
+                                <div className="text-xs text-slate-500">Код: {variantCardItem.product.code}</div>
+                            </div>
+                            <button onClick={() => { setIsVariantModalOpen(false); setVariantCardItem(null); }} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto p-6 space-y-4">
+                            {variantLoading ? (
+                                <div className="text-center py-8 text-slate-400">Загрузка...</div>
+                            ) : (
+                                <>
+                                    {/* Existing Variants */}
+                                    <h3 className="font-semibold text-sm text-slate-600">Существующие варианты ({variants.length})</h3>
+                                    {variants.length === 0 ? (
+                                        <div className="text-center py-4 text-slate-400 text-sm">Нет вариантов</div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {variants.map(v => (
+                                                <div key={v.id} className={`flex items-center justify-between p-3 rounded-lg border ${v.isActive ? 'bg-white border-slate-200' : 'bg-slate-50 border-slate-100 opacity-50'}`}>
+                                                    <div className="flex gap-4 text-sm">
+                                                        <span title="Длина">📏 {formatParamValue(v.lengthParamValue)}</span>
+                                                        <span title="Ширина">↔ {formatParamValue(v.widthParamValue)}</span>
+                                                        <span title="Вес">⚖ {formatParamValue(v.weightParamValue)}</span>
+                                                        <span title="Обработка">🔧 {formatParamValue(v.processingParamValue)}</span>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => toggleVariantActive(v.id, v.isActive)}
+                                                        className={`text-xs px-2 py-1 rounded ${v.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}
+                                                    >
+                                                        {v.isActive ? 'Деактивировать' : 'Активировать'}
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Add New Variant */}
+                                    {availableParams && (
+                                        <div className="border-t pt-4 mt-4">
+                                            <h3 className="font-semibold text-sm text-slate-600 mb-3">Добавить вариант</h3>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-600 mb-1">Длина</label>
+                                                    <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={newVariant.lengthId} onChange={e => setNewVariant({ ...newVariant, lengthId: e.target.value })}>
+                                                        <option value="">—</option>
+                                                        {availableParams.lengths.map(p => <option key={p.id} value={p.id}>{p.label || formatParamValue(p)}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-600 mb-1">Ширина</label>
+                                                    <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={newVariant.widthId} onChange={e => setNewVariant({ ...newVariant, widthId: e.target.value })}>
+                                                        <option value="">—</option>
+                                                        {availableParams.widths.map(p => <option key={p.id} value={p.id}>{p.label || formatParamValue(p)}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-600 mb-1">Вес</label>
+                                                    <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={newVariant.weightId} onChange={e => setNewVariant({ ...newVariant, weightId: e.target.value })}>
+                                                        <option value="">—</option>
+                                                        {availableParams.weights.map(p => <option key={p.id} value={p.id}>{p.label || formatParamValue(p)}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-medium text-slate-600 mb-1">Обработка</label>
+                                                    <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={newVariant.processingId} onChange={e => setNewVariant({ ...newVariant, processingId: e.target.value })}>
+                                                        <option value="">—</option>
+                                                        {availableParams.processings.map(p => <option key={p.id} value={p.id}>{p.label || formatParamValue(p)}</option>)}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <Button onClick={createVariant} className="mt-3 w-full flex items-center justify-center gap-2">
+                                                <Plus size={16} /> Добавить вариант
+                                            </Button>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+
+                        <div className="px-6 py-4 border-t border-slate-100 flex justify-end bg-slate-50">
+                            <Button variant="outline" onClick={() => { setIsVariantModalOpen(false); setVariantCardItem(null); }}>Закрыть</Button>
                         </div>
                     </div>
                 </div>

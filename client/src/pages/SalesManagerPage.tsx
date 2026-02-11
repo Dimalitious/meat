@@ -188,6 +188,16 @@ const CustomersTab: React.FC<TabProps> = ({ styles, getHeaders }) => {
     const [loading, setLoading] = useState(false);
     const [search, setSearch] = useState('');
 
+    // Address modal state
+    const [geoCustomer, setGeoCustomer] = useState<Customer | null>(null);
+    const [addresses, setAddresses] = useState<any[]>([]);
+    const [addrLoading, setAddrLoading] = useState(false);
+    const [addrForm, setAddrForm] = useState<{
+        id?: number; label: string; addressText: string; lat: string; lng: string;
+        accuracyM: string; comment: string; isDefault: boolean;
+    } | null>(null);
+    const [addrSaving, setAddrSaving] = useState(false);
+
     const fetchCustomers = useCallback(async () => {
         setLoading(true);
         try {
@@ -195,13 +205,98 @@ const CustomersTab: React.FC<TabProps> = ({ styles, getHeaders }) => {
             if (search) params.set('q', search);
             params.set('pageSize', '100');
             const res = await axios.get(`${API_URL}/api/sales-manager/customers?${params}`, getHeaders());
-            const data = res.data.data || res.data || [];
+            const data = res.data.customers || res.data.data || res.data || [];
             setCustomers(Array.isArray(data) ? data : []);
         } catch (err) { console.error(err); }
         finally { setLoading(false); }
     }, [search]);
 
     useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
+
+    // ── Address management helpers ──
+    const fetchAddresses = useCallback(async (customerId: number) => {
+        setAddrLoading(true);
+        try {
+            const res = await axios.get(`${API_URL}/api/sales-manager/customers/${customerId}/addresses`, getHeaders());
+            setAddresses(Array.isArray(res.data) ? res.data : []);
+        } catch (err) { console.error(err); }
+        finally { setAddrLoading(false); }
+    }, []);
+
+    const openGeoModal = (c: Customer) => {
+        setGeoCustomer(c);
+        setAddrForm(null);
+        fetchAddresses(c.id);
+    };
+
+    const closeGeoModal = () => {
+        setGeoCustomer(null);
+        setAddresses([]);
+        setAddrForm(null);
+    };
+
+    const normCoord = (v: string) => v.replace(',', '.');
+
+    const openAddForm = () => {
+        setAddrForm({ label: '', addressText: '', lat: '', lng: '', accuracyM: '', comment: '', isDefault: false });
+    };
+
+    const openEditForm = (a: any) => {
+        setAddrForm({
+            id: a.id,
+            label: a.label || '',
+            addressText: a.addressText || '',
+            lat: String(a.lat),
+            lng: String(a.lng),
+            accuracyM: a.accuracyM != null ? String(a.accuracyM) : '',
+            comment: a.comment || '',
+            isDefault: a.isDefault || false,
+        });
+    };
+
+    const handleSaveAddr = async () => {
+        if (!geoCustomer || !addrForm) return;
+        const lat = normCoord(addrForm.lat);
+        const lng = normCoord(addrForm.lng);
+        if (!addrForm.addressText.trim()) return alert('Введите адрес');
+        if (!lat || !lng) return alert('Введите координаты');
+        setAddrSaving(true);
+        try {
+            const body = {
+                label: addrForm.label || null,
+                addressText: addrForm.addressText,
+                lat, lng,
+                accuracyM: addrForm.accuracyM ? Number(addrForm.accuracyM) : null,
+                comment: addrForm.comment || null,
+                isDefault: addrForm.isDefault,
+            };
+            if (addrForm.id) {
+                await axios.patch(`${API_URL}/api/sales-manager/customers/${geoCustomer.id}/addresses/${addrForm.id}`, body, getHeaders());
+            } else {
+                await axios.post(`${API_URL}/api/sales-manager/customers/${geoCustomer.id}/addresses`, body, getHeaders());
+            }
+            setAddrForm(null);
+            fetchAddresses(geoCustomer.id);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка сохранения адреса');
+        } finally { setAddrSaving(false); }
+    };
+
+    const handleDeleteAddr = async (addressId: number) => {
+        if (!geoCustomer || !confirm('Удалить этот адрес?')) return;
+        try {
+            await axios.delete(`${API_URL}/api/sales-manager/customers/${geoCustomer.id}/addresses/${addressId}`, getHeaders());
+            fetchAddresses(geoCustomer.id);
+        } catch (err: any) { alert(err.response?.data?.error || 'Ошибка удаления'); }
+    };
+
+    const handleMakeDefault = async (addressId: number) => {
+        if (!geoCustomer) return;
+        try {
+            await axios.post(`${API_URL}/api/sales-manager/customers/${geoCustomer.id}/addresses/${addressId}/make-default`, {}, getHeaders());
+            fetchAddresses(geoCustomer.id);
+        } catch (err: any) { alert(err.response?.data?.error || 'Ошибка'); }
+    };
 
     return (
         <div>
@@ -227,11 +322,12 @@ const CustomersTab: React.FC<TabProps> = ({ styles, getHeaders }) => {
                                 <th style={styles.th}>Район</th>
                                 <th style={styles.th}>Менеджер (справочник)</th>
                                 <th style={styles.th}>Назначенные менеджеры</th>
+                                <th style={styles.th}>Гео</th>
                             </tr>
                         </thead>
                         <tbody>
                             {customers.length === 0 && (
-                                <tr><td style={styles.td} colSpan={6}>Нет данных</td></tr>
+                                <tr><td style={styles.td} colSpan={7}>Нет данных</td></tr>
                             )}
                             {customers.map(c => (
                                 <tr key={c.id}>
@@ -250,12 +346,130 @@ const CustomersTab: React.FC<TabProps> = ({ styles, getHeaders }) => {
                                             : <span style={{ color: '#9ca3af' }}>—</span>
                                         }
                                     </td>
+                                    <td style={styles.td}>
+                                        <button
+                                            style={{ ...styles.btn('secondary'), padding: '4px 10px' }}
+                                            onClick={() => openGeoModal(c)}
+                                            title="Управление адресами доставки"
+                                        >📍</button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 )}
             </div>
+
+            {/* ── Geo Address Modal ── */}
+            {geoCustomer && (
+                <div style={styles.modal} onClick={closeGeoModal}>
+                    <div style={{ ...styles.modalContent, width: '700px' }} onClick={e => e.stopPropagation()}>
+                        <h2 style={{ marginBottom: '16px', fontSize: '18px' }}>
+                            📍 Адреса доставки — {geoCustomer.name}
+                        </h2>
+
+                        {/* Address list */}
+                        {addrLoading ? <p>Загрузка...</p> : (
+                            <>
+                                {addresses.length === 0 && !addrForm && (
+                                    <p style={{ color: '#6b7280', textAlign: 'center', padding: '20px' }}>
+                                        Нет адресов. Добавьте первый.
+                                    </p>
+                                )}
+                                {addresses.map(a => (
+                                    <div key={a.id} style={{
+                                        padding: '12px', border: '1px solid #e5e7eb', borderRadius: '8px',
+                                        marginBottom: '8px', background: a.isDefault ? '#f0fdf4' : '#fff',
+                                    }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                            <div>
+                                                <div style={{ fontWeight: 600 }}>
+                                                    {a.label && <span style={styles.badge('blue')}>{a.label}</span>}{' '}
+                                                    {a.addressText}
+                                                    {a.isDefault && <span style={{ ...styles.badge('green'), marginLeft: '8px' }}>По умолчанию</span>}
+                                                </div>
+                                                <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
+                                                    {(() => {
+                                                        const lat = parseFloat(String(a.lat).replace(',', '.'));
+                                                        const lng = parseFloat(String(a.lng).replace(',', '.'));
+                                                        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+                                                            return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+                                                        }
+                                                        return `${a.lat}, ${a.lng}`;
+                                                    })()}
+                                                    {a.accuracyM != null && <span> • ~{a.accuracyM}м</span>}
+                                                </div>
+                                                {a.comment && (
+                                                    <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>💬 {a.comment}</div>
+                                                )}
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                                                {!a.isDefault && (
+                                                    <button style={{ ...styles.btn('success'), padding: '2px 8px', fontSize: '12px' }} onClick={() => handleMakeDefault(a.id)} title="Сделать по умолчанию">⭐</button>
+                                                )}
+                                                <button style={{ ...styles.btn('secondary'), padding: '2px 8px', fontSize: '12px' }} onClick={() => openEditForm(a)} title="Редактировать">✏️</button>
+                                                <button style={{ ...styles.btn('danger'), padding: '2px 8px', fontSize: '12px' }} onClick={() => handleDeleteAddr(a.id)} title="Удалить">🗑️</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </>
+                        )}
+
+                        {/* Add/Edit form */}
+                        {addrForm ? (
+                            <div style={{ padding: '16px', border: '1px solid #e5e7eb', borderRadius: '8px', marginTop: '12px', background: '#fafafa' }}>
+                                <h3 style={{ fontSize: '14px', marginBottom: '12px' }}>
+                                    {addrForm.id ? 'Редактировать адрес' : 'Новый адрес'}
+                                </h3>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Подкатегория</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.label} onChange={e => setAddrForm({ ...addrForm, label: e.target.value })} />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Адрес *</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.addressText} onChange={e => setAddrForm({ ...addrForm, addressText: e.target.value })} />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Широта (lat) *</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.lat} onChange={e => setAddrForm({ ...addrForm, lat: e.target.value })} placeholder="41.311081" />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Долгота (lng) *</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.lng} onChange={e => setAddrForm({ ...addrForm, lng: e.target.value })} placeholder="69.240562" />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Точность (м)</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.accuracyM} onChange={e => setAddrForm({ ...addrForm, accuracyM: e.target.value })} type="number" />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: '12px', color: '#6b7280' }}>Комментарий</label>
+                                        <input style={{ ...styles.input, width: '100%' }} value={addrForm.comment} onChange={e => setAddrForm({ ...addrForm, comment: e.target.value })} placeholder="Подъезд, код, ориентир" />
+                                    </div>
+                                    <div style={{ gridColumn: '1 / -1' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={addrForm.isDefault} onChange={e => setAddrForm({ ...addrForm, isDefault: e.target.checked })} />
+                                            Адрес по умолчанию
+                                        </label>
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
+                                    <button style={styles.btn('secondary')} onClick={() => setAddrForm(null)}>Отмена</button>
+                                    <button style={{ ...styles.btn('primary'), opacity: addrSaving ? 0.5 : 1 }} onClick={handleSaveAddr} disabled={addrSaving}>
+                                        {addrForm.id ? 'Сохранить' : 'Добавить'}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px' }}>
+                                <button style={styles.btn('primary')} onClick={openAddForm}>+ Добавить адрес</button>
+                                <button style={styles.btn('secondary')} onClick={closeGeoModal}>Закрыть</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

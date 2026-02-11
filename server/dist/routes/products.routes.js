@@ -1,16 +1,18 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const products_controller_1 = require("../controllers/products.controller");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
+const products_controller_1 = require("../controllers/products.controller");
 const router = (0, express_1.Router)();
-router.use(auth_middleware_1.authenticateToken); // Protect all routes
-router.get('/', products_controller_1.getProducts);
-router.post('/', products_controller_1.createProduct);
-router.post('/upsert', products_controller_1.upsertProduct);
-router.post('/batch-upsert', products_controller_1.batchUpsertProducts); // Пакетный импорт
-router.patch('/toggle/:code', products_controller_1.deactivateProduct); // Переключение статуса - /toggle/CODE
-router.get('/:code', products_controller_1.getProduct);
-router.put('/:code', products_controller_1.updateProduct);
-router.delete('/:code', products_controller_1.deactivateProduct);
+router.use(auth_middleware_1.authenticateToken);
+router.use(auth_middleware_1.loadUserContext);
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.getProducts);
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.createProduct);
+router.post('/upsert', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.upsertProduct);
+router.post('/batch-upsert', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.batchUpsertProducts);
+router.patch('/toggle/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.deactivateProduct);
+router.get('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.getProduct);
+router.put('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.updateProduct);
+router.delete('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.CATALOG_PRODUCTS), products_controller_1.deactivateProduct);
 exports.default = router;

@@ -1,15 +1,18 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const client_1 = require("@prisma/client");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const rbac_constants_1 = require("../prisma/rbac.constants");
+const db_1 = require("../db");
 const router = (0, express_1.Router)();
-const prisma = new client_1.PrismaClient();
+router.use(auth_middleware_1.authenticateToken);
+router.use(auth_middleware_1.loadUserContext);
 // GET /api/warehouses - Get all warehouses
-router.get('/', async (req, res) => {
+router.get('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_READ), async (req, res) => {
     try {
         const { includeDisabled } = req.query;
         const where = includeDisabled === 'true' ? {} : { isDisabled: false };
-        const warehouses = await prisma.warehouse.findMany({
+        const warehouses = await db_1.prisma.warehouse.findMany({
             where,
             orderBy: { name: 'asc' },
             include: {
@@ -26,10 +29,10 @@ router.get('/', async (req, res) => {
     }
 });
 // GET /api/warehouses/:code - Get warehouse by code
-router.get('/:code', async (req, res) => {
+router.get('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_READ), async (req, res) => {
     try {
-        const { code } = req.params;
-        const warehouse = await prisma.warehouse.findUnique({
+        const code = req.params.code;
+        const warehouse = await db_1.prisma.warehouse.findUnique({
             where: { code },
             include: {
                 responsibleUser: {
@@ -48,18 +51,17 @@ router.get('/:code', async (req, res) => {
     }
 });
 // POST /api/warehouses - Create new warehouse
-router.post('/', async (req, res) => {
+router.post('/', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), async (req, res) => {
     try {
         const { code, name, address, phone, responsibleUserId, comment } = req.body;
         if (!code || !name || !address) {
             return res.status(400).json({ error: 'Код, название и адрес обязательны' });
         }
-        // Check if code exists
-        const existing = await prisma.warehouse.findUnique({ where: { code } });
+        const existing = await db_1.prisma.warehouse.findUnique({ where: { code } });
         if (existing) {
             return res.status(409).json({ error: 'Склад с таким кодом уже существует' });
         }
-        const warehouse = await prisma.warehouse.create({
+        const warehouse = await db_1.prisma.warehouse.create({
             data: {
                 code,
                 name,
@@ -85,16 +87,16 @@ router.post('/', async (req, res) => {
     }
 });
 // PUT /api/warehouses/:code - Update warehouse
-router.put('/:code', async (req, res) => {
+router.put('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), async (req, res) => {
     try {
-        const { code } = req.params;
+        const code = req.params.code;
         const { name, address, phone, responsibleUserId, comment } = req.body;
-        const existing = await prisma.warehouse.findUnique({ where: { code } });
+        const existing = await db_1.prisma.warehouse.findUnique({ where: { code } });
         if (!existing) {
             return res.status(404).json({ error: 'Склад не найден' });
         }
-        const warehouse = await prisma.warehouse.update({
-            where: { code },
+        const warehouse = await db_1.prisma.warehouse.update({
+            where: { code: code },
             data: {
                 ...(name !== undefined && { name }),
                 ...(address !== undefined && { address }),
@@ -116,15 +118,15 @@ router.put('/:code', async (req, res) => {
     }
 });
 // PUT /api/warehouses/toggle/:code - Toggle warehouse status
-router.put('/toggle/:code', async (req, res) => {
+router.put('/toggle/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), async (req, res) => {
     try {
-        const { code } = req.params;
-        const existing = await prisma.warehouse.findUnique({ where: { code } });
+        const code = req.params.code;
+        const existing = await db_1.prisma.warehouse.findUnique({ where: { code } });
         if (!existing) {
             return res.status(404).json({ error: 'Склад не найден' });
         }
-        const warehouse = await prisma.warehouse.update({
-            where: { code },
+        const warehouse = await db_1.prisma.warehouse.update({
+            where: { code: code },
             data: { isDisabled: !existing.isDisabled }
         });
         const action = warehouse.isDisabled ? 'отключён' : 'активирован';
@@ -136,13 +138,13 @@ router.put('/toggle/:code', async (req, res) => {
     }
 });
 // POST /api/warehouses/deactivate - Deactivate multiple warehouses
-router.post('/deactivate', async (req, res) => {
+router.post('/deactivate', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), async (req, res) => {
     try {
         const { codes } = req.body;
         if (!codes || !Array.isArray(codes) || codes.length === 0) {
             return res.status(400).json({ error: 'Codes array is required' });
         }
-        const result = await prisma.warehouse.updateMany({
+        const result = await db_1.prisma.warehouse.updateMany({
             where: { code: { in: codes } },
             data: { isDisabled: true }
         });
@@ -154,12 +156,11 @@ router.post('/deactivate', async (req, res) => {
     }
 });
 // DELETE /api/warehouses/:code - Delete warehouse (soft delete = disable)
-router.delete('/:code', async (req, res) => {
+router.delete('/:code', (0, auth_middleware_1.requirePermission)(rbac_constants_1.PERM.WAREHOUSES_MANAGE), async (req, res) => {
     try {
         const { code } = req.params;
-        // Soft delete by setting isDisabled = true
-        const warehouse = await prisma.warehouse.update({
-            where: { code },
+        const warehouse = await db_1.prisma.warehouse.update({
+            where: { code: req.params.code },
             data: { isDisabled: true }
         });
         res.json({ message: `Склад "${warehouse.name}" удалён (отключён)` });

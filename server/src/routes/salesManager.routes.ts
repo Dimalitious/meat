@@ -17,6 +17,13 @@ import {
     updateRefund,
     softDeleteRefund,
 } from '../controllers/salesManager.controller';
+import {
+    listCustomerAddresses,
+    createCustomerAddress,
+    updateCustomerAddress,
+    deleteCustomerAddress,
+    makeDefaultCustomerAddress,
+} from '../controllers/customerAddresses.controller';
 
 const router = Router();
 
@@ -30,6 +37,15 @@ router.use(loadUserContext);
 router.get('/customers', requirePermission(PERM.SALES_MANAGER_CUSTOMERS_READ), getCustomers);
 router.post('/customers/:customerId/assign', requirePermission(PERM.SALES_MANAGER_CUSTOMERS_ASSIGN), assignManagers);
 router.post('/customers/:customerId/unassign', requirePermission(PERM.SALES_MANAGER_CUSTOMERS_ASSIGN), unassignManager);
+
+// ============================================
+// Customer Addresses (Геолокации доставки)
+// ============================================
+router.get('/customers/:customerId/addresses', requirePermission(PERM.SALES_MANAGER_ADDRESSES_MANAGE), listCustomerAddresses);
+router.post('/customers/:customerId/addresses', requirePermission(PERM.SALES_MANAGER_ADDRESSES_MANAGE), createCustomerAddress);
+router.patch('/customers/:customerId/addresses/:addressId', requirePermission(PERM.SALES_MANAGER_ADDRESSES_MANAGE), updateCustomerAddress);
+router.delete('/customers/:customerId/addresses/:addressId', requirePermission(PERM.SALES_MANAGER_ADDRESSES_MANAGE), deleteCustomerAddress);
+router.post('/customers/:customerId/addresses/:addressId/make-default', requirePermission(PERM.SALES_MANAGER_ADDRESSES_MANAGE), makeDefaultCustomerAddress);
 
 // ============================================
 // Drafts (OrderDraft workflow)

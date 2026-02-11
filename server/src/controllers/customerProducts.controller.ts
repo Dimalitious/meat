@@ -29,9 +29,16 @@ export const getCustomerProducts = async (req: Request, res: Response) => {
                         name: true,
                         priceListName: true,
                         category: true,
-                        status: true
+                        status: true,
+                        subcategoryId: true,
+                        subcategory: { select: { id: true, name: true, isActive: true } },
                     }
-                }
+                },
+                _count: {
+                    select: {
+                        variants: { where: { isActive: true } },
+                    },
+                },
             },
             orderBy: { sortOrder: 'asc' }
         });

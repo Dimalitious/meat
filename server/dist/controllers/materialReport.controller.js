@@ -119,7 +119,7 @@ async function buildMaterialReportPreview(reportDate) {
     console.log('[DEBUG MaterialReport] dateStart:', dateStart.toISOString());
     console.log('[DEBUG MaterialReport] dateEnd:', dateEnd.toISOString());
     // Параллельно получаем все данные
-    const [products, svod, purchases, production, productionWriteoffs, previousReport] = await Promise.all([
+    const [products, svod, purchases, production, productionWriteoffs, customerReturns, previousReport] = await Promise.all([
         // Все активные товары
         prisma.product.findMany({
             where: { status: 'active' },
@@ -151,20 +151,8 @@ async function buildMaterialReportPreview(reportDate) {
                 qty: true
             }
         }),
-        // Списано в производство = сырьё из левой панели (ProductionRun)
-        // actualWeight = сколько сырья использовали для производства
-        prisma.productionRun.findMany({
-            where: {
-                productionDate: { gte: dateStart, lte: dateEnd },
-                isHidden: false
-            },
-            select: {
-                productId: true, // Сырьё (левая панель)
-                actualWeight: true // Сколько сырья использовали (Списано)
-            }
-        }),
-        // Производство = выход из правой панели (ProductionRunValue)
-        // Это товары, которые ПОЛУЧИЛИ в результате выработки (MML узлы)
+        // V3: Списано в производство = Σ(всех RunValue) для каждого Run
+        // Заменяет старый подход через actualWeight (который теперь = только PRODUCTION)
         prisma.productionRunValue.findMany({
             where: {
                 run: {
@@ -174,6 +162,24 @@ async function buildMaterialReportPreview(reportDate) {
                 value: { not: null }
             },
             select: {
+                value: true,
+                run: {
+                    select: { productId: true }
+                }
+            }
+        }),
+        // V3: Производство = выход (только PRODUCTION opType)
+        // Это товары, которые ПОЛУЧИЛИ в результате выработки (MML узлы)
+        prisma.productionRunValue.findMany({
+            where: {
+                run: {
+                    productionDate: { gte: dateStart, lte: dateEnd },
+                    isHidden: false
+                },
+                value: { not: null },
+                opType: 'PRODUCTION'
+            },
+            select: {
                 snapshotProductId: true,
                 value: true,
                 node: {
@@ -181,6 +187,21 @@ async function buildMaterialReportPreview(reportDate) {
                         productId: true
                     }
                 }
+            }
+        }),
+        // ТЗ v2 §6: Возвраты от покупателей = агрегация OrderItem.qtyReturn за дату
+        prisma.orderItem.findMany({
+            where: {
+                order: {
+                    date: { gte: dateStart, lte: dateEnd },
+                    isDisabled: false
+                },
+                qtyReturn: { gt: 0 }
+            },
+            select: {
+                productId: true,
+                qtyReturn: true,
+                price: true
             }
         }),
         // Предыдущий отчёт (для остатка на начало)
@@ -198,12 +219,15 @@ async function buildMaterialReportPreview(reportDate) {
         const current = purchasesByProduct.get(p.productId) || 0;
         purchasesByProduct.set(p.productId, current + Number(p.qty));
     });
-    // Списано в производство = сырьё (левая панель, ProductionRun.actualWeight)
-    // Это сколько сырья ИСПОЛЬЗОВАЛИ для производства
+    // V3: Списано в производство = Σ(RunValue.value) сгруппировано по run.productId
+    // Это замена старого подхода через actualWeight
     const productionWriteoffByProduct = new Map();
-    production.forEach(p => {
-        const current = productionWriteoffByProduct.get(p.productId) || 0;
-        productionWriteoffByProduct.set(p.productId, current + Number(p.actualWeight || 0));
+    production.forEach((p) => {
+        const productId = p.run?.productId;
+        if (productId) {
+            const current = productionWriteoffByProduct.get(productId) || 0;
+            productionWriteoffByProduct.set(productId, current + Number(p.value || 0));
+        }
     });
     // Производство = выход (правая панель, ProductionRunValue)
     // Это товары которые ПОЛУЧИЛИ в результате выработки
@@ -224,6 +248,12 @@ async function buildMaterialReportPreview(reportDate) {
             });
         });
     }
+    // ТЗ v2 §6: Возвраты от покупателей (агрегация qtyReturn)
+    const customerReturnsByProduct = new Map();
+    customerReturns.forEach(r => {
+        const current = customerReturnsByProduct.get(r.productId) || 0;
+        customerReturnsByProduct.set(r.productId, current + Number(r.qtyReturn || 0));
+    });
     const previousBalances = new Map();
     if (previousReport?.lines) {
         previousReport.lines.forEach(l => {
@@ -241,6 +271,7 @@ async function buildMaterialReportPreview(reportDate) {
     productionWriteoffByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     svodByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     previousBalances.forEach((_, id) => productIdsWithMovements.add(id));
+    customerReturnsByProduct.forEach((_, id) => productIdsWithMovements.add(id));
     // Строим строки отчёта
     const lines = [];
     let sortOrder = 0;
@@ -251,13 +282,16 @@ async function buildMaterialReportPreview(reportDate) {
         const openingBalance = previousBalances.get(productId) || 0;
         const inPurchase = purchasesByProduct.get(productId) || 0;
         const inProduction = productionByProduct.get(productId) || 0;
+        const inCustomerReturn = customerReturnsByProduct.get(productId) || 0; // ТЗ v2 §6
         const outProductionWriteoff = productionWriteoffByProduct.get(productId) || 0;
         const svodData = svodByProduct.get(productId);
         const outSale = svodData?.weightToShip || 0;
         // Формула расчётного остатка на конец
+        // ТЗ v2 §6: добавляем inCustomerReturn
         const closingBalanceCalc = openingBalance
             + inPurchase
             + inProduction
+            + inCustomerReturn
             - outSale
             - outProductionWriteoff;
         lines.push({
@@ -268,6 +302,7 @@ async function buildMaterialReportPreview(reportDate) {
             openingBalance,
             inPurchase,
             inProduction,
+            inCustomerReturn, // ТЗ v2 §6: Возврат от покупателя
             outSale,
             outWaste: 0,
             outBundle: 0,
@@ -337,18 +372,7 @@ async function getPreviousDayReport(reportDate) {
                 qty: true
             }
         }),
-        // Производственные прогоны (сырьё списано) — actualWeight
-        prisma.productionRun.findMany({
-            where: {
-                productionDate: { lte: endOfPreviousDay },
-                isHidden: false
-            },
-            select: {
-                productId: true, // Сырьё (ProductID левой панели)
-                actualWeight: true // Сколько сырья списано
-            }
-        }),
-        // Выход продукции (ProductionRunValue) — произведённые товары
+        // V3: Производственные прогоны (сырьё списано) = Σ(всех RunValue)
         prisma.productionRunValue.findMany({
             where: {
                 run: {
@@ -356,6 +380,23 @@ async function getPreviousDayReport(reportDate) {
                     isHidden: false
                 },
                 value: { not: null }
+            },
+            select: {
+                value: true,
+                run: {
+                    select: { productId: true }
+                }
+            }
+        }),
+        // V3: Выход продукции (только PRODUCTION opType)
+        prisma.productionRunValue.findMany({
+            where: {
+                run: {
+                    productionDate: { lte: endOfPreviousDay },
+                    isHidden: false
+                },
+                value: { not: null },
+                opType: 'PRODUCTION'
             },
             select: {
                 snapshotProductId: true,
@@ -387,10 +428,13 @@ async function getPreviousDayReport(reportDate) {
         const current = balanceByProduct.get(p.productId) || 0;
         balanceByProduct.set(p.productId, current + Number(p.qty || 0));
     });
-    // 2. Списание сырья в производство (-) — ProductionRun.actualWeight
-    productionRuns.forEach(p => {
-        const current = balanceByProduct.get(p.productId) || 0;
-        balanceByProduct.set(p.productId, current - Number(p.actualWeight || 0));
+    // V3: Списание сырья в производство (-) = Σ(RunValue.value) по run.productId
+    productionRuns.forEach((p) => {
+        const productId = p.run?.productId;
+        if (productId) {
+            const current = balanceByProduct.get(productId) || 0;
+            balanceByProduct.set(productId, current - Number(p.value || 0));
+        }
     });
     // 3. Приход от производства (+) — ProductionRunValue.value
     productionOutput.forEach(p => {
@@ -545,7 +589,7 @@ const updateMaterialReportLine = async (req, res) => {
             where: {
                 draftId_productId: {
                     draftId: draft.id,
-                    productId: parseInt(productId)
+                    productId: parseInt(String(productId))
                 }
             },
             update: {
@@ -553,7 +597,7 @@ const updateMaterialReportLine = async (req, res) => {
             },
             create: {
                 draftId: draft.id,
-                productId: parseInt(productId),
+                productId: parseInt(String(productId)),
                 closingBalanceFact: closingBalanceFact !== null ? closingBalanceFact : null
             }
         });
@@ -670,7 +714,7 @@ const deleteMaterialReport = async (req, res) => {
     try {
         const { id } = req.params;
         await prisma.materialReport.delete({
-            where: { id: parseInt(id) }
+            where: { id: parseInt(String(id)) }
         });
         res.json({ success: true, message: 'Отчёт удалён' });
     }

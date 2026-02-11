@@ -7,6 +7,13 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ParamType {
+  LENGTH_CM
+  WIDTH_CM
+  WEIGHT_G
+  PROCESSING
+}
+
 model User {
   id              Int               @id @default(autoincrement())
   username        String            @unique
@@ -118,8 +125,33 @@ model Product {
   productionClosures       ProductionClosure[]       @relation("ProductionClosures")
   // Production V3: Adjustments
   productionAdjustments    ProductionAdjustment[]
+
+  // UoM
+  uomId             Int?
+  uom               UnitOfMeasure?     @relation(fields: [uomId], references: [id])
+
   // Supplier Account Module
   supplierReturnItems      SupplierReturnItem[]
+
+  // Product Catalog: Country & Subcategory
+  countryId         Int?
+  country           Country?           @relation(fields: [countryId], references: [id])
+  subcategoryId     Int?
+  subcategory       ProductSubcategory? @relation(fields: [subcategoryId], references: [id])
+  productParams     ParamValue[]       @relation("ProductParams")
+  paramExclusions   ProductParamExclusion[]
+
+  @@index([countryId])
+  @@index([subcategoryId])
+}
+
+model UnitOfMeasure {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  products  Product[]
 }
 
 model Customer {
@@ -158,6 +190,33 @@ model Customer {
   // Sales Manager Module
   salesManagers         CustomerSalesManager[]
   moneyRefunds          CustomerMoneyRefund[]
+  // Geolocation: Справочник адресов доставки клиента
+  addresses             CustomerAddress[]
+}
+
+// Справочник адресов доставки клиента (геолокации)
+model CustomerAddress {
+  id          Int      @id @default(autoincrement())
+  customerId  Int
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  label       String?                    // "Дом", "Работа", "Точка №3"
+  addressText String                     // Строка адреса
+  lat         Decimal  @db.Decimal(9, 6) // Широта
+  lng         Decimal  @db.Decimal(9, 6) // Долгота
+  accuracyM   Int?                       // Точность GPS в метрах
+  comment     String?                    // Подъезд/код/ориентир
+
+  isDefault   Boolean  @default(false)   // У клиента максимум один default
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deletedAt   DateTime?                  // Soft delete
+
+  orders      Order[]
+
+  @@index([customerId])
+  @@index([customerId, isDefault])
 }
 
 // Карточка клиента - набор позиций MML с описаниями и фото для конкретного клиента
@@ -220,6 +279,8 @@ model CustomerProduct {
   customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
   product     Product   @relation(fields: [productId], references: [id])
   
+  variants    CustomerProductVariant[]
+
   @@unique([customerId, productId])  // Один товар - один раз у клиента
   @@index([customerId])
   @@index([productId])
@@ -298,6 +359,16 @@ model Order {
   signatureUrl      String?            // Путь к PNG подписи клиента
   signedInvoiceUrl  String?            // Путь к подписанной накладной PNG
   
+  // Delivery geo snapshot (снапшот геолокации доставки)
+  deliveryLat       Decimal? @db.Decimal(9, 6)  // Широта доставки
+  deliveryLng       Decimal? @db.Decimal(9, 6)  // Долгота доставки
+  deliveryAccuracyM Int?                        // Точность GPS в метрах
+  deliveryComment   String?                     // Комментарий к доставке (подъезд/код)
+  
+  // Link to saved customer address (optional, for traceability)
+  customerAddressId Int?
+  customerAddress   CustomerAddress? @relation(fields: [customerAddressId], references: [id], onDelete: SetNull)
+  
   // Возвраты: агрегаты для быстрого отображения в Сводке
   returnTotalQty    Float              @default(0)   // Общее кол-во возврата
   returnTotalSum    Decimal            @default(0)   // Сумма возврата
@@ -325,6 +396,7 @@ model Order {
   @@index([isDisabled, date])
   @@index([dispatchDay])
   @@index([status, dispatchDay])
+  @@index([customerAddressId])
 }
 
 // Вложения к заказу (подписи, накладные, документы)
@@ -1846,4 +1918,103 @@ model SupplierPayment {
   deletedByUser   User?                  @relation("SupplierPaymentDeleter", fields: [deletedByUserId], references: [id])
 
   @@index([supplierId, paymentDate])
+}
+
+// ============================================
+// Product Catalog: Countries, Subcategories, ParamValues, Variants
+// ============================================
+
+model Country {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products  Product[]
+}
+
+model ProductSubcategory {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products  Product[]
+  params    ParamValue[]
+}
+
+model ParamValue {
+  id            Int       @id @default(autoincrement())
+  paramType     ParamType
+
+  // Exactly one owner must be set: subcategoryId OR productId (enforced by CHECK via raw SQL migration)
+  subcategoryId Int?
+  productId     Int?
+
+  subcategory   ProductSubcategory? @relation(fields: [subcategoryId], references: [id], onDelete: Cascade)
+  product       Product?            @relation("ProductParams", fields: [productId], references: [id], onDelete: Cascade)
+
+  // One of these depending on paramType
+  valueNum      Decimal?  @db.Numeric(10,2) // LENGTH/WIDTH (cm)
+  valueInt      Int?                        // WEIGHT_G (grams)
+  valueText     String?                     // PROCESSING (immutable canonical value)
+
+  // Display label (can be edited). If null => auto generated on backend at create time.
+  label         String?
+  sortOrder     Int       @default(0)
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Variant relations
+  variantAsLength      CustomerProductVariant[] @relation("VariantLength")
+  variantAsWidth       CustomerProductVariant[] @relation("VariantWidth")
+  variantAsWeight      CustomerProductVariant[] @relation("VariantWeight")
+  variantAsProcessing  CustomerProductVariant[] @relation("VariantProcessing")
+
+  exclusions           ProductParamExclusion[]
+
+  @@index([subcategoryId, paramType, isActive, sortOrder])
+  @@index([productId, paramType, isActive, sortOrder])
+  @@index([paramType, isActive])
+}
+
+model ProductParamExclusion {
+  id           Int @id @default(autoincrement())
+  productId    Int
+  paramValueId Int
+
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  paramValue   ParamValue @relation(fields: [paramValueId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, paramValueId])
+  @@index([productId])
+  @@index([paramValueId])
+}
+
+model CustomerProductVariant {
+  id                     Int      @id @default(autoincrement())
+  customerProductId      Int
+
+  lengthParamValueId     Int
+  widthParamValueId      Int
+  weightParamValueId     Int
+  processingParamValueId Int
+
+  sortOrder              Int      @default(0)
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  customerProduct        CustomerProduct @relation(fields: [customerProductId], references: [id], onDelete: Cascade)
+
+  lengthParamValue       ParamValue @relation("VariantLength", fields: [lengthParamValueId], references: [id], onDelete: Restrict)
+  widthParamValue        ParamValue @relation("VariantWidth", fields: [widthParamValueId], references: [id], onDelete: Restrict)
+  weightParamValue       ParamValue @relation("VariantWeight", fields: [weightParamValueId], references: [id], onDelete: Restrict)
+  processingParamValue   ParamValue @relation("VariantProcessing", fields: [processingParamValueId], references: [id], onDelete: Restrict)
+
+  @@unique([customerProductId, lengthParamValueId, widthParamValueId, weightParamValueId, processingParamValueId])
+  @@index([customerProductId])
 }

@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../db';
 import { ORDER_STATUS, isValidTransition, getStatusDisplayName } from '../constants';
 import { getDateRangeForTashkent, formatIdnFromDate } from '../utils/date.utils';
+import { resolveGeoSnapshot } from '../services/geoSnapshot.service';
 
 // Get all orders (with optional filters) - Journal style
 export const getOrders = async (req: Request, res: Response) => {
@@ -72,11 +73,29 @@ export const getOrder = async (req: Request, res: Response) => {
 // Create new order
 export const createOrder = async (req: Request, res: Response) => {
     try {
-        const { customerId, date, paymentType, items } = req.body;
+        const {
+            customerId, date, paymentType, items,
+            // Delivery geo (optional from frontend)
+            customerAddressId,
+            deliveryAddress, deliveryLat, deliveryLng, deliveryComment, deliveryAccuracyM,
+        } = req.body;
         // items: [{ productId, quantity, price }]
 
         // Transaction to create order and items
         const result = await prisma.$transaction(async (tx) => {
+            const cid = Number(customerId);
+
+            // ── Resolve delivery geo snapshot (shared helper) ──
+            const snap = await resolveGeoSnapshot(tx, {
+                customerId: cid,
+                customerAddressId,
+                deliveryAddress,
+                deliveryLat,
+                deliveryLng,
+                deliveryComment,
+                deliveryAccuracyM,
+            });
+
             // 1. Calculate totals
             let totalAmount = 0;
             let totalWeight = 0;
@@ -103,12 +122,19 @@ export const createOrder = async (req: Request, res: Response) => {
             // 2. Create Order
             const order = await tx.order.create({
                 data: {
-                    customerId: Number(customerId),
+                    customerId: cid,
                     date: new Date(date),
                     paymentType,
                     totalAmount,
                     totalWeight,
                     status: ORDER_STATUS.NEW,  // ТЗ §4.1: FSM статус, не 'new'
+                    // Delivery geo snapshot
+                    deliveryAddress: snap.deliveryAddress,
+                    deliveryLat: snap.deliveryLat,
+                    deliveryLng: snap.deliveryLng,
+                    deliveryComment: snap.deliveryComment,
+                    deliveryAccuracyM: snap.deliveryAccuracyM,
+                    customerAddressId: snap.customerAddressId,
                     items: {
                         create: validItems
                     }
@@ -119,7 +145,8 @@ export const createOrder = async (req: Request, res: Response) => {
         });
 
         res.status(201).json(result);
-    } catch (error) {
+    } catch (error: any) {
+        if (error?.status) return res.status(error.status).json({ error: error.error });
         console.error(error);
         res.status(400).json({ error: 'Failed to create order' });
     }
