@@ -1984,7 +1984,7 @@ model ParamValue {
   product       Product?            @relation("ProductParams", fields: [productId], references: [id], onDelete: Cascade)
 
   // One of these depending on paramType
-  valueNum      Decimal?  @db.Numeric(10,2) // LENGTH/WIDTH (cm)
+  valueNum      Decimal?  @db.Decimal(10,2) // LENGTH/WIDTH (cm)
   valueInt      Int?                        // WEIGHT_G (grams)
   valueText     String?                     // PROCESSING (immutable canonical value)
 
