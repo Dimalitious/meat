@@ -30,7 +30,8 @@ import journalsRoutes from './routes/journals.routes';
 
 import pricesRoutes from './routes/prices.routes';
 import purchasePriceListsRoutes from './routes/purchasePriceLists.routes';
-import mmlBatchRoutes from './routes/mmlBatch.routes';
+// DISABLED: Legacy module uses removed models (ProductionBatch/BatchItem/MmlItem)
+// import mmlBatchRoutes from './routes/mmlBatch.routes';
 import paymentTypesRoutes from './routes/paymentTypes.routes';
 import purchasesRoutes from './routes/purchases.routes';
 import telegramRoutes from './routes/telegram.routes';
@@ -60,7 +61,8 @@ app.use('/api/journals', journalsRoutes);
 
 app.use('/api/prices', pricesRoutes);
 app.use('/api/purchase-price-lists', purchasePriceListsRoutes);
-app.use('/api/production-module', mmlBatchRoutes);
+// DISABLED: Legacy production-module routes (see mmlBatch.controller.ts)
+// app.use('/api/production-module', mmlBatchRoutes);
 
 // Production Module v2 (Tree Structure)
 import productionV2Routes from './routes/production-v2.routes';

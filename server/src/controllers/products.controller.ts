@@ -25,7 +25,11 @@ export const getProducts = async (req: Request, res: Response) => {
 
         const products = await prisma.product.findMany({
             where,
-            include: { uom: true, country: true, subcategory: true },
+            include: {
+                uom: true,
+                country: true,
+                subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } }
+            },
             orderBy: { name: 'asc' }
         });
         res.json(products);
@@ -62,12 +66,18 @@ export const createProduct = async (req: Request, res: Response) => {
         // Validate referenced entities are active
         const [country, subcategory] = await Promise.all([
             prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
-            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true, deletedAt: true } }),
         ]);
         if (!country?.isActive) {
             return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
         }
-        if (!subcategory?.isActive) {
+        if (!subcategory) {
+            return res.status(400).json({ error: 'INVALID_SUBCATEGORY', message: 'Подкатегория не найдена.' });
+        }
+        if (subcategory.deletedAt) {
+            return res.status(400).json({ error: 'DELETED_SUBCATEGORY', message: 'Нельзя выбрать удалённую подкатегорию.' });
+        }
+        if (!subcategory.isActive) {
             return res.status(400).json({ error: 'INACTIVE_SUBCATEGORY', message: 'Нельзя выбрать архивную подкатегорию.' });
         }
 
@@ -86,7 +96,11 @@ export const createProduct = async (req: Request, res: Response) => {
                 countryId: Number(countryId),
                 subcategoryId: Number(subcategoryId),
             },
-            include: { uom: true, country: true, subcategory: true }
+            include: {
+                uom: true,
+                country: true,
+                subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } }
+            }
         });
         res.status(201).json(product);
     } catch (error: any) {
@@ -114,13 +128,19 @@ export const updateProduct = async (req: Request, res: Response) => {
         // Validate referenced entities are active
         const [country, subcategory] = await Promise.all([
             prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
-            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true, deletedAt: true } }),
         ]);
         if (!country?.isActive) {
             return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
         }
-        if (!subcategory?.isActive) {
-            return res.status(400).json({ error: 'INACTIVE_SUBCATEGORY', message: 'Нельзя выбрать архивную подкатегорию.' });
+        if (!subcategory) {
+            return res.status(400).json({ error: 'INVALID_SUBCATEGORY', message: 'Подкатегория не найдена.' });
+        }
+        if (subcategory.deletedAt) {
+            return res.status(400).json({ error: 'DELETED_SUBCATEGORY', message: 'Нельзя выбрать удалённую подкатегорию.' });
+        }
+        if (!subcategory.isActive) {
+            return res.status(400).json({ error: 'INACTIVE_SUBCATEGORY', message: 'Нельзя выбрать выключенную подкатегорию.' });
         }
 
         // Guard: changing subcategoryId is blocked if active variants exist
@@ -155,7 +175,11 @@ export const updateProduct = async (req: Request, res: Response) => {
                 countryId: Number(countryId),
                 subcategoryId: Number(subcategoryId),
             },
-            include: { uom: true, country: true, subcategory: true }
+            include: {
+                uom: true,
+                country: true,
+                subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } }
+            }
         });
         res.json(product);
     } catch (error: any) {

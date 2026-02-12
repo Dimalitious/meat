@@ -5,18 +5,26 @@ import { Button } from '../components/ui/Button';
 import { useAuth } from '../context/AuthContext';
 import {
     Search, Plus, Trash2, Lock, Unlock, Package,
-    ChevronRight, ChevronDown, FolderTree, Edit2, RotateCcw, Eye, EyeOff
+    ChevronRight, ChevronDown, FolderTree, Edit2, RotateCcw, Eye, EyeOff,
+    Copy, Power, PowerOff
 } from 'lucide-react';
 
 // ============================================
 // ИНТЕРФЕЙСЫ
 // ============================================
 
+interface UnitOfMeasure {
+    id: number;
+    name: string;
+    code: string;
+}
+
 interface Product {
     id: number;
     code: string;
     name: string;
     category: string | null;
+    uom?: UnitOfMeasure | null;
 }
 
 interface MmlNode {
@@ -25,6 +33,8 @@ interface MmlNode {
     parentNodeId: number | null;
     productId: number;
     sortOrder: number;
+    isActive: boolean;
+    sourceNodeId?: number | null;
     isWaste?: boolean;
     product: Product;
     children: MmlNode[];
@@ -36,9 +46,13 @@ interface Mml {
     product: Product;
     creator: { id: number; name: string; username: string };
     isLocked: boolean;
+    isActive: boolean;
     isDeleted?: boolean;
+    version: number;
+    parentMmlId?: number | null;
     createdAt: string;
     rootNodes: MmlNode[];
+    _count?: { nodes: number; runs: number };
 }
 
 // ============================================
@@ -63,6 +77,7 @@ export default function MmlReferencePage() {
     // Soft delete & checkboxes
     const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
     const [showDeleted, setShowDeleted] = useState(false);
+    const [showInactive, setShowInactive] = useState(false);
 
     // ============================================
     // ЗАГРУЗКА ДАННЫХ
@@ -73,17 +88,20 @@ export default function MmlReferencePage() {
         fetchProducts();
     }, []);
 
-    // Перезагрузка при изменении showDeleted
+    // Перезагрузка при изменении фильтров
     useEffect(() => {
         fetchMmls();
-    }, [showDeleted]);
+    }, [showDeleted, showInactive]);
 
     const fetchMmls = async () => {
         setLoading(true);
         try {
             const res = await axios.get(`${API_URL}/api/production-v2/mml`, {
                 headers: { Authorization: `Bearer ${token}` },
-                params: { showDeleted: showDeleted ? 'true' : undefined }
+                params: {
+                    showDeleted: showDeleted ? 'true' : undefined,
+                    showInactive: showInactive ? 'true' : undefined
+                }
             });
             setMmls(res.data);
         } catch (err) {
@@ -128,7 +146,6 @@ export default function MmlReferencePage() {
             );
             setMmls([res.data, ...mmls]);
             setSelectedMml(res.data);
-            // Не закрываем модальное окно — позволяем создать ещё техкарты
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка создания MML');
         }
@@ -142,7 +159,6 @@ export default function MmlReferencePage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             await loadMmlDetails(selectedMml.id);
-            // Не закрываем модальное окно — позволяем добавить ещё товары
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка добавления позиции');
         }
@@ -156,7 +172,6 @@ export default function MmlReferencePage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             await loadMmlDetails(selectedMml.id);
-            // Не закрываем модальное окно — позволяем добавить ещё товары
         } catch (err: any) {
             alert(err.response?.data?.error || 'Ошибка добавления подпозиции');
         }
@@ -185,9 +200,48 @@ export default function MmlReferencePage() {
                 { headers: { Authorization: `Bearer ${token}` } }
             );
             setSelectedMml(res.data);
-            setMmls(mmls.map(m => m.id === mmlId ? res.data : m));
-        } catch (err) {
-            console.error('Failed to toggle MML lock:', err);
+            setMmls(mmls.map(m => m.id === mmlId ? { ...m, isLocked: res.data.isLocked } : m));
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка переключения блокировки');
+        }
+    };
+
+    const toggleMmlActive = async (mmlId: number) => {
+        try {
+            const res = await axios.patch(`${API_URL}/api/production-v2/mml/${mmlId}/toggle-active`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setMmls(mmls.map(m => m.id === mmlId ? { ...m, isActive: res.data.isActive } : m));
+            if (selectedMml?.id === mmlId) {
+                setSelectedMml({ ...selectedMml, isActive: res.data.isActive });
+            }
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка переключения статуса');
+        }
+    };
+
+    const toggleNodeActive = async (nodeId: number) => {
+        try {
+            await axios.patch(`${API_URL}/api/production-v2/mml/node/${nodeId}/toggle-active`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (selectedMml) {
+                await loadMmlDetails(selectedMml.id);
+            }
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка переключения статуса узла');
+        }
+    };
+
+    const cloneMmlVersion = async (mmlId: number) => {
+        try {
+            const res = await axios.post(`${API_URL}/api/production-v2/mml/${mmlId}/clone-version`, {},
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            await fetchMmls();
+            setSelectedMml(res.data);
+        } catch (err: any) {
+            alert(err.response?.data?.error || 'Ошибка клонирования версии');
         }
     };
 
@@ -259,7 +313,6 @@ export default function MmlReferencePage() {
     const openProductModal = (mode: 'create-mml' | 'add-root' | 'add-child') => {
         setModalMode(mode);
         setModalSearch('');
-        // В режиме create-mml показываем существующие MML как добавленные
         if (mode === 'create-mml') {
             const existingProductIds = new Set(mmls.map(m => m.productId));
             setAddedProductIds(existingProductIds);
@@ -270,7 +323,6 @@ export default function MmlReferencePage() {
     };
 
     const handleProductSelect = async (product: Product) => {
-        // Отмечаем товар как добавленный
         setAddedProductIds(prev => new Set(prev).add(product.id));
 
         switch (modalMode) {
@@ -308,12 +360,13 @@ export default function MmlReferencePage() {
         const isSelected = selectedNodeId === node.id;
         const indent = level * 24;
         const isEditable = selectedMml && !selectedMml.isLocked;
+        const isInactive = !node.isActive;
 
         return (
             <div key={node.id}>
                 <div
                     className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer transition-colors ${isSelected ? 'bg-purple-100 border-l-4 border-purple-500' : 'hover:bg-gray-50'
-                        }`}
+                        } ${isInactive ? 'opacity-50' : ''}`}
                     style={{ paddingLeft: `${indent + 12}px` }}
                     onClick={() => setSelectedNodeId(isSelected ? null : node.id)}
                 >
@@ -322,21 +375,41 @@ export default function MmlReferencePage() {
                     ) : (
                         <ChevronRight size={16} className="text-gray-300" />
                     )}
-                    <Package size={16} className={`${level === 0 ? 'text-purple-600' : node.isWaste ? 'text-orange-400' : 'text-gray-400'}`} />
-                    <span className={`flex-1 text-sm ${level === 0 ? 'font-medium' : ''} ${node.isWaste ? 'text-orange-600' : ''}`}>
+                    <Package size={16} className={`${level === 0 ? 'text-purple-600' : node.isWaste ? 'text-orange-400' : 'text-gray-400'} ${isInactive ? 'opacity-50' : ''}`} />
+                    <span className={`flex-1 text-sm ${level === 0 ? 'font-medium' : ''} ${node.isWaste ? 'text-orange-600' : ''} ${isInactive ? 'line-through text-gray-400' : ''}`}>
                         {node.product.name}
                         {node.isWaste && <span className="ml-2 text-xs bg-orange-100 text-orange-600 px-1 rounded">отходы</span>}
+                        {isInactive && <span className="ml-2 text-xs bg-gray-100 text-gray-500 px-1 rounded">выкл</span>}
                     </span>
+                    {/* ЕИ (единица измерения) */}
+                    {node.product.uom && (
+                        <span className="text-xs text-gray-400 flex-shrink-0" title="Единица измерения">
+                            {node.product.uom.code || node.product.uom.name}
+                        </span>
+                    )}
                     {isEditable && (
-                        <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                deleteNode(node.id);
-                            }}
-                            className="text-red-400 hover:text-red-600 p-1"
-                        >
-                            <Trash2 size={14} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                            {/* Toggle active */}
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleNodeActive(node.id);
+                                }}
+                                className={`p-1 ${node.isActive ? 'text-green-500 hover:text-orange-500' : 'text-gray-400 hover:text-green-500'}`}
+                                title={node.isActive ? 'Выключить позицию' : 'Включить позицию'}
+                            >
+                                {node.isActive ? <Power size={14} /> : <PowerOff size={14} />}
+                            </button>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteNode(node.id);
+                                }}
+                                className="text-red-400 hover:text-red-600 p-1"
+                            >
+                                <Trash2 size={14} />
+                            </button>
+                        </div>
                     )}
                 </div>
                 {node.children && node.children.map(child => renderMmlNode(child, level + 1))}
@@ -425,6 +498,13 @@ export default function MmlReferencePage() {
                                 {showDeleted ? <Eye size={12} className="inline mr-1" /> : <EyeOff size={12} className="inline mr-1" />}
                                 {showDeleted ? 'Скрыть удал.' : 'Показать удал.'}
                             </button>
+                            <button
+                                onClick={() => setShowInactive(!showInactive)}
+                                className={`px-2 py-1 text-xs rounded ${showInactive ? 'bg-orange-100 text-orange-600' : 'bg-gray-100 text-gray-600'} hover:opacity-80`}
+                            >
+                                {showInactive ? <Power size={12} className="inline mr-1" /> : <PowerOff size={12} className="inline mr-1" />}
+                                {showInactive ? 'Скрыть выкл.' : 'Показать выкл.'}
+                            </button>
                         </div>
                     </div>
 
@@ -440,7 +520,7 @@ export default function MmlReferencePage() {
                                 <div
                                     key={mml.id}
                                     className={`p-3 border-b cursor-pointer hover:bg-gray-50 transition-colors ${selectedMml?.id === mml.id ? 'bg-purple-50 border-l-4 border-purple-500' : ''
-                                        } ${mml.isDeleted ? 'opacity-50 bg-red-50' : ''}`}
+                                        } ${mml.isDeleted ? 'opacity-50 bg-red-50' : ''} ${!mml.isActive ? 'opacity-60' : ''}`}
                                 >
                                     <div className="flex items-start gap-2">
                                         {/* Чекбокс */}
@@ -456,14 +536,24 @@ export default function MmlReferencePage() {
                                             onClick={() => loadMmlDetails(mml.id)}
                                         >
                                             <div className="flex items-center gap-2">
-                                                <Package size={18} className={`${mml.isDeleted ? 'text-red-400' : 'text-purple-600'} flex-shrink-0`} />
+                                                <Package size={18} className={`${mml.isDeleted ? 'text-red-400' : !mml.isActive ? 'text-gray-400' : 'text-purple-600'} flex-shrink-0`} />
                                                 <div className="font-medium text-sm truncate">
                                                     {mml.product.name}
                                                 </div>
+                                                {/* Version badge */}
+                                                <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded flex-shrink-0">
+                                                    v{mml.version}
+                                                </span>
+                                                {/* isActive indicator */}
+                                                {!mml.isActive && (
+                                                    <span className="text-xs bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded flex-shrink-0">
+                                                        выкл
+                                                    </span>
+                                                )}
                                                 <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
                                                     <span>{mml.product.code}</span>
                                                     <span>•</span>
-                                                    <span>{countNodes(mml.rootNodes || [])} поз.</span>
+                                                    <span>{mml._count?.nodes ?? countNodes(mml.rootNodes || [])} поз.</span>
                                                 </div>
                                             </div>
                                             {mml.isLocked ? (
@@ -472,6 +562,17 @@ export default function MmlReferencePage() {
                                                 <Edit2 size={14} className="text-gray-400 flex-shrink-0" />
                                             )}
                                         </div>
+                                        {/* Toggle active button */}
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                toggleMmlActive(mml.id);
+                                            }}
+                                            className={`p-1 text-xs ${mml.isActive ? 'text-green-500 hover:text-orange-500' : 'text-gray-400 hover:text-green-500'}`}
+                                            title={mml.isActive ? 'Выключить техкарту' : 'Включить техкарту'}
+                                        >
+                                            {mml.isActive ? <Power size={14} /> : <PowerOff size={14} />}
+                                        </button>
                                     </div>
                                 </div>
                             ))
@@ -490,6 +591,14 @@ export default function MmlReferencePage() {
                                         <h2 className="text-lg font-semibold flex items-center gap-2">
                                             <Package className="text-purple-600" size={20} />
                                             {selectedMml.product.name}
+                                            <span className="text-sm font-normal bg-blue-100 text-blue-600 px-2 py-0.5 rounded">
+                                                Версия {selectedMml.version}
+                                            </span>
+                                            {!selectedMml.isActive && (
+                                                <span className="text-sm font-normal bg-gray-200 text-gray-500 px-2 py-0.5 rounded">
+                                                    Выключена
+                                                </span>
+                                            )}
                                         </h2>
                                         <div className="text-sm text-gray-500 mt-1">
                                             Код: {selectedMml.product.code} •
@@ -501,16 +610,23 @@ export default function MmlReferencePage() {
                                         <Button
                                             variant="outline"
                                             size="sm"
+                                            onClick={() => toggleMmlActive(selectedMml.id)}
+                                        >
+                                            {selectedMml.isActive ? (
+                                                <><PowerOff size={16} className="mr-1" /> Выключить</>
+                                            ) : (
+                                                <><Power size={16} className="mr-1" /> Включить</>
+                                            )}
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
                                             onClick={() => toggleMmlLock(selectedMml.id)}
                                         >
                                             {selectedMml.isLocked ? (
-                                                <>
-                                                    <Unlock size={16} className="mr-1" /> Разблокировать
-                                                </>
+                                                <><Unlock size={16} className="mr-1" /> Разблокировать</>
                                             ) : (
-                                                <>
-                                                    <Lock size={16} className="mr-1" /> Зафиксировать
-                                                </>
+                                                <><Lock size={16} className="mr-1" /> Зафиксировать</>
                                             )}
                                         </Button>
                                         {!selectedMml.isLocked && (
@@ -525,10 +641,20 @@ export default function MmlReferencePage() {
                                     </div>
                                 </div>
 
+                                {/* Frozen banner */}
                                 {selectedMml.isLocked && (
-                                    <div className="bg-green-50 border border-green-200 rounded px-3 py-2 text-sm text-green-700 flex items-center gap-2">
-                                        <Lock size={14} />
-                                        Техкарта зафиксирована. Редактирование заблокировано.
+                                    <div className="bg-amber-50 border border-amber-200 rounded px-3 py-2 text-sm text-amber-700 flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <Lock size={14} />
+                                            Версия заморожена. Структурные изменения заблокированы.
+                                        </div>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => cloneMmlVersion(selectedMml.id)}
+                                        >
+                                            <Copy size={14} className="mr-1" /> Создать новую версию
+                                        </Button>
                                     </div>
                                 )}
                             </div>
@@ -575,7 +701,7 @@ export default function MmlReferencePage() {
                             {/* Info footer */}
                             <div className="p-3 border-t bg-gray-50 text-xs text-gray-500">
                                 <div className="flex justify-between">
-                                    <span>ID: {selectedMml.id}</span>
+                                    <span>ID: {selectedMml.id} • Версия: {selectedMml.version}{selectedMml.parentMmlId ? ` (клон от #${selectedMml.parentMmlId})` : ''}</span>
                                     <span>Всего позиций: {countNodes(selectedMml.rootNodes || [])}</span>
                                 </div>
                             </div>

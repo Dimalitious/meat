@@ -3,13 +3,14 @@ import api from '../config/axios';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../components/ui/Table';
-import { Plus, Edit, Save, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Edit, Save, X, Trash2, Eye, EyeOff } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 
 interface Subcategory {
     id: number;
     name: string;
     isActive: boolean;
+    deletedAt?: string | null;
 }
 
 interface ParamValue {
@@ -18,26 +19,34 @@ interface ParamValue {
     valueNum?: string | null;
     valueInt?: number | null;
     valueText?: string | null;
+    valueNumMin?: string | null;
+    valueNumMax?: string | null;
+    valueIntMin?: number | null;
+    valueIntMax?: number | null;
     label: string | null;
     sortOrder: number;
     isActive: boolean;
 }
 
 interface ParamsByType {
+    processings: ParamValue[];
+    weights: ParamValue[];
     lengths: ParamValue[];
     widths: ParamValue[];
-    weights: ParamValue[];
-    processings: ParamValue[];
+    heights: ParamValue[];
+    thicknesses: ParamValue[];
 }
 
-type ParamCategory = 'lengths' | 'widths' | 'weights' | 'processings';
+type ParamCategory = 'processings' | 'weights' | 'lengths' | 'widths' | 'heights' | 'thicknesses';
 
-const PARAM_LABELS: Record<ParamCategory, string> = {
-    lengths: 'Длина (см)',
-    widths: 'Ширина (см)',
-    weights: 'Вес (г)',
-    processings: 'Обработка',
-};
+const SECTION_ORDER: { key: ParamCategory; label: string }[] = [
+    { key: 'processings', label: 'Обработка' },
+    { key: 'weights', label: 'Вес (г)' },
+    { key: 'lengths', label: 'Длина (см)' },
+    { key: 'widths', label: 'Ширина (см)' },
+    { key: 'heights', label: 'Высота (см)' },
+    { key: 'thicknesses', label: 'Толщина (см)' },
+];
 
 const SubcategoriesPage = () => {
     const [items, setItems] = useState<Subcategory[]>([]);
@@ -49,11 +58,11 @@ const SubcategoriesPage = () => {
     // Param values management
     const [selectedSubcat, setSelectedSubcat] = useState<Subcategory | null>(null);
     const [params, setParams] = useState<ParamsByType | null>(null);
-    const [expandedSections, setExpandedSections] = useState<ParamCategory[]>(['lengths', 'widths', 'weights', 'processings']);
     const [paramModalOpen, setParamModalOpen] = useState(false);
     const [paramFormType, setParamFormType] = useState<ParamCategory>('lengths');
     const [paramEditId, setParamEditId] = useState<number | null>(null);
-    const [paramForm, setParamForm] = useState({ value: '', label: '', sortOrder: '0', isActive: true });
+    const [paramForm, setParamForm] = useState({ min: '', max: '', value: '', label: '', sortOrder: '0', isActive: true });
+    const [typeSelectOpen, setTypeSelectOpen] = useState(false);
 
     useEffect(() => { fetchItems(); }, []);
 
@@ -65,6 +74,16 @@ const SubcategoriesPage = () => {
             console.error(error);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDelete = async (item: Subcategory) => {
+        if (!confirm(`Вы уверены, что хотите удалить подкатегорию "${item.name}"? Это действие нельзя отменить.`)) return;
+        try {
+            await api.patch(`/api/subcategories/${item.id}`, { deletedAt: true });
+            fetchItems();
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Ошибка');
         }
     };
 
@@ -115,34 +134,68 @@ const SubcategoriesPage = () => {
         }
     };
 
-    const toggleSection = (section: ParamCategory) => {
-        setExpandedSections(prev =>
-            prev.includes(section) ? prev.filter(s => s !== section) : [...prev, section]
-        );
-    };
-
     const paramTypeForCategory = (cat: ParamCategory) => {
         switch (cat) {
+            case 'processings': return 'PROCESSING';
+            case 'weights': return 'WEIGHT_G';
             case 'lengths': return 'LENGTH_CM';
             case 'widths': return 'WIDTH_CM';
-            case 'weights': return 'WEIGHT_G';
-            case 'processings': return 'PROCESSING';
+            case 'heights': return 'HEIGHT_CM';
+            case 'thicknesses': return 'THICKNESS_CM';
+        }
+    };
+
+    const handleDeleteParam = async (pv: ParamValue) => {
+        if (!confirm(`Удалить значение "${renderParamValue(pv)}"? Это действие нельзя отменить.`)) return;
+        try {
+            await api.patch(`/api/param-values/${pv.id}`, { deletedAt: true });
+            if (selectedSubcat) fetchParams(selectedSubcat.id);
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Ошибка');
+        }
+    };
+
+    const handleToggleParam = async (pv: ParamValue) => {
+        try {
+            await api.patch(`/api/param-values/${pv.id}`, { isActive: !pv.isActive });
+            if (selectedSubcat) fetchParams(selectedSubcat.id);
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Ошибка');
         }
     };
 
     const openAddParam = (cat: ParamCategory) => {
         setParamFormType(cat);
         setParamEditId(null);
-        setParamForm({ value: '', label: '', sortOrder: '0', isActive: true });
+        setParamForm({ min: '', max: '', value: '', label: '', sortOrder: '0', isActive: true });
         setParamModalOpen(true);
     };
 
     const openEditParam = (cat: ParamCategory, pv: ParamValue) => {
         setParamFormType(cat);
         setParamEditId(pv.id);
-        const val = pv.valueNum ?? pv.valueInt?.toString() ?? pv.valueText ?? '';
-        setParamForm({ value: String(val), label: pv.label || '', sortOrder: String(pv.sortOrder), isActive: pv.isActive });
+        // Populate range fields for editing
+        const minVal = pv.valueNumMin ?? pv.valueIntMin?.toString() ?? '';
+        const maxVal = pv.valueNumMax ?? pv.valueIntMax?.toString() ?? '';
+        const textVal = pv.valueText ?? '';
+        setParamForm({
+            min: String(minVal || pv.valueNum || ''),
+            max: String(maxVal || pv.valueNum || ''),
+            value: textVal,
+            label: pv.label || '',
+            sortOrder: String(pv.sortOrder),
+            isActive: pv.isActive,
+        });
         setParamModalOpen(true);
+    };
+
+    const openTypeSelect = () => {
+        setTypeSelectOpen(true);
+    };
+
+    const selectTypeAndAdd = (cat: ParamCategory) => {
+        setTypeSelectOpen(false);
+        openAddParam(cat);
     };
 
     const handleParamSubmit = async (e: React.FormEvent) => {
@@ -150,24 +203,33 @@ const SubcategoriesPage = () => {
         if (!selectedSubcat) return;
 
         try {
+            const pt = paramTypeForCategory(paramFormType);
+            const isProcessing = pt === 'PROCESSING';
+
             if (paramEditId) {
-                // Only label, sortOrder, isActive editable
-                await api.patch(`/api/param-values/${paramEditId}`, {
+                // Edit: range + label + sortOrder + isActive
+                const patchBody: any = {
                     label: paramForm.label || undefined,
                     sortOrder: Number(paramForm.sortOrder),
                     isActive: paramForm.isActive,
-                });
+                };
+                if (!isProcessing) {
+                    patchBody.min = Number(paramForm.min);
+                    patchBody.max = Number(paramForm.max);
+                } else {
+                    patchBody.valueText = paramForm.value;
+                }
+                await api.patch(`/api/param-values/${paramEditId}`, patchBody);
             } else {
-                const pt = paramTypeForCategory(paramFormType);
+                // Create
                 const body: any = {
                     paramType: pt,
                     label: paramForm.label || undefined,
                     sortOrder: Number(paramForm.sortOrder),
                 };
-                if (pt === 'LENGTH_CM' || pt === 'WIDTH_CM') {
-                    body.valueNum = Number(paramForm.value);
-                } else if (pt === 'WEIGHT_G') {
-                    body.valueInt = Number(paramForm.value);
+                if (!isProcessing) {
+                    body.min = Number(paramForm.min);
+                    body.max = Number(paramForm.max);
                 } else {
                     body.valueText = paramForm.value;
                 }
@@ -181,10 +243,27 @@ const SubcategoriesPage = () => {
     };
 
     const renderParamValue = (pv: ParamValue) => {
+        // Range display for dimensions
+        if (pv.valueNumMin != null && pv.valueNumMax != null) {
+            return pv.valueNumMin === pv.valueNumMax
+                ? `${pv.valueNumMin} см`
+                : `${pv.valueNumMin}–${pv.valueNumMax} см`;
+        }
+        // Range display for weight
+        if (pv.valueIntMin != null && pv.valueIntMax != null) {
+            if (pv.valueIntMin === pv.valueIntMax) {
+                const g = pv.valueIntMin;
+                return g >= 1000 && g % 1000 === 0 ? `${g / 1000} кг` : `${g} г`;
+            }
+            return `${pv.valueIntMin}–${pv.valueIntMax} г`;
+        }
+        // Fallback to legacy single values
         if (pv.valueNum != null) return `${pv.valueNum} см`;
         if (pv.valueInt != null) return pv.valueInt >= 1000 && pv.valueInt % 1000 === 0 ? `${pv.valueInt / 1000} кг` : `${pv.valueInt} г`;
         return pv.valueText || '';
     };
+
+
 
     if (loading) return <div>Загрузка...</div>;
 
@@ -224,14 +303,26 @@ const SubcategoriesPage = () => {
                                         <TableCell className="text-xs text-slate-400 font-mono">{item.id}</TableCell>
                                         <TableCell className="font-medium">{item.name}</TableCell>
                                         <TableCell>
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.isActive
+                                                ? 'bg-green-100 text-green-800'
+                                                : 'bg-amber-100 text-amber-800'
+                                                }`}>
                                                 {item.isActive ? 'Активна' : 'Архив'}
                                             </span>
                                         </TableCell>
                                         <TableCell>
-                                            <button onClick={(e) => { e.stopPropagation(); handleEdit(item); }} className="text-blue-600 hover:text-blue-800">
-                                                <Edit size={16} />
-                                            </button>
+                                            <div className="flex items-center gap-1">
+                                                <button onClick={(e) => { e.stopPropagation(); handleEdit(item); }} className="text-blue-600 hover:text-blue-800" title="Редактировать">
+                                                    <Edit size={16} />
+                                                </button>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDelete(item); }}
+                                                    className="text-red-400 hover:text-red-600"
+                                                    title="Удалить"
+                                                >
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            </div>
                                         </TableCell>
                                     </TableRow>
                                 ))
@@ -248,45 +339,81 @@ const SubcategoriesPage = () => {
                         <div className="text-center text-slate-400 py-12">Загрузка параметров...</div>
                     ) : (
                         <div className="space-y-3">
-                            <h3 className="text-lg font-semibold text-slate-800">{selectedSubcat.name} — параметры</h3>
-                            {(['lengths', 'widths', 'weights', 'processings'] as ParamCategory[]).map((cat) => (
-                                <div key={cat} className="border rounded-lg overflow-hidden">
-                                    <button
-                                        className="w-full flex items-center justify-between px-4 py-2 bg-slate-50 hover:bg-slate-100 transition-colors"
-                                        onClick={() => toggleSection(cat)}
-                                    >
-                                        <span className="font-medium text-sm text-slate-700">
-                                            {PARAM_LABELS[cat]} ({params[cat].length})
-                                        </span>
-                                        {expandedSections.includes(cat) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                                    </button>
-                                    {expandedSections.includes(cat) && (
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-lg font-semibold text-slate-800">{selectedSubcat.name} — параметры</h3>
+                                <Button variant="outline" size="sm" onClick={openTypeSelect} className="flex items-center gap-1 text-xs">
+                                    <Plus size={14} /> Добавить параметр
+                                </Button>
+                            </div>
+                            {SECTION_ORDER.map(({ key: cat, label }) => {
+                                const sectionParams = params[cat];
+                                const activeParams = sectionParams.filter(p => p.isActive);
+                                const inactiveParams = sectionParams.filter(p => !p.isActive);
+                                if (sectionParams.length === 0) return null;
+                                return (
+                                    <div key={cat} className="border rounded-lg overflow-hidden">
+                                        <div className="px-4 py-2 bg-slate-50 border-b">
+                                            <span className="font-medium text-sm text-slate-700">
+                                                {label} ({activeParams.length})
+                                            </span>
+                                        </div>
                                         <div className="px-4 py-2 space-y-1">
-                                            {params[cat].length === 0 ? (
-                                                <div className="text-xs text-slate-400 py-2">Нет значений</div>
-                                            ) : (
-                                                params[cat].map((pv) => (
-                                                    <div
-                                                        key={pv.id}
-                                                        className={`flex items-center justify-between py-1 px-2 rounded text-sm ${!pv.isActive ? 'opacity-40 line-through' : ''}`}
-                                                    >
-                                                        <span>
-                                                            <span className="font-medium">{renderParamValue(pv)}</span>
-                                                            {pv.label && <span className="text-slate-500 ml-2">({pv.label})</span>}
-                                                        </span>
-                                                        <button onClick={() => openEditParam(cat, pv)} className="text-blue-600 hover:text-blue-800">
+                                            {/* Active rows first */}
+                                            {activeParams.map((pv) => (
+                                                <div key={pv.id} className="flex items-center justify-between py-1 px-2 rounded text-sm">
+                                                    <span>
+                                                        <span className="font-medium">{renderParamValue(pv)}</span>
+                                                        {pv.label && <span className="text-slate-500 ml-2">({pv.label})</span>}
+                                                    </span>
+                                                    <div className="flex items-center gap-1">
+                                                        <button onClick={() => handleToggleParam(pv)} className="text-amber-500 hover:text-amber-700" title="Выключить">
+                                                            <EyeOff size={14} />
+                                                        </button>
+                                                        <button onClick={() => openEditParam(cat, pv)} className="text-blue-600 hover:text-blue-800" title="Редактировать">
                                                             <Edit size={14} />
                                                         </button>
+                                                        <button onClick={() => handleDeleteParam(pv)} className="text-red-400 hover:text-red-600" title="Удалить">
+                                                            <Trash2 size={14} />
+                                                        </button>
                                                     </div>
-                                                ))
+                                                </div>
+                                            ))}
+                                            {/* + button under last active row */}
+                                            <button
+                                                onClick={() => openAddParam(cat)}
+                                                className="mt-1 w-full flex items-center justify-center gap-1 text-xs text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded py-1.5 border border-dashed border-slate-200 hover:border-blue-300 transition-colors"
+                                            >
+                                                <Plus size={14} />
+                                            </button>
+                                            {/* Inactive rows after + */}
+                                            {inactiveParams.length > 0 && (
+                                                <div className="mt-2 pt-2 border-t border-slate-100 space-y-1">
+                                                    {inactiveParams.map((pv) => (
+                                                        <div key={pv.id} className="flex items-center justify-between py-1 px-2 rounded text-sm opacity-50">
+                                                            <span className="flex items-center gap-2">
+                                                                <span className="font-medium text-slate-500">{renderParamValue(pv)}</span>
+                                                                {pv.label && <span className="text-slate-400">({pv.label})</span>}
+                                                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">Выключена</span>
+                                                            </span>
+                                                            <div className="flex items-center gap-1">
+                                                                <button onClick={() => handleToggleParam(pv)} className="text-green-500 hover:text-green-700" title="Включить">
+                                                                    <Eye size={14} />
+                                                                </button>
+                                                                <button onClick={() => openEditParam(cat, pv)} className="text-blue-600 hover:text-blue-800" title="Редактировать">
+                                                                    <Edit size={14} />
+                                                                </button>
+                                                                <button onClick={() => handleDeleteParam(pv)} className="text-red-400 hover:text-red-600" title="Удалить">
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             )}
-                                            <Button size="sm" variant="outline" onClick={() => openAddParam(cat)} className="mt-2 w-full flex items-center justify-center gap-1 text-xs">
-                                                <Plus size={14} /> Добавить
-                                            </Button>
                                         </div>
-                                    )}
-                                </div>
-                            ))}
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
                 </Card>
@@ -332,26 +459,49 @@ const SubcategoriesPage = () => {
                     <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
                         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                             <h2 className="text-lg font-bold text-slate-800">
-                                {paramEditId ? 'Редактировать значение' : `Новое значение — ${PARAM_LABELS[paramFormType]}`}
+                                {paramEditId ? 'Редактировать значение' : `Новое значение — ${SECTION_ORDER.find(s => s.key === paramFormType)?.label || ''}`}
                             </h2>
                             <button onClick={() => setParamModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                                 <X size={20} />
                             </button>
                         </div>
                         <form onSubmit={handleParamSubmit} className="p-6 space-y-4">
-                            {!paramEditId && (
+                            {paramFormType !== 'processings' ? (
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">От (min)</label>
+                                        <Input
+                                            required
+                                            type="number"
+                                            step={paramFormType === 'weights' ? '1' : '0.01'}
+                                            min="0.01"
+                                            value={paramForm.min}
+                                            onChange={e => setParamForm({ ...paramForm, min: e.target.value })}
+                                            placeholder={paramFormType === 'weights' ? 'напр. 400' : 'напр. 20'}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-700 mb-1">До (max)</label>
+                                        <Input
+                                            required
+                                            type="number"
+                                            step={paramFormType === 'weights' ? '1' : '0.01'}
+                                            min="0.01"
+                                            value={paramForm.max}
+                                            onChange={e => setParamForm({ ...paramForm, max: e.target.value })}
+                                            placeholder={paramFormType === 'weights' ? 'напр. 500' : 'напр. 23'}
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
                                 <div>
-                                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                                        {paramFormType === 'processings' ? 'Текст обработки' : 'Числовое значение'}
-                                    </label>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Текст обработки</label>
                                     <Input
                                         required
-                                        type={paramFormType === 'processings' ? 'text' : 'number'}
-                                        step={paramFormType === 'weights' ? '1' : '0.01'}
-                                        min={paramFormType === 'processings' ? undefined : '0.01'}
+                                        type="text"
                                         value={paramForm.value}
                                         onChange={e => setParamForm({ ...paramForm, value: e.target.value })}
-                                        placeholder={paramFormType === 'weights' ? 'Граммы, напр. 1000' : paramFormType === 'processings' ? 'напр. chiw' : 'напр. 12.5'}
+                                        placeholder="напр. chiw"
                                     />
                                 </div>
                             )}
@@ -384,6 +534,31 @@ const SubcategoriesPage = () => {
                                 <Button type="submit" className="flex items-center gap-2"><Save size={16} /> Сохранить</Button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Type selector modal */}
+            {typeSelectOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-xs overflow-hidden">
+                        <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <h2 className="text-lg font-bold text-slate-800">Выберите тип параметра</h2>
+                            <button onClick={() => setTypeSelectOpen(false)} className="text-slate-400 hover:text-slate-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-1">
+                            {SECTION_ORDER.map(({ key: cat, label }) => (
+                                <button
+                                    key={cat}
+                                    onClick={() => selectTypeAndAdd(cat)}
+                                    className="w-full text-left px-4 py-2 rounded-lg text-sm hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
             )}

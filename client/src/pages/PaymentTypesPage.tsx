@@ -5,6 +5,8 @@ import { API_URL } from '../config/api';
 interface PaymentType {
     id: number;
     name: string;
+    paymentId: string | null;
+    isBase: boolean;
     isDisabled: boolean;
     createdAt: string;
     updatedAt: string;
@@ -19,8 +21,13 @@ const PaymentTypesPage: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingType, setEditingType] = useState<PaymentType | null>(null);
     const [formName, setFormName] = useState('');
+    const [formPaymentId, setFormPaymentId] = useState('');
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
+
+    // Seed result/error
+    const [seedMessage, setSeedMessage] = useState<string | null>(null);
+    const [seedError, setSeedError] = useState<string | null>(null);
 
     const getHeaders = () => ({
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -50,6 +57,7 @@ const PaymentTypesPage: React.FC = () => {
     const handleCreate = () => {
         setEditingType(null);
         setFormName('');
+        setFormPaymentId('');
         setFormError('');
         setIsModalOpen(true);
     };
@@ -58,6 +66,7 @@ const PaymentTypesPage: React.FC = () => {
     const handleEdit = (pt: PaymentType) => {
         setEditingType(pt);
         setFormName(pt.name);
+        setFormPaymentId(pt.paymentId || '');
         setFormError('');
         setIsModalOpen(true);
     };
@@ -73,16 +82,23 @@ const PaymentTypesPage: React.FC = () => {
         setFormError('');
 
         try {
+            const payload: any = { name: formName.trim() };
+            if (formPaymentId.trim()) {
+                payload.paymentId = formPaymentId.trim();
+            } else {
+                payload.paymentId = null;
+            }
+
             if (editingType) {
                 await axios.put(
                     `${API_URL}/api/payment-types/${editingType.id}`,
-                    { name: formName.trim() },
+                    payload,
                     getHeaders()
                 );
             } else {
                 await axios.post(
                     `${API_URL}/api/payment-types`,
-                    { name: formName.trim() },
+                    payload,
                     getHeaders()
                 );
             }
@@ -107,11 +123,17 @@ const PaymentTypesPage: React.FC = () => {
 
     // Засеять базовые типы
     const handleSeed = async () => {
+        setSeedMessage(null);
+        setSeedError(null);
         try {
-            await axios.post(`${API_URL}/api/payment-types/seed`, {}, getHeaders());
+            const res = await axios.post(`${API_URL}/api/payment-types/seed`, {}, getHeaders());
+            setSeedMessage(res.data.message);
             fetchPaymentTypes();
-        } catch (error) {
-            console.error('Error seeding payment types:', error);
+            setTimeout(() => setSeedMessage(null), 5000);
+        } catch (error: any) {
+            const msg = error.response?.data?.error || 'Ошибка создания базовых типов';
+            setSeedError(msg);
+            setTimeout(() => setSeedError(null), 10000);
         }
     };
 
@@ -134,6 +156,18 @@ const PaymentTypesPage: React.FC = () => {
                     </button>
                 </div>
             </div>
+
+            {seedMessage && (
+                <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm">
+                    {seedMessage}
+                </div>
+            )}
+
+            {seedError && (
+                <div className="bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg text-sm whitespace-pre-line">
+                    {seedError}
+                </div>
+            )}
 
             <div className="flex items-center gap-2 mb-4">
                 <input
@@ -160,6 +194,7 @@ const PaymentTypesPage: React.FC = () => {
                         <thead className="bg-slate-900 text-slate-200">
                             <tr>
                                 <th className="px-4 py-3 text-left text-sm font-semibold">Название</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold">ID оплаты</th>
                                 <th className="px-4 py-3 text-left text-sm font-semibold">Статус</th>
                                 <th className="px-4 py-3 text-right text-sm font-semibold">Действия</th>
                             </tr>
@@ -176,9 +211,18 @@ const PaymentTypesPage: React.FC = () => {
                                         </span>
                                     </td>
                                     <td className="px-4 py-3">
+                                        {pt.paymentId ? (
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium bg-blue-50 text-blue-700 border border-blue-200">
+                                                {pt.paymentId}
+                                            </span>
+                                        ) : (
+                                            <span className="text-slate-400 text-xs">—</span>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3">
                                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${pt.isDisabled
-                                                ? 'bg-red-100 text-red-700'
-                                                : 'bg-green-100 text-green-700'
+                                            ? 'bg-red-100 text-red-700'
+                                            : 'bg-green-100 text-green-700'
                                             }`}>
                                             {pt.isDisabled ? 'Отключён' : 'Активен'}
                                         </span>
@@ -193,8 +237,8 @@ const PaymentTypesPage: React.FC = () => {
                                         <button
                                             onClick={() => handleToggle(pt)}
                                             className={`px-3 py-1 text-xs ${pt.isDisabled
-                                                    ? 'text-green-600 hover:text-green-800'
-                                                    : 'text-orange-600 hover:text-orange-800'
+                                                ? 'text-green-600 hover:text-green-800'
+                                                : 'text-orange-600 hover:text-orange-800'
                                                 }`}
                                         >
                                             {pt.isDisabled ? '✅ Включить' : '🚫 Отключить'}
@@ -235,10 +279,26 @@ const PaymentTypesPage: React.FC = () => {
                                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     autoFocus
                                 />
-                                {formError && (
-                                    <p className="mt-1 text-sm text-red-600">{formError}</p>
-                                )}
                             </div>
+                            <div className="mb-4">
+                                <label className="block text-sm font-medium text-slate-700 mb-1">
+                                    ID оплаты
+                                </label>
+                                <input
+                                    type="text"
+                                    value={formPaymentId}
+                                    onChange={(e) => setFormPaymentId(e.target.value)}
+                                    placeholder="Например: ID4"
+                                    maxLength={32}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                                <p className="mt-1 text-xs text-slate-400">
+                                    ID1, ID2, ID3 зарезервированы для базовых типов
+                                </p>
+                            </div>
+                            {formError && (
+                                <p className="mb-4 text-sm text-red-600">{formError}</p>
+                            )}
                             <div className="flex justify-end gap-3">
                                 <button
                                     onClick={() => setIsModalOpen(false)}
@@ -263,3 +323,4 @@ const PaymentTypesPage: React.FC = () => {
 };
 
 export default PaymentTypesPage;
+

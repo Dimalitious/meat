@@ -75,6 +75,10 @@ interface ParamValueOption {
     valueNum?: string | null;
     valueInt?: number | null;
     valueText?: string | null;
+    valueNumMin?: string | null;
+    valueNumMax?: string | null;
+    valueIntMin?: number | null;
+    valueIntMax?: number | null;
     label: string | null;
     sortOrder: number;
     isActive: boolean;
@@ -467,6 +471,20 @@ const CustomersPage = () => {
 
     const formatParamValue = (pv?: ParamValueOption | null) => {
         if (!pv) return '-';
+        // Range fields first
+        if (pv.valueNumMin != null && pv.valueNumMax != null) {
+            return pv.valueNumMin === pv.valueNumMax
+                ? `${pv.valueNumMin} см`
+                : `${pv.valueNumMin}–${pv.valueNumMax} см`;
+        }
+        if (pv.valueIntMin != null && pv.valueIntMax != null) {
+            if (pv.valueIntMin === pv.valueIntMax) {
+                const g = pv.valueIntMin;
+                return g >= 1000 && g % 1000 === 0 ? `${g / 1000} кг` : `${g} г`;
+            }
+            return `${pv.valueIntMin}–${pv.valueIntMax} г`;
+        }
+        // Legacy fallback
         if (pv.valueNum != null) return `${pv.valueNum} см`;
         if (pv.valueInt != null) return pv.valueInt >= 1000 && pv.valueInt % 1000 === 0 ? `${pv.valueInt / 1000} кг` : `${pv.valueInt} г`;
         return pv.valueText || '-';

@@ -29,7 +29,7 @@ interface Product {
     countryId?: number | null;
     country?: { id: number; name: string; isActive: boolean } | null;
     subcategoryId?: number | null;
-    subcategory?: { id: number; name: string; isActive: boolean } | null;
+    subcategory?: { id: number; name: string; isActive: boolean; deletedAt?: string | null } | null;
 }
 
 const ProductsPage = () => {
@@ -62,7 +62,7 @@ const ProductsPage = () => {
 
     const [uoms, setUoms] = useState<{ id: number; name: string; isDefault: boolean }[]>([]);
     const [countries, setCountries] = useState<{ id: number; name: string; isActive: boolean }[]>([]);
-    const [subcategories, setSubcategories] = useState<{ id: number; name: string; isActive: boolean }[]>([]);
+    const [subcategories, setSubcategories] = useState<{ id: number; name: string; isActive: boolean; deletedAt?: string | null }[]>([]);
 
     useEffect(() => {
         fetchProducts();
@@ -217,9 +217,10 @@ const ProductsPage = () => {
             }
             setIsModalOpen(false);
             fetchProducts();
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
-            alert('Ошибка при сохранении');
+            const msg = err.response?.data?.message || err.response?.data?.error || 'Ошибка при сохранении';
+            alert(msg);
         }
     };
 
@@ -338,6 +339,15 @@ const ProductsPage = () => {
         });
     }, [products, filterCode, filterName, filterCategory]);
 
+    const allSubcategories = useMemo(() => {
+        // Если редактируем товар и у него есть подкатегория, которой нет в списке (удалена или неактивна)
+        if (editingProduct?.subcategory && !subcategories.find(s => s.id === editingProduct.subcategory!.id)) {
+            // Добавляем виртуальную опцию (deletedAt берем из товара если есть, или считаем неактивной)
+            return [...subcategories, { ...editingProduct.subcategory, isActive: false }];
+        }
+        return subcategories;
+    }, [subcategories, editingProduct]);
+
     if (loading) return <div className="p-8 text-center text-slate-500">Загрузка...</div>;
 
     return (
@@ -452,7 +462,15 @@ const ProductsPage = () => {
                                             </span>
                                         </TableCell>
                                         <TableCell className="text-xs text-slate-600">{p.country?.name || '-'}</TableCell>
-                                        <TableCell className="text-xs text-slate-600">{p.subcategory?.name || '-'}</TableCell>
+                                        <TableCell className="text-xs text-slate-600">
+                                            {p.subcategory?.deletedAt ? (
+                                                <span className="text-red-500" title="Категория удалена">{p.subcategory.name} (удалена)</span>
+                                            ) : !p.subcategory?.isActive ? (
+                                                <span className="text-amber-500" title="Категория выключена">{p.subcategory?.name} (выкл)</span>
+                                            ) : (
+                                                p.subcategory?.name || '-'
+                                            )}
+                                        </TableCell>
                                         <TableCell className="text-xs text-slate-600">
                                             {p.uom?.name || '-'}
                                         </TableCell>
@@ -591,8 +609,10 @@ const ProductsPage = () => {
                                         required
                                     >
                                         <option value="">Выберите подкатегорию</option>
-                                        {subcategories.map(s => (
-                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        {allSubcategories.map(s => (
+                                            <option key={s.id} value={s.id} disabled={!s.isActive || !!s.deletedAt} className={!s.isActive || !!s.deletedAt ? 'text-slate-400 bg-slate-50' : ''}>
+                                                {s.name} {s.deletedAt ? '(удалена)' : !s.isActive ? '(архив)' : ''}
+                                            </option>
                                         ))}
                                     </select>
                                 </div>

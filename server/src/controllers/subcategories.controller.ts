@@ -1,14 +1,22 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
 
-// GET /api/subcategories?active=true|all
+// GET /api/subcategories?active=true|all&includeDeleted=true
 export const getSubcategories = async (req: Request, res: Response) => {
     try {
-        const { active } = req.query;
+        const { active, includeDeleted } = req.query;
         const where: any = {};
+
+        // includeDeleted=true — только для админки-справочника
+        if (includeDeleted !== 'true') {
+            where.deletedAt = null; // по умолчанию удалённые не видны
+        }
+
         if (active === 'true') {
             where.isActive = true;
         }
+        // active=all — все неудалённые (active + inactive)
+        // без параметра active — все неудалённые
 
         const items = await prisma.productSubcategory.findMany({
             where,
@@ -46,11 +54,12 @@ export const createSubcategory = async (req: Request, res: Response) => {
 export const updateSubcategory = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
-        const { name, isActive } = req.body;
+        const { name, isActive, deletedAt } = req.body;
 
         const data: any = {};
         if (name !== undefined) data.name = name.trim();
         if (isActive !== undefined) data.isActive = Boolean(isActive);
+        if (deletedAt !== undefined) data.deletedAt = deletedAt ? new Date() : null;
 
         if (Object.keys(data).length === 0) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Нет данных для обновления.' });
@@ -60,6 +69,22 @@ export const updateSubcategory = async (req: Request, res: Response) => {
             where: { id },
             data,
         });
+
+        // Cascade: when deactivating subcategory, deactivate all its params
+        if (isActive === false) {
+            await prisma.paramValue.updateMany({
+                where: { subcategoryId: id, deletedAt: null },
+                data: { isActive: false },
+            });
+        }
+        // Cascade: when activating subcategory, reactivate all non-deleted params
+        if (isActive === true) {
+            await prisma.paramValue.updateMany({
+                where: { subcategoryId: id, deletedAt: null },
+                data: { isActive: true },
+            });
+        }
+
         res.json(subcategory);
     } catch (error: any) {
         console.error('updateSubcategory error:', error);

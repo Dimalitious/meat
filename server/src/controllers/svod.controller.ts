@@ -1000,27 +1000,30 @@ export const getMmlForDistribution = async (req: Request, res: Response) => {
     try {
         const productId = Number(req.params.productId);
 
-        // Ищем MML для этого товара
-        const mml = await prisma.productionMml.findUnique({
-            where: { productId },
+        // Ищем текущую версию MML для этого товара (MAX version, not deleted)
+        const mml = await prisma.productionMml.findFirst({
+            where: { productId, isDeleted: false },
+            orderBy: { version: 'desc' },
             include: {
                 product: {
                     select: { id: true, name: true, code: true, category: true }
                 },
                 nodes: {
-                    where: { parentNodeId: null },  // Только корневые узлы
+                    where: { parentNodeId: null, isActive: true },  // Только корневые активные узлы
                     orderBy: { sortOrder: 'asc' },
                     include: {
                         product: {
                             select: { id: true, name: true, code: true }
                         },
                         children: {
+                            where: { isActive: true },
                             orderBy: { sortOrder: 'asc' },
                             include: {
                                 product: {
                                     select: { id: true, name: true, code: true }
                                 },
                                 children: {
+                                    where: { isActive: true },
                                     orderBy: { sortOrder: 'asc' },
                                     include: {
                                         product: {
@@ -1058,14 +1061,15 @@ export const getMmlForDistribution = async (req: Request, res: Response) => {
             return result;
         };
 
+        const mmlData = mml as any;
         res.json({
             mml: {
                 id: mml.id,
                 productId: mml.productId,
-                productName: mml.product?.name,
+                productName: mmlData.product?.name,
                 isLocked: mml.isLocked
             },
-            nodes: flattenNodes(mml.nodes)
+            nodes: flattenNodes(mmlData.nodes)
         });
     } catch (error) {
         console.error('getMmlForDistribution error:', error);

@@ -12,6 +12,8 @@ enum ParamType {
   WIDTH_CM
   WEIGHT_G
   PROCESSING
+  HEIGHT_CM
+  THICKNESS_CM
 }
 
 model User {
@@ -148,6 +150,8 @@ model Product {
 model UnitOfMeasure {
   id        Int      @id @default(autoincrement())
   name      String   @unique
+  code      String?  @unique   // Стабильный ключ базовой ЕИ (BLOCK, KG, M, MM, PACK, CM, UP, PCS)
+  isBase    Boolean  @default(false)  // Базовая ЕИ (заполняется через "Заполнить базовые")
   isDefault Boolean  @default(false)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -882,18 +886,24 @@ enum ProductionOpType {
 // ========== PRODUCTION MODULE (v2 - Tree Structure) ==========
 
 // MML (калькуляция/техкарта) - шапка документа
-// Один MML на один товар (productId уникален)
+// Версионирование: несколько версий на один productId
+// Текущая версия = MAX(version) WHERE isDeleted=false
 model ProductionMml {
   id          Int       @id @default(autoincrement())
-  productId   Int       @unique  // Товар, для которого создан MML
+  productId   Int       // Товар, для которого создан MML
   createdBy   Int       // User ID создателя
-  isLocked    Boolean   @default(false)  // Зафиксирован (нельзя редактировать)
+  isLocked    Boolean   @default(false)  // Frozen: есть consumers → нельзя менять структуру
   isDeleted   Boolean   @default(false)  // Мягкое удаление (soft delete)
+  isActive    Boolean   @default(true)   // Административный флаг (можно менять даже на frozen)
+  version     Int       @default(1)      // Номер версии техкарты
+  parentMmlId Int?                       // FK → предыдущая версия (для трассировки)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   
   product     Product   @relation(fields: [productId], references: [id])
   creator     User      @relation("MmlCreator", fields: [createdBy], references: [id])
+  parentMml   ProductionMml?  @relation("MmlVersions", fields: [parentMmlId], references: [id])
+  childVersions ProductionMml[] @relation("MmlVersions")
   nodes       ProductionMmlNode[]  // Дерево узлов (корневые + подпозиции)
   runs        ProductionRun[]      // Выработки по этому MML
   
@@ -903,8 +913,11 @@ model ProductionMml {
   // Production-Purchase Integration
   cuttingLines              ProductionCuttingLine[]
   
+  @@unique([productId, version])
+  @@index([productId, isDeleted, version])
   @@index([isLocked])
   @@index([isDeleted])
+  @@index([isActive])
   @@index([createdAt])
 }
 
@@ -917,6 +930,8 @@ model ProductionMmlNode {
   parentNodeId  Int?      // FK → ProductionMmlNode (NULL = корень)
   productId     Int       // FK → Product (товар узла)
   sortOrder     Int       @default(0)  // Порядок отображения
+  isActive      Boolean   @default(true)   // Выкл/Вкл узел (структурное изменение)
+  sourceNodeId  Int?      // Стабильный предок узла для трассировки между версиями
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   
@@ -930,7 +945,9 @@ model ProductionMmlNode {
   @@index([mmlId])
   @@index([parentNodeId])
   @@index([productId])
+  @@index([sourceNodeId])
   @@index([mmlId, parentNodeId, sortOrder])
+  @@index([mmlId, isActive])
 }
 
 // Выработка (документ журнала производства)
@@ -1071,6 +1088,9 @@ model ProductionAdjustment {
 model PaymentType {
   id          Int       @id @default(autoincrement())
   name        String    @unique
+  paymentId   String?   @unique  // "ID оплаты" (ID1, ID2, ID3, ...)
+  code        String?   @unique  // Стабильный ключ базовой оплаты (BANK_TRANSFER, CARD, CASH)
+  isBase      Boolean   @default(false)  // Базовый тип оплаты
   isDefault   Boolean   @default(false)  // Тип оплаты по умолчанию
   isDisabled  Boolean   @default(false)
   createdAt   DateTime  @default(now())
@@ -1965,11 +1985,14 @@ model ProductSubcategory {
   id        Int      @id @default(autoincrement())
   name      String   @unique
   isActive  Boolean  @default(true)
+  deletedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   products  Product[]
   params    ParamValue[]
+
+  @@index([isActive, deletedAt])
 }
 
 model ParamValue {
@@ -1984,14 +2007,21 @@ model ParamValue {
   product       Product?            @relation("ProductParams", fields: [productId], references: [id], onDelete: Cascade)
 
   // One of these depending on paramType
-  valueNum      Decimal?  @db.Decimal(10,2) // LENGTH/WIDTH (cm)
-  valueInt      Int?                        // WEIGHT_G (grams)
+  valueNum      Decimal?  @db.Decimal(10,2) // LENGTH/WIDTH (cm) — legacy single value
+  valueInt      Int?                        // WEIGHT_G (grams) — legacy single value
   valueText     String?                     // PROCESSING (immutable canonical value)
+
+  // Range fields (new — min/max for dimensions and weight)
+  valueNumMin   Decimal?  @db.Decimal(10,2) // min for LENGTH/WIDTH/HEIGHT/THICKNESS (cm)
+  valueNumMax   Decimal?  @db.Decimal(10,2) // max for LENGTH/WIDTH/HEIGHT/THICKNESS (cm)
+  valueIntMin   Int?                        // min for WEIGHT_G (grams)
+  valueIntMax   Int?                        // max for WEIGHT_G (grams)
 
   // Display label (can be edited). If null => auto generated on backend at create time.
   label         String?
   sortOrder     Int       @default(0)
   isActive      Boolean   @default(true)
+  deletedAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -2003,8 +2033,8 @@ model ParamValue {
 
   exclusions           ProductParamExclusion[]
 
-  @@index([subcategoryId, paramType, isActive, sortOrder])
-  @@index([productId, paramType, isActive, sortOrder])
+  @@index([subcategoryId, paramType, deletedAt, isActive, sortOrder])
+  @@index([productId, paramType, deletedAt, isActive, sortOrder])
   @@index([paramType, isActive])
 }
 

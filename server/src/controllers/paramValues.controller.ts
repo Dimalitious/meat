@@ -6,20 +6,24 @@ import { invalidateAvailableParams, invalidateBySubcategory, invalidateAllAvaila
 
 // Helper to group ParamValues by type
 function groupByType(params: any[]) {
+    const processings: any[] = [];
+    const weights: any[] = [];
     const lengths: any[] = [];
     const widths: any[] = [];
-    const weights: any[] = [];
-    const processings: any[] = [];
+    const heights: any[] = [];
+    const thicknesses: any[] = [];
 
     for (const p of params) {
         switch (p.paramType) {
+            case 'PROCESSING': processings.push(p); break;
+            case 'WEIGHT_G': weights.push(p); break;
             case 'LENGTH_CM': lengths.push(p); break;
             case 'WIDTH_CM': widths.push(p); break;
-            case 'WEIGHT_G': weights.push(p); break;
-            case 'PROCESSING': processings.push(p); break;
+            case 'HEIGHT_CM': heights.push(p); break;
+            case 'THICKNESS_CM': thicknesses.push(p); break;
         }
     }
-    return { lengths, widths, weights, processings };
+    return { processings, weights, lengths, widths, heights, thicknesses };
 }
 
 // GET /api/param-values/subcategory/:subcategoryId?active=all|true
@@ -28,9 +32,15 @@ export const getParamValuesBySubcategory = async (req: Request, res: Response) =
         const subcategoryId = Number(req.params.subcategoryId);
         const { active } = req.query;
 
-        const where: any = { subcategoryId };
+        const where: any = { subcategoryId, deletedAt: null };
         if (active === 'true') {
             where.isActive = true;
+        }
+        if (active === 'all') {
+            // admin: show inactive too, but still exclude deleted
+        }
+        if (req.query.includeDeleted === 'true') {
+            delete where.deletedAt; // admin-only: show deleted too
         }
 
         const params = await prisma.paramValue.findMany({
@@ -51,9 +61,12 @@ export const getParamValuesByProduct = async (req: Request, res: Response) => {
         const productId = Number(req.params.productId);
         const { active } = req.query;
 
-        const where: any = { productId };
+        const where: any = { productId, deletedAt: null };
         if (active === 'true') {
             where.isActive = true;
+        }
+        if (req.query.includeDeleted === 'true') {
+            delete where.deletedAt;
         }
 
         const params = await prisma.paramValue.findMany({
@@ -75,18 +88,30 @@ async function createParamValue(
     body: any,
     res: Response
 ) {
-    const { paramType, valueNum, valueInt, valueText, label, sortOrder } = body;
+    const { paramType, min, max, valueText, label, sortOrder } = body;
 
-    if (!paramType || !['LENGTH_CM', 'WIDTH_CM', 'WEIGHT_G', 'PROCESSING'].includes(paramType)) {
+    if (!paramType || !['LENGTH_CM', 'WIDTH_CM', 'WEIGHT_G', 'PROCESSING', 'HEIGHT_CM', 'THICKNESS_CM'].includes(paramType)) {
         return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Неверный paramType.' });
     }
 
-    // Validate value by type
-    if ((paramType === 'LENGTH_CM' || paramType === 'WIDTH_CM') && (valueNum == null || Number(valueNum) <= 0)) {
-        return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'valueNum обязателен и должен быть > 0.' });
+    const isNumericCm = ['LENGTH_CM', 'WIDTH_CM', 'HEIGHT_CM', 'THICKNESS_CM'].includes(paramType);
+
+    // Validate by type
+    if (isNumericCm) {
+        if (min == null || Number(min) <= 0) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'min обязателен и должен быть > 0.' });
+        }
+        if (max == null || Number(max) < Number(min)) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'max обязателен и должен быть >= min.' });
+        }
     }
-    if (paramType === 'WEIGHT_G' && (valueInt == null || Number(valueInt) <= 0)) {
-        return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'valueInt обязателен и должен быть > 0.' });
+    if (paramType === 'WEIGHT_G') {
+        if (min == null || Number(min) <= 0) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'min обязателен и должен быть > 0.' });
+        }
+        if (max == null || Number(max) < Number(min)) {
+            return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'max обязателен и должен быть >= min.' });
+        }
     }
     if (paramType === 'PROCESSING' && (!valueText || !valueText.trim())) {
         return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'valueText обязателен.' });
@@ -99,10 +124,16 @@ async function createParamValue(
         sortOrder: sortOrder != null ? Number(sortOrder) : 0,
     };
 
-    if (paramType === 'LENGTH_CM' || paramType === 'WIDTH_CM') {
-        data.valueNum = new Prisma.Decimal(String(valueNum)).toDecimalPlaces(2);
+    if (isNumericCm) {
+        const minDec = new Prisma.Decimal(String(min)).toDecimalPlaces(2);
+        const maxDec = new Prisma.Decimal(String(max)).toDecimalPlaces(2);
+        data.valueNumMin = minDec;
+        data.valueNumMax = maxDec;
+        data.valueNum = minDec; // backward compat
     } else if (paramType === 'WEIGHT_G') {
-        data.valueInt = Number(valueInt);
+        data.valueIntMin = Number(min);
+        data.valueIntMax = Number(max);
+        data.valueInt = Number(min); // backward compat
     } else if (paramType === 'PROCESSING') {
         data.valueText = normalizeProcessingText(valueText);
     }
@@ -182,24 +213,56 @@ export const createParamValueForProduct = async (req: Request, res: Response) =>
 };
 
 // PATCH /api/param-values/:id
-// Allowed: label, sortOrder, isActive only. Value fields are immutable.
+// Allowed: label, sortOrder, isActive, deletedAt, min/max range edits (not paramType)
 export const updateParamValue = async (req: Request, res: Response) => {
     try {
         const id = Number(req.params.id);
-        const { label, sortOrder, isActive, valueNum, valueInt, valueText } = req.body;
+        const { label, sortOrder, isActive, deletedAt, min, max, valueText } = req.body;
 
-        // Block attempts to change immutable value fields
-        if (valueNum !== undefined || valueInt !== undefined || valueText !== undefined) {
-            return res.status(400).json({
-                error: 'VALUE_IMMUTABLE',
-                message: 'Семантическое значение нельзя менять. Создайте новое и архивируйте старое.',
-            });
+        // Fetch existing to know paramType
+        const existing = await prisma.paramValue.findUnique({ where: { id } });
+        if (!existing) {
+            return res.status(404).json({ error: 'NOT_FOUND', message: 'Значение параметра не найдено.' });
         }
 
         const data: any = {};
         if (label !== undefined) data.label = label.trim();
         if (sortOrder !== undefined) data.sortOrder = Number(sortOrder);
         if (isActive !== undefined) data.isActive = Boolean(isActive);
+        if (deletedAt !== undefined) data.deletedAt = deletedAt ? new Date() : null;
+
+        // Range edits (not for PROCESSING)
+        const isNumericCm = ['LENGTH_CM', 'WIDTH_CM', 'HEIGHT_CM', 'THICKNESS_CM'].includes(existing.paramType);
+        if (min !== undefined || max !== undefined) {
+            if (isNumericCm) {
+                const newMin = min != null ? Number(min) : (existing.valueNumMin ? Number(existing.valueNumMin) : null);
+                const newMax = max != null ? Number(max) : (existing.valueNumMax ? Number(existing.valueNumMax) : null);
+                if (newMin == null || newMin <= 0) return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'min > 0' });
+                if (newMax == null || newMax < newMin) return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'max >= min' });
+                data.valueNumMin = new Prisma.Decimal(String(newMin)).toDecimalPlaces(2);
+                data.valueNumMax = new Prisma.Decimal(String(newMax)).toDecimalPlaces(2);
+                data.valueNum = data.valueNumMin; // backward compat
+            } else if (existing.paramType === 'WEIGHT_G') {
+                const newMin = min != null ? Number(min) : existing.valueIntMin;
+                const newMax = max != null ? Number(max) : existing.valueIntMax;
+                if (newMin == null || newMin <= 0) return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'min > 0' });
+                if (newMax == null || newMax < newMin) return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'max >= min' });
+                data.valueIntMin = newMin;
+                data.valueIntMax = newMax;
+                data.valueInt = newMin; // backward compat
+            }
+        }
+
+        // Processing text edit
+        if (valueText !== undefined && existing.paramType === 'PROCESSING') {
+            data.valueText = normalizeProcessingText(valueText);
+        }
+
+        // Regenerate label if range changed and no explicit label set
+        if ((min !== undefined || max !== undefined) && label === undefined) {
+            const merged = { ...existing, ...data };
+            data.label = autoLabel(existing.paramType, merged);
+        }
 
         if (Object.keys(data).length === 0) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Нет данных для обновления.' });
@@ -232,9 +295,12 @@ export const updateParamValue = async (req: Request, res: Response) => {
             response.warning = `${affectedVariants} активных вариантов используют это значение и будут отмечены как "(архив)".`;
         }
 
-        // Invalidate available params cache only when isActive changes
-        if (isActive !== undefined) {
-            invalidateAllAvailableParams();
+        // Invalidate cache on ANY change (not just isActive)
+        if (updated.subcategoryId) {
+            invalidateBySubcategory(updated.subcategoryId);
+        }
+        if (updated.productId) {
+            invalidateAvailableParams(updated.productId);
         }
 
         res.json(response);

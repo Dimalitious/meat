@@ -6,9 +6,9 @@ import { getAvailableParamsForProductId } from '../services/productParams.servic
 const VARIANT_LIMIT = 200;
 
 const variantInclude = {
-    lengthParamValue: { select: { id: true, paramType: true, valueNum: true, label: true, isActive: true } },
-    widthParamValue: { select: { id: true, paramType: true, valueNum: true, label: true, isActive: true } },
-    weightParamValue: { select: { id: true, paramType: true, valueInt: true, label: true, isActive: true } },
+    lengthParamValue: { select: { id: true, paramType: true, valueNum: true, valueNumMin: true, valueNumMax: true, label: true, isActive: true } },
+    widthParamValue: { select: { id: true, paramType: true, valueNum: true, valueNumMin: true, valueNumMax: true, label: true, isActive: true } },
+    weightParamValue: { select: { id: true, paramType: true, valueInt: true, valueIntMin: true, valueIntMax: true, label: true, isActive: true } },
     processingParamValue: { select: { id: true, paramType: true, valueText: true, label: true, isActive: true } },
 };
 

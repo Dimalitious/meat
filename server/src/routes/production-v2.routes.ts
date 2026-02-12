@@ -11,6 +11,9 @@ import {
     addChildNode,
     deleteNode,
     toggleMmlLock,
+    toggleMmlActive,
+    toggleNodeActive,
+    cloneMmlVersion,
     deleteMml,
     softDeleteMml,
     restoreMml,
@@ -90,6 +93,13 @@ router.delete('/mml/:id', requirePermission(PERM.MML_MANAGE), deleteMml);
 
 // Lock/unlock MML (separate permission)
 router.patch('/mml/:id/lock', requirePermission(PERM.MML_LOCK), toggleMmlLock);
+
+// Toggle active MML / node
+router.patch('/mml/:id/toggle-active', requirePermission(PERM.MML_MANAGE), toggleMmlActive);
+router.patch('/mml/node/:nodeId/toggle-active', requirePermission(PERM.MML_MANAGE), toggleNodeActive);
+
+// Clone MML as new version
+router.post('/mml/:id/clone-version', requirePermission(PERM.MML_MANAGE), cloneMmlVersion);
 
 // ============================================
 // Production Run - Выработка

@@ -1,6 +1,17 @@
 import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
 import { getUtcRangeFromYmd } from '../utils/dateRange';
+import {
+    assertMmlUsableForNewOps,
+    assertMmlMutable,
+    assertMmlAdminMutable,
+    assertHasActiveNodes,
+    hasMmlConsumers,
+    getCurrentMmlByProductId,
+    requireCurrentMmlByProductId,
+    handleMmlGuardError,
+    MmlGuardError,
+} from '../services/mml.service';
 
 const prisma = new PrismaClient();
 
@@ -10,16 +21,22 @@ const prisma = new PrismaClient();
 
 /**
  * Получить список всех MML (для левой панели)
+ * Поддерживает фильтры: search, isLocked, showDeleted, showInactive
  */
 export const getMmlList = async (req: Request, res: Response) => {
     try {
-        const { search, isLocked, showDeleted } = req.query;
+        const { search, isLocked, showDeleted, showInactive } = req.query;
 
         const where: any = {};
 
         // По умолчанию не показываем удалённые
         if (showDeleted !== 'true') {
             where.isDeleted = false;
+        }
+
+        // По умолчанию показываем только активные
+        if (showInactive !== 'true') {
+            where.isActive = true;
         }
 
         if (search) {
@@ -48,7 +65,7 @@ export const getMmlList = async (req: Request, res: Response) => {
                     select: { nodes: true, runs: true }
                 }
             },
-            orderBy: { createdAt: 'desc' }
+            orderBy: [{ productId: 'asc' }, { version: 'desc' }]
         });
 
         res.json(mmls);
@@ -109,14 +126,21 @@ export const getMmlById = async (req: Request, res: Response) => {
 };
 
 /**
- * Получить MML по productId
+ * Получить MML по productId — текущую версию (MAX version, not deleted)
  */
 export const getMmlByProductId = async (req: Request, res: Response) => {
     try {
         const productId = Number(req.params.productId);
 
+        // Используем current-resolver вместо findUnique
+        const mmlHeader = await getCurrentMmlByProductId(prisma, productId);
+
+        if (!mmlHeader) {
+            return res.json(null); // MML не существует для этого товара
+        }
+
         const mml = await prisma.productionMml.findUnique({
-            where: { productId },
+            where: { id: mmlHeader.id },
             include: {
                 product: {
                     select: { id: true, code: true, name: true, priceListName: true }
@@ -124,7 +148,10 @@ export const getMmlByProductId = async (req: Request, res: Response) => {
                 nodes: {
                     include: {
                         product: {
-                            select: { id: true, code: true, name: true, priceListName: true }
+                            select: {
+                                id: true, code: true, name: true, priceListName: true,
+                                uom: { select: { id: true, name: true, code: true } }
+                            }
                         }
                     },
                     orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
@@ -133,16 +160,17 @@ export const getMmlByProductId = async (req: Request, res: Response) => {
         });
 
         if (!mml) {
-            return res.json(null); // MML не существует для этого товара
+            return res.json(null);
         }
 
         // Построение дерева
-        const rootNodes = mml.nodes.filter(n => n.parentNodeId === null);
-        const childNodes = mml.nodes.filter(n => n.parentNodeId !== null);
+        const mmlData = mml as any;
+        const rootNodes = mmlData.nodes.filter((n: any) => n.parentNodeId === null);
+        const childNodes = mmlData.nodes.filter((n: any) => n.parentNodeId !== null);
 
-        const tree = rootNodes.map(root => ({
+        const tree = rootNodes.map((root: any) => ({
             ...root,
-            children: childNodes.filter(c => c.parentNodeId === root.id)
+            children: childNodes.filter((c: any) => c.parentNodeId === root.id)
         }));
 
         res.json({
@@ -156,7 +184,7 @@ export const getMmlByProductId = async (req: Request, res: Response) => {
 };
 
 /**
- * Создать новый MML
+ * Создать новый MML (version=1 для нового productId)
  */
 export const createMml = async (req: Request, res: Response) => {
     try {
@@ -171,19 +199,25 @@ export const createMml = async (req: Request, res: Response) => {
             return res.status(401).json({ error: 'User not authenticated' });
         }
 
-        // Проверка, что MML для этого товара не существует
-        const existing = await prisma.productionMml.findUnique({
-            where: { productId: Number(productId) }
-        });
+        // Проверка: есть ли уже current (не удалённая) версия MML для этого товара?
+        const existing = await getCurrentMmlByProductId(prisma, Number(productId));
 
         if (existing) {
-            return res.status(400).json({ error: 'MML already exists for this product' });
+            return res.status(400).json({ error: 'У товара уже есть техкарта. Создайте новую версию через клонирование.' });
         }
+
+        // Определить следующий номер версии (на случай если все предыдущие удалены)
+        const maxVersion = await prisma.productionMml.aggregate({
+            where: { productId: Number(productId) },
+            _max: { version: true },
+        });
+        const nextVersion = (maxVersion._max.version ?? 0) + 1;
 
         const mml = await prisma.productionMml.create({
             data: {
                 productId: Number(productId),
-                createdBy: userId
+                createdBy: userId,
+                version: nextVersion,
             },
             include: {
                 product: {
@@ -214,14 +248,12 @@ export const addRootNode = async (req: Request, res: Response) => {
         const mmlId = Number(req.params.id);
         const { productId } = req.body;
 
-        // Проверка что MML не заблокирован
+        // Проверка: MML существует и доступен для структурных изменений
         const mml = await prisma.productionMml.findUnique({ where: { id: mmlId } });
         if (!mml) {
             return res.status(404).json({ error: 'MML not found' });
         }
-        if (mml.isLocked) {
-            return res.status(400).json({ error: 'MML is locked, cannot edit' });
-        }
+        await assertMmlMutable(prisma, mml);
 
         // Получить максимальный sortOrder
         const lastNode = await prisma.productionMmlNode.findFirst({
@@ -246,6 +278,7 @@ export const addRootNode = async (req: Request, res: Response) => {
 
         res.status(201).json(node);
     } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
         console.error('addRootNode error:', error);
         res.status(500).json({ error: 'Failed to add root node' });
     }
@@ -260,14 +293,12 @@ export const addChildNode = async (req: Request, res: Response) => {
         const parentNodeId = Number(req.params.parentNodeId);
         const { productId } = req.body;
 
-        // Проверка что MML не заблокирован
+        // Проверка: MML существует и доступен для структурных изменений
         const mml = await prisma.productionMml.findUnique({ where: { id: mmlId } });
         if (!mml) {
             return res.status(404).json({ error: 'MML not found' });
         }
-        if (mml.isLocked) {
-            return res.status(400).json({ error: 'MML is locked, cannot edit' });
-        }
+        await assertMmlMutable(prisma, mml);
 
         // Проверка что родительский узел существует
         const parentNode = await prisma.productionMmlNode.findUnique({ where: { id: parentNodeId } });
@@ -298,6 +329,7 @@ export const addChildNode = async (req: Request, res: Response) => {
 
         res.status(201).json(node);
     } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
         console.error('addChildNode error:', error);
         res.status(500).json({ error: 'Failed to add child node' });
     }
@@ -318,15 +350,14 @@ export const deleteNode = async (req: Request, res: Response) => {
         if (!node) {
             return res.status(404).json({ error: 'Node not found' });
         }
-        if (node.mml.isLocked) {
-            return res.status(400).json({ error: 'MML is locked, cannot delete node' });
-        }
+        await assertMmlMutable(prisma, node.mml);
 
         // Cascade delete удалит и дочерние узлы
         await prisma.productionMmlNode.delete({ where: { id: nodeId } });
 
         res.json({ success: true });
     } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
         console.error('deleteNode error:', error);
         res.status(500).json({ error: 'Failed to delete node' });
     }
@@ -334,6 +365,7 @@ export const deleteNode = async (req: Request, res: Response) => {
 
 /**
  * Зафиксировать/разблокировать MML (переключение)
+ * Unlock запрещён, если есть consumers (ProductionRun, CuttingLine)
  */
 export const toggleMmlLock = async (req: Request, res: Response) => {
     try {
@@ -343,6 +375,16 @@ export const toggleMmlLock = async (req: Request, res: Response) => {
         const current = await prisma.productionMml.findUnique({ where: { id } });
         if (!current) {
             return res.status(404).json({ error: 'MML not found' });
+        }
+
+        // Если пытаемся разблокировать — проверяем наличие consumers
+        if (current.isLocked) {
+            const hasConsumers = await hasMmlConsumers(prisma, id);
+            if (hasConsumers) {
+                return res.status(409).json({
+                    error: 'Нельзя разблокировать MML: есть операции (выработки/разделка). Создайте новую версию.'
+                });
+            }
         }
 
         // Переключаем состояние
@@ -382,6 +424,214 @@ export const toggleMmlLock = async (req: Request, res: Response) => {
     } catch (error) {
         console.error('toggleMmlLock error:', error);
         res.status(500).json({ error: 'Failed to toggle MML lock' });
+    }
+};
+
+/**
+ * Переключить isActive для MML (административное — работает даже на frozen)
+ * PATCH /mml/:id/toggle-active
+ */
+export const toggleMmlActive = async (req: Request, res: Response) => {
+    try {
+        const id = Number(req.params.id);
+
+        const mml = await prisma.productionMml.findUnique({ where: { id } });
+        if (!mml) {
+            return res.status(404).json({ error: 'MML not found' });
+        }
+        assertMmlAdminMutable(mml);
+
+        const updated = await prisma.productionMml.update({
+            where: { id },
+            data: { isActive: !mml.isActive },
+            include: {
+                product: { select: { id: true, code: true, name: true, priceListName: true } },
+                creator: { select: { id: true, name: true } },
+            }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
+        console.error('toggleMmlActive error:', error);
+        res.status(500).json({ error: 'Failed to toggle MML active status' });
+    }
+};
+
+/**
+ * Переключить isActive для узла MML (структурное изменение — заблокировано на frozen)
+ * PATCH /mml/node/:nodeId/toggle-active
+ */
+export const toggleNodeActive = async (req: Request, res: Response) => {
+    try {
+        const nodeId = Number(req.params.nodeId);
+
+        const node = await prisma.productionMmlNode.findUnique({
+            where: { id: nodeId },
+            include: { mml: true }
+        });
+        if (!node) {
+            return res.status(404).json({ error: 'Node not found' });
+        }
+        await assertMmlMutable(prisma, node.mml);
+
+        const updated = await prisma.productionMmlNode.update({
+            where: { id: nodeId },
+            data: { isActive: !node.isActive },
+            include: {
+                product: { select: { id: true, code: true, name: true, priceListName: true } }
+            }
+        });
+
+        res.json(updated);
+    } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
+        console.error('toggleNodeActive error:', error);
+        res.status(500).json({ error: 'Failed to toggle node active status' });
+    }
+};
+
+/**
+ * Клонировать MML как новую версию (deep copy tree + sourceNodeId)
+ * Поддерживает произвольную глубину дерева.
+ * POST /mml/:id/clone-version
+ */
+export const cloneMmlVersion = async (req: Request, res: Response) => {
+    try {
+        const sourceMmlId = Number(req.params.id);
+        const userId = (req as any).user?.userId;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'User not authenticated' });
+        }
+
+        // Загрузить исходный MML с узлами
+        const sourceMml = await prisma.productionMml.findUnique({
+            where: { id: sourceMmlId },
+            include: {
+                nodes: {
+                    orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                }
+            }
+        });
+
+        if (!sourceMml) {
+            return res.status(404).json({ error: 'Source MML not found' });
+        }
+        if (sourceMml.isDeleted) {
+            return res.status(400).json({ error: 'Cannot clone deleted MML' });
+        }
+
+        // Внутренняя функция клонирования (для retry)
+        const doClone = async (attempt: number = 1): Promise<any> => {
+            try {
+                return await prisma.$transaction(async (tx) => {
+                    // 1. Определить версию ВНУТРИ транзакции (предотвращение race condition)
+                    const maxVersion = await tx.productionMml.aggregate({
+                        where: { productId: sourceMml.productId },
+                        _max: { version: true },
+                    });
+                    const nextVersion = (maxVersion._max.version ?? 0) + 1;
+
+                    // 2. Создать новый MML
+                    const clonedMml = await tx.productionMml.create({
+                        data: {
+                            productId: sourceMml.productId,
+                            createdBy: userId,
+                            version: nextVersion,
+                            parentMmlId: sourceMmlId,
+                            isLocked: false,
+                            isActive: true,
+                            isDeleted: false,
+                        },
+                    });
+
+                    // 3. Клонировать ВСЕ узлы итеративно (произвольная глубина)
+                    // Топологическая сортировка: корни (parentNodeId=null) первые,
+                    // затем дети — в порядке, где parent уже вставлен
+                    const allNodes = [...sourceMml.nodes];
+                    const nodeIdMap = new Map<number, number>();
+                    const pending = [...allNodes];
+                    let maxIterations = pending.length * 2; // защита от циклов
+
+                    while (pending.length > 0 && maxIterations-- > 0) {
+                        for (let i = pending.length - 1; i >= 0; i--) {
+                            const node = pending[i];
+                            const isRoot = node.parentNodeId === null;
+                            const parentMapped = node.parentNodeId !== null && nodeIdMap.has(node.parentNodeId);
+
+                            if (isRoot || parentMapped) {
+                                const newParentId = isRoot ? null : nodeIdMap.get(node.parentNodeId!)!;
+                                const newNode = await tx.productionMmlNode.create({
+                                    data: {
+                                        mmlId: clonedMml.id,
+                                        parentNodeId: newParentId,
+                                        productId: node.productId,
+                                        sortOrder: node.sortOrder,
+                                        isActive: node.isActive,
+                                        sourceNodeId: node.id,
+                                    },
+                                });
+                                nodeIdMap.set(node.id, newNode.id);
+                                pending.splice(i, 1);
+                            }
+                        }
+                    }
+
+                    if (pending.length > 0) {
+                        throw new Error(`Clone failed: ${pending.length} orphan nodes detected (circular parent references?)`);
+                    }
+
+                    // 4. Загрузить полный результат
+                    return tx.productionMml.findUnique({
+                        where: { id: clonedMml.id },
+                        include: {
+                            product: { select: { id: true, code: true, name: true, priceListName: true } },
+                            creator: { select: { id: true, name: true, username: true } },
+                            nodes: {
+                                include: {
+                                    product: { select: { id: true, code: true, name: true, priceListName: true } }
+                                },
+                                orderBy: [{ parentNodeId: 'asc' }, { sortOrder: 'asc' }]
+                            }
+                        }
+                    });
+                });
+            } catch (err: any) {
+                // P2002 = unique constraint violation (race condition on version)
+                if (err?.code === 'P2002' && attempt < 2) {
+                    console.warn(`cloneMmlVersion: P2002 on attempt ${attempt}, retrying...`);
+                    return doClone(attempt + 1);
+                }
+                throw err;
+            }
+        };
+
+        const newMml = await doClone();
+
+        if (!newMml) {
+            return res.status(500).json({ error: 'Failed to clone MML' });
+        }
+
+        // Построить дерево для ответа (рекурсивно, любая глубина)
+        const buildTree = (nodes: any[], parentId: number | null): any[] => {
+            return nodes
+                .filter((n: any) => n.parentNodeId === parentId)
+                .map((n: any) => ({
+                    ...n,
+                    children: buildTree(nodes, n.id)
+                }));
+        };
+        const tree = buildTree(newMml.nodes, null);
+
+        res.status(201).json({
+            ...newMml,
+            rootNodes: tree
+        });
+    } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
+        console.error('cloneMmlVersion error:', error);
+        res.status(500).json({ error: 'Failed to clone MML version' });
     }
 };
 
@@ -666,6 +916,7 @@ export const getProductionRunById = async (req: Request, res: Response) => {
 
 /**
  * Создать новую выработку
+ * Использует current-resolver для MML + guards + auto-freeze в транзакции
  */
 export const createProductionRun = async (req: Request, res: Response) => {
     try {
@@ -676,11 +927,21 @@ export const createProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'productId is required' });
         }
 
-        // Проверка что MML существует и получаем его структуру
+        // 1. Найти текущую версию MML (MAX version, not deleted)
+        const mmlHeader = await requireCurrentMmlByProductId(prisma, Number(productId));
+
+        // 2. Проверить что MML доступна для новых операций
+        assertMmlUsableForNewOps(mmlHeader);
+
+        // 3. Проверить что есть активные узлы
+        await assertHasActiveNodes(prisma, mmlHeader.id);
+
+        // 4. Загрузить полную структуру MML с узлами
         const mml = await prisma.productionMml.findUnique({
-            where: { productId: Number(productId) },
+            where: { id: mmlHeader.id },
             include: {
                 nodes: {
+                    where: { isActive: true }, // Только активные узлы для новых операций
                     include: {
                         product: {
                             select: { id: true, code: true, name: true, priceListName: true }
@@ -717,30 +978,41 @@ export const createProductionRun = async (req: Request, res: Response) => {
             }
         }
 
-        const run = await prisma.productionRun.create({
-            data: {
-                productId: Number(productId),
-                mmlId: mml.id,
-                userId,
-                productionDate: productionDate ? new Date(productionDate) : new Date(),
-                plannedWeight: plannedWeight ? Number(plannedWeight) : null,
-                actualWeight: 0,
-                isHidden: false,
-                // V3: Source tracking
-                sourcePurchaseItemId: sourcePurchaseItemId ? Number(sourcePurchaseItemId) : null,
-                sourceType: effectiveSourceType
-            },
-            include: {
-                product: {
-                    select: { id: true, code: true, name: true, priceListName: true }
-                },
-                user: {
-                    select: { id: true, name: true }
-                }
+        // 5. Создать run + auto-freeze MML в одной транзакции
+        const run = await prisma.$transaction(async (tx) => {
+            // Auto-freeze: ставим isLocked=true при первом consumer
+            if (!mml.isLocked) {
+                await tx.productionMml.update({
+                    where: { id: mml.id },
+                    data: { isLocked: true },
+                });
             }
+
+            return tx.productionRun.create({
+                data: {
+                    productId: Number(productId),
+                    mmlId: mml.id,
+                    userId,
+                    productionDate: productionDate ? new Date(productionDate) : new Date(),
+                    plannedWeight: plannedWeight ? Number(plannedWeight) : null,
+                    actualWeight: 0,
+                    isHidden: false,
+                    // V3: Source tracking
+                    sourcePurchaseItemId: sourcePurchaseItemId ? Number(sourcePurchaseItemId) : null,
+                    sourceType: effectiveSourceType
+                },
+                include: {
+                    product: {
+                        select: { id: true, code: true, name: true, priceListName: true }
+                    },
+                    user: {
+                        select: { id: true, name: true }
+                    }
+                }
+            });
         });
 
-        // Построение дерева MML для ответа
+        // Построение дерева MML для ответа (только активные узлы)
         const rootNodes = mml.nodes.filter(n => n.parentNodeId === null);
         const childNodes = mml.nodes.filter(n => n.parentNodeId !== null);
         const tree = rootNodes.map(root => ({
@@ -763,6 +1035,7 @@ export const createProductionRun = async (req: Request, res: Response) => {
             values: []
         });
     } catch (error) {
+        if (handleMmlGuardError(res, error)) return;
         console.error('createProductionRun error:', error);
         res.status(500).json({ error: 'Failed to create production run' });
     }

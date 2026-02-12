@@ -12,7 +12,7 @@ export { getAvailableParamsForProductId };
  */
 export const getAvailableParams = async (req: Request, res: Response) => {
     try {
-        const { code } = req.params;
+        const { code } = req.params as { code: string };
 
         const product = await prisma.product.findUnique({
             where: { code },
@@ -26,10 +26,12 @@ export const getAvailableParams = async (req: Request, res: Response) => {
             // No subcategory → return empty
             return res.json({
                 product: { id: product.id, code: product.code, name: product.name, subcategoryId: null },
+                processings: [],
+                weights: [],
                 lengths: [],
                 widths: [],
-                weights: [],
-                processings: [],
+                heights: [],
+                thicknesses: [],
                 warning: 'У товара не задана подкатегория.',
             });
         }
@@ -39,6 +41,7 @@ export const getAvailableParams = async (req: Request, res: Response) => {
             prisma.paramValue.findMany({
                 where: {
                     isActive: true,
+                    deletedAt: null,
                     OR: [
                         { subcategoryId: product.subcategoryId },
                         { productId: product.id },
@@ -57,26 +60,32 @@ export const getAvailableParams = async (req: Request, res: Response) => {
         const available = params.filter(p => p.productId !== null || !excludedSet.has(p.id));
 
         // Group by type
+        const processings: any[] = [];
+        const weights: any[] = [];
         const lengths: any[] = [];
         const widths: any[] = [];
-        const weights: any[] = [];
-        const processings: any[] = [];
+        const heights: any[] = [];
+        const thicknesses: any[] = [];
 
         for (const p of available) {
             switch (p.paramType) {
+                case 'PROCESSING': processings.push(p); break;
+                case 'WEIGHT_G': weights.push(p); break;
                 case 'LENGTH_CM': lengths.push(p); break;
                 case 'WIDTH_CM': widths.push(p); break;
-                case 'WEIGHT_G': weights.push(p); break;
-                case 'PROCESSING': processings.push(p); break;
+                case 'HEIGHT_CM': heights.push(p); break;
+                case 'THICKNESS_CM': thicknesses.push(p); break;
             }
         }
 
         res.json({
             product: { id: product.id, code: product.code, name: product.name, subcategoryId: product.subcategoryId },
+            processings,
+            weights,
             lengths,
             widths,
-            weights,
-            processings,
+            heights,
+            thicknesses,
         });
     } catch (error) {
         console.error('getAvailableParams error:', error);

@@ -12,6 +12,8 @@ interface CacheEntry {
 interface AvailableParams {
     lengths: any[];
     widths: any[];
+    heights: any[];
+    thicknesses: any[];
     weights: any[];
     processings: any[];
 }
@@ -61,7 +63,7 @@ export async function getAvailableParamsForProductId(productId: number): Promise
         select: { id: true, subcategoryId: true },
     });
 
-    const empty: AvailableParams = { lengths: [], widths: [], weights: [], processings: [] };
+    const empty: AvailableParams = { lengths: [], widths: [], heights: [], thicknesses: [], weights: [], processings: [] };
 
     if (!product || !product.subcategoryId) {
         return empty;
@@ -71,6 +73,7 @@ export async function getAvailableParamsForProductId(productId: number): Promise
         prisma.paramValue.findMany({
             where: {
                 isActive: true,
+                deletedAt: null,
                 OR: [
                     { subcategoryId: product.subcategoryId },
                     { productId: product.id },
@@ -86,12 +89,14 @@ export async function getAvailableParamsForProductId(productId: number): Promise
     const excludedSet = new Set(exclusions.map(e => e.paramValueId));
     const available = params.filter(p => p.productId !== null || !excludedSet.has(p.id));
 
-    const result: AvailableParams = { lengths: [], widths: [], weights: [], processings: [] };
+    const result: AvailableParams = { lengths: [], widths: [], heights: [], thicknesses: [], weights: [], processings: [] };
 
     for (const p of available) {
         switch (p.paramType) {
             case 'LENGTH_CM': result.lengths.push(p); break;
             case 'WIDTH_CM': result.widths.push(p); break;
+            case 'HEIGHT_CM': result.heights.push(p); break;
+            case 'THICKNESS_CM': result.thicknesses.push(p); break;
             case 'WEIGHT_G': result.weights.push(p); break;
             case 'PROCESSING': result.processings.push(p); break;
         }

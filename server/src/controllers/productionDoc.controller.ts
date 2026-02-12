@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { assertMmlUsableForNewOps, handleMmlGuardError } from '../services/mml.service';
 
 const prisma = new PrismaClient();
 
@@ -421,15 +422,16 @@ export const applyCutting = async (req: Request, res: Response) => {
             });
         }
 
-        // 3. Проверить MML
+        // 3. Проверить MML + guards
         const mml = await prisma.productionMml.findUnique({
             where: { id: mmlId },
-            include: { nodes: { include: { product: true } } }
+            include: { nodes: { where: { isActive: true }, include: { product: true } } }
         });
 
         if (!mml) {
             return res.status(404).json({ error: 'MML не найден' });
         }
+        assertMmlUsableForNewOps(mml);
 
         // 4. Создать линии разделки и обновить outputs (в транзакции)
         await prisma.$transaction(async (tx) => {
@@ -497,8 +499,9 @@ export const applyCutting = async (req: Request, res: Response) => {
             doc: updatedDoc,
         });
     } catch (error) {
-        console.error('Error applying cutting:', error);
-        res.status(500).json({ error: 'Ошибка применения разделки' });
+        if (handleMmlGuardError(res, error)) return;
+        console.error('applyCutting error:', error);
+        res.status(500).json({ error: 'Ошибка при применении разделки' });
     }
 };
 
