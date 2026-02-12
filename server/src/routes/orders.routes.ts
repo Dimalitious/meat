@@ -58,4 +58,9 @@ router.post('/:id/rework', requirePermission(PERM.ORDERS_CHANGE_STATUS), orders.
 // Invoice: Generate invoice on-the-fly (ТЗ §6.2)
 router.get('/:id/invoice', requirePermission(PERM.ORDERS_READ), orders.generateInvoice);
 
+// Telegram: Send order to supplier's Telegram group
+import * as supplierTelegram from '../controllers/supplierTelegram.controller';
+router.post('/:id/send-telegram', requirePermission(PERM.ORDERS_EDIT), supplierTelegram.sendOrderToSupplier);
+router.get('/:id/telegram-logs', requirePermission(PERM.ORDERS_READ), supplierTelegram.getOrderTelegramLogs);
+
 export default router;

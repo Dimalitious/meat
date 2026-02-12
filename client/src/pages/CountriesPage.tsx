@@ -3,7 +3,7 @@ import api from '../config/axios';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../components/ui/Table';
-import { Plus, Edit, Save, X } from 'lucide-react';
+import { Plus, Edit, Save, X, Trash2, Eye, EyeOff } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 
 interface Country {
@@ -18,12 +18,13 @@ const CountriesPage = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editing, setEditing] = useState<Country | null>(null);
     const [formData, setFormData] = useState({ name: '', isActive: true });
+    const [showArchived, setShowArchived] = useState(false);
 
-    useEffect(() => { fetchItems(); }, []);
+    useEffect(() => { fetchItems(); }, [showArchived]);
 
     const fetchItems = async () => {
         try {
-            const res = await api.get('/api/countries?active=all');
+            const res = await api.get(`/api/countries?active=${showArchived ? 'all' : 'true'}`);
             setItems(res.data.items);
         } catch (error) {
             console.error(error);
@@ -42,6 +43,16 @@ const CountriesPage = () => {
         setEditing(item);
         setFormData({ name: item.name, isActive: item.isActive });
         setIsModalOpen(true);
+    };
+
+    const handleSoftDelete = async (item: Country) => {
+        if (!confirm(`Вы уверены, что хотите ${item.isActive ? 'архивировать' : 'восстановить'} "${item.name}"?`)) return;
+        try {
+            await api.patch(`/api/countries/${item.id}`, { isActive: !item.isActive });
+            fetchItems();
+        } catch (error: any) {
+            alert(error.response?.data?.message || 'Ошибка');
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -65,30 +76,44 @@ const CountriesPage = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-900">Страны</h1>
-                <Button onClick={handleCreate} className="flex items-center gap-2">
-                    <Plus size={16} /> Добавить
-                </Button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setShowArchived(!showArchived)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${showArchived
+                                ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                    >
+                        {showArchived ? <Eye size={16} /> : <EyeOff size={16} />}
+                        {showArchived ? 'Показаны все' : 'Показать архив'}
+                    </button>
+                    <Button onClick={handleCreate} className="flex items-center gap-2">
+                        <Plus size={16} /> Добавить
+                    </Button>
+                </div>
             </div>
 
             <Card>
                 <Table>
                     <TableHeader>
                         <TableRow>
+                            <TableHead className="w-[60px]">ID</TableHead>
                             <TableHead>Название</TableHead>
                             <TableHead>Статус</TableHead>
-                            <TableHead className="w-[80px]"></TableHead>
+                            <TableHead className="w-[100px]"></TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {items.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={3} className="text-center text-slate-500 py-8">
+                                <TableCell colSpan={4} className="text-center text-slate-500 py-8">
                                     Нет данных
                                 </TableCell>
                             </TableRow>
                         ) : (
                             items.map((item) => (
                                 <TableRow key={item.id} className={!item.isActive ? 'opacity-50' : ''}>
+                                    <TableCell className="text-xs text-slate-400 font-mono">{item.id}</TableCell>
                                     <TableCell className="font-medium">{item.name}</TableCell>
                                     <TableCell>
                                         <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -96,9 +121,18 @@ const CountriesPage = () => {
                                         </span>
                                     </TableCell>
                                     <TableCell>
-                                        <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800">
-                                            <Edit size={16} />
-                                        </button>
+                                        <div className="flex gap-2 justify-end">
+                                            <button onClick={() => handleEdit(item)} className="text-blue-600 hover:text-blue-800">
+                                                <Edit size={16} />
+                                            </button>
+                                            <button
+                                                onClick={() => handleSoftDelete(item)}
+                                                className={item.isActive ? 'text-red-500 hover:text-red-700' : 'text-green-600 hover:text-green-800'}
+                                                title={item.isActive ? 'Архивировать' : 'Восстановить'}
+                                            >
+                                                <Trash2 size={16} />
+                                            </button>
+                                        </div>
                                     </TableCell>
                                 </TableRow>
                             ))

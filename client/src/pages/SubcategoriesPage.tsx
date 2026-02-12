@@ -100,7 +100,8 @@ const SubcategoriesPage = () => {
             setIsModalOpen(false);
             fetchItems();
         } catch (error: any) {
-            alert(error.response?.data?.message || 'Ошибка сохранения');
+            const msg = error.response?.data?.message || error.response?.data?.error || 'Ошибка сохранения';
+            alert(msg);
         }
     };
 
@@ -202,6 +203,7 @@ const SubcategoriesPage = () => {
                     <Table>
                         <TableHeader>
                             <TableRow>
+                                <TableHead className="w-[60px]">ID</TableHead>
                                 <TableHead>Название</TableHead>
                                 <TableHead>Статус</TableHead>
                                 <TableHead className="w-[80px]"></TableHead>
@@ -210,7 +212,7 @@ const SubcategoriesPage = () => {
                         <TableBody>
                             {items.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={3} className="text-center text-slate-500 py-8">Нет данных</TableCell>
+                                    <TableCell colSpan={4} className="text-center text-slate-500 py-8">Нет данных</TableCell>
                                 </TableRow>
                             ) : (
                                 items.map((item) => (
@@ -219,6 +221,7 @@ const SubcategoriesPage = () => {
                                         className={`cursor-pointer ${!item.isActive ? 'opacity-50' : ''} ${selectedSubcat?.id === item.id ? 'bg-blue-50' : 'hover:bg-slate-50'}`}
                                         onClick={() => handleSelectSubcat(item)}
                                     >
+                                        <TableCell className="text-xs text-slate-400 font-mono">{item.id}</TableCell>
                                         <TableCell className="font-medium">{item.name}</TableCell>
                                         <TableCell>
                                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>

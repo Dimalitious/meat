@@ -123,8 +123,7 @@ const PurchasesPage: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-bold text-slate-900">Журнал закупок</h1>
+            <div className="flex justify-end items-center">
                 <button
                     onClick={() => navigate('/purchases/new')}
                     className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700"

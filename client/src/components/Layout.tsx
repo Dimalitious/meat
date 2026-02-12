@@ -80,8 +80,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             children: [
                 { label: 'Журнал заказов', path: '/orders', icon: <ShoppingCart size={18} />, permission: 'orders.read' },
 
-                { label: 'Журнал закупок', path: '/purchases', icon: <BookOpen size={18} />, permission: 'purchases.read' },
-                { label: 'Расчёты с поставщиками', path: '/supplier-account', icon: <DollarSign size={18} />, permissionsAny: ['supplier.returns.read', 'supplier.payments.read', 'supplier.statement.read'] },
+                { label: 'Журнал поставщиков', path: '/purchases', icon: <BookOpen size={18} />, permission: 'purchases.read' },
 
             ]
         },

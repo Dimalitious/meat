@@ -40,7 +40,7 @@ import PurchasePriceListsPage from './pages/PurchasePriceListsPage';
 import PurchasePriceListFormPage from './pages/PurchasePriceListFormPage';
 import ProductionModulePage from './pages/ProductionModulePage';
 import PaymentTypesPage from './pages/PaymentTypesPage';
-import PurchasesPage from './pages/PurchasesPage';
+import SupplierJournalPage from './pages/SupplierJournalPage';
 import PurchaseFormPage from './pages/PurchaseFormPage';
 import TelegramOrdersPage from './pages/TelegramOrdersPage';
 import WarehousesPage from './pages/WarehousesPage';
@@ -48,7 +48,7 @@ import DispatchPage from './pages/DispatchPage';
 import MmlReferencePage from './pages/MmlReferencePage';
 import MaterialReportPage from './pages/MaterialReportPage';
 import AdminUsersPage from './pages/AdminUsersPage';
-import SupplierAccountPage from './pages/SupplierAccountPage';
+
 import SalesManagerPage from './pages/SalesManagerPage';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -136,7 +136,7 @@ function App() {
             <Route path="/purchase-price-list/:id" element={<ProtectedRoute><PurchasePriceListFormPage /></ProtectedRoute>} />
             {/* Purchase Module */}
             <Route path="/payment-types" element={<ProtectedRoute><PaymentTypesPage /></ProtectedRoute>} />
-            <Route path="/purchases" element={<ProtectedRoute><PurchasesPage /></ProtectedRoute>} />
+            <Route path="/purchases" element={<ProtectedRoute><SupplierJournalPage /></ProtectedRoute>} />
             <Route path="/purchases/new" element={<ProtectedRoute><PurchaseFormPage /></ProtectedRoute>} />
             <Route path="/purchases/:id" element={<ProtectedRoute><PurchaseFormPage /></ProtectedRoute>} />
             {/* Telegram Agent Module */}
@@ -149,8 +149,8 @@ function App() {
             <Route path="/reports/material" element={<ProtectedRoute><MaterialReportPage /></ProtectedRoute>} />
             {/* Admin Module */}
             <Route path="/admin/users" element={<ProtectedRoute><AdminUsersPage /></ProtectedRoute>} />
-            {/* Supplier Account Module (Расчёты с поставщиками) */}
-            <Route path="/supplier-account" element={<ProtectedRoute><SupplierAccountPage /></ProtectedRoute>} />
+            {/* Old supplier-account route → redirect to tab */}
+            <Route path="/supplier-account" element={<ProtectedRoute><Navigate to="/purchases?tab=settlements" replace /></ProtectedRoute>} />
             {/* Sales Manager Module */}
             <Route path="/sales-manager" element={<ProtectedRoute><SalesManagerPage /></ProtectedRoute>} />
           </Routes>

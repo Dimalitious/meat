@@ -73,7 +73,7 @@ const ProductsPage = () => {
 
     const fetchUoms = async () => {
         try {
-            const res = await api.get('/api/uom');
+            const res = await api.get('/api/uom?active=true');
             setUoms(res.data);
         } catch (error) {
             console.error('Failed to fetch UoMs', error);

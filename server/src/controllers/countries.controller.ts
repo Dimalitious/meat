@@ -1,15 +1,15 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
 
-// GET /api/countries?active=true|all
+// GET /api/countries?active=true|all  (default: active-only)
 export const getCountries = async (req: Request, res: Response) => {
     try {
         const { active } = req.query;
         const where: any = {};
-        if (active === 'true') {
+        if (active !== 'all') {
             where.isActive = true;
         }
-        // active=all or not specified → return all
+        // active=all → return all; otherwise only active
 
         const items = await prisma.country.findMany({
             where,

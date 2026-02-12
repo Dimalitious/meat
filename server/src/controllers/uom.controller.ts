@@ -1,10 +1,22 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
 
-// Get all UoMs
+const DEFAULT_UNITS = [
+    'килограммы', 'штуки', 'пачки', 'упаковки',
+    'блоки', 'метры', 'сантиметры', 'миллиметры',
+];
+
+// GET /api/uom?active=true|all  (default: active-only)
 export const getUnits = async (req: Request, res: Response) => {
     try {
+        const { active } = req.query;
+        const where: any = {};
+        if (active !== 'all') {
+            where.isActive = true;
+        }
+
         const units = await prisma.unitOfMeasure.findMany({
+            where,
             orderBy: { name: 'asc' }
         });
         res.json(units);
@@ -14,7 +26,7 @@ export const getUnits = async (req: Request, res: Response) => {
     }
 };
 
-// Create UoM
+// POST /api/uom
 export const createUnit = async (req: Request, res: Response) => {
     try {
         const { name, isDefault } = req.body;
@@ -50,11 +62,11 @@ export const createUnit = async (req: Request, res: Response) => {
     }
 };
 
-// Update UoM
+// PUT /api/uom/:id
 export const updateUnit = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
-        const { name, isDefault } = req.body;
+        const { name, isDefault, isActive } = req.body;
 
         const result = await prisma.$transaction(async (tx) => {
             // If setting as default, unset others
@@ -65,12 +77,14 @@ export const updateUnit = async (req: Request, res: Response) => {
                 });
             }
 
+            const data: any = {};
+            if (name !== undefined) data.name = name;
+            if (isDefault !== undefined) data.isDefault = isDefault;
+            if (isActive !== undefined) data.isActive = Boolean(isActive);
+
             return await tx.unitOfMeasure.update({
                 where: { id: Number(id) },
-                data: {
-                    name,
-                    isDefault
-                }
+                data,
             });
         });
 
@@ -84,27 +98,61 @@ export const updateUnit = async (req: Request, res: Response) => {
     }
 };
 
-// Delete UoM
+// DELETE /api/uom/:id — soft delete (isActive = false)
 export const deleteUnit = async (req: Request, res: Response) => {
     try {
         const { id } = req.params;
 
-        // Check if used in products
-        const used = await prisma.product.findFirst({
-            where: { uomId: Number(id) }
+        const unit = await prisma.unitOfMeasure.update({
+            where: { id: Number(id) },
+            data: { isActive: false },
         });
 
-        if (used) {
-            return res.status(400).json({ error: 'Cannot delete unit usage by products' });
-        }
-
-        await prisma.unitOfMeasure.delete({
-            where: { id: Number(id) }
-        });
-
-        res.json({ message: 'Unit deleted' });
-    } catch (error) {
+        res.json({ message: 'Unit archived', unit });
+    } catch (error: any) {
         console.error('Delete UoM error:', error);
-        res.status(400).json({ error: 'Failed to delete unit' });
+        if (error.code === 'P2025') {
+            return res.status(404).json({ error: 'Unit not found' });
+        }
+        res.status(400).json({ error: 'Failed to archive unit' });
+    }
+};
+
+// POST /api/uom/fill-defaults — idempotent seed of base units
+export const fillDefaults = async (req: Request, res: Response) => {
+    try {
+        let created = 0;
+        let reactivated = 0;
+        let skipped = 0;
+
+        await prisma.$transaction(async (tx) => {
+            for (const name of DEFAULT_UNITS) {
+                const existing = await tx.unitOfMeasure.findUnique({ where: { name } });
+                if (existing) {
+                    if (!existing.isActive) {
+                        await tx.unitOfMeasure.update({
+                            where: { id: existing.id },
+                            data: { isActive: true },
+                        });
+                        reactivated++;
+                    } else {
+                        skipped++;
+                    }
+                } else {
+                    await tx.unitOfMeasure.create({ data: { name } });
+                    created++;
+                }
+            }
+        });
+
+        res.json({
+            message: `Готово: создано ${created}, восстановлено ${reactivated}, уже было ${skipped}`,
+            created,
+            reactivated,
+            skipped,
+        });
+    } catch (error) {
+        console.error('fillDefaults error:', error);
+        res.status(500).json({ error: 'Failed to fill defaults' });
     }
 };

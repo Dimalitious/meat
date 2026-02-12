@@ -126,10 +126,7 @@ const SupplierAccountPage: React.FC = () => {
 
     return (
         <div style={styles.page}>
-            <div style={styles.header}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                    <h1 style={styles.title}>Расчёты с поставщиками</h1>
-                </div>
+            <div style={{ ...styles.header, justifyContent: 'flex-end' }}>
                 <select
                     style={styles.select}
                     value={selectedSupplierId ?? ''}

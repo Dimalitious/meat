@@ -3,13 +3,14 @@ import api from '../config/axios';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../components/ui/Table';
-import { Plus, Trash2, Edit, Save, X } from 'lucide-react';
+import { Plus, Trash2, Edit, Save, X, Eye, EyeOff, RefreshCw } from 'lucide-react';
 import { Card } from '../components/ui/Card';
 
 interface UnitOfMeasure {
     id: number;
     name: string;
     isDefault: boolean;
+    isActive: boolean;
 }
 
 const UnitsOfMeasurePage = () => {
@@ -18,14 +19,16 @@ const UnitsOfMeasurePage = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingUnit, setEditingUnit] = useState<UnitOfMeasure | null>(null);
     const [formData, setFormData] = useState({ name: '', isDefault: false });
+    const [showArchived, setShowArchived] = useState(false);
+    const [fillResult, setFillResult] = useState<string | null>(null);
 
     useEffect(() => {
         fetchUnits();
-    }, []);
+    }, [showArchived]);
 
     const fetchUnits = async () => {
         try {
-            const res = await api.get('/api/uom');
+            const res = await api.get(`/api/uom?active=${showArchived ? 'all' : 'true'}`);
             setUnits(res.data);
         } catch (error) {
             console.error(error);
@@ -46,13 +49,28 @@ const UnitsOfMeasurePage = () => {
         setIsModalOpen(true);
     };
 
-    const handleDelete = async (id: number) => {
-        if (!confirm('Вы уверены, что хотите удалить эту единицу измерения?')) return;
+    const handleSoftDelete = async (unit: UnitOfMeasure) => {
+        if (!confirm(`Вы уверены, что хотите ${unit.isActive ? 'архивировать' : 'восстановить'} "${unit.name}"?`)) return;
         try {
-            await api.delete(`/api/uom/${id}`);
+            if (unit.isActive) {
+                await api.delete(`/api/uom/${unit.id}`);
+            } else {
+                await api.put(`/api/uom/${unit.id}`, { isActive: true });
+            }
             fetchUnits();
         } catch (error: any) {
-            alert(error.response?.data?.error || 'Ошибка удаления');
+            alert(error.response?.data?.error || 'Ошибка');
+        }
+    };
+
+    const handleFillDefaults = async () => {
+        try {
+            const res = await api.post('/api/uom/fill-defaults');
+            setFillResult(res.data.message);
+            fetchUnits();
+            setTimeout(() => setFillResult(null), 5000);
+        } catch (error: any) {
+            alert(error.response?.data?.error || 'Ошибка заполнения');
         }
     };
 
@@ -77,30 +95,54 @@ const UnitsOfMeasurePage = () => {
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold text-slate-900">Единицы измерения</h1>
-                <Button onClick={handleCreate} className="flex items-center gap-2">
-                    <Plus size={16} /> Добавить
-                </Button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setShowArchived(!showArchived)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${showArchived
+                                ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            }`}
+                    >
+                        {showArchived ? <Eye size={16} /> : <EyeOff size={16} />}
+                        {showArchived ? 'Показаны все' : 'Показать архив'}
+                    </button>
+                    <Button onClick={handleFillDefaults} variant="outline" className="flex items-center gap-2">
+                        <RefreshCw size={16} /> Заполнить базовые
+                    </Button>
+                    <Button onClick={handleCreate} className="flex items-center gap-2">
+                        <Plus size={16} /> Добавить
+                    </Button>
+                </div>
             </div>
+
+            {fillResult && (
+                <div className="bg-green-50 border border-green-200 text-green-800 px-4 py-3 rounded-lg text-sm">
+                    {fillResult}
+                </div>
+            )}
 
             <Card>
                 <Table>
                     <TableHeader>
                         <TableRow>
+                            <TableHead className="w-[60px]">ID</TableHead>
                             <TableHead>Название</TableHead>
                             <TableHead>По умолчанию</TableHead>
+                            <TableHead>Статус</TableHead>
                             <TableHead className="w-[100px]"></TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {units.length === 0 ? (
                             <TableRow>
-                                <TableCell colSpan={3} className="text-center text-slate-500 py-8">
+                                <TableCell colSpan={5} className="text-center text-slate-500 py-8">
                                     Нет данных
                                 </TableCell>
                             </TableRow>
                         ) : (
                             units.map((u) => (
-                                <TableRow key={u.id}>
+                                <TableRow key={u.id} className={!u.isActive ? 'opacity-50' : ''}>
+                                    <TableCell className="text-xs text-slate-400 font-mono">{u.id}</TableCell>
                                     <TableCell className="font-medium">{u.name}</TableCell>
                                     <TableCell>
                                         {u.isDefault && (
@@ -110,11 +152,20 @@ const UnitsOfMeasurePage = () => {
                                         )}
                                     </TableCell>
                                     <TableCell>
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${u.isActive ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                            {u.isActive ? 'Активна' : 'Архив'}
+                                        </span>
+                                    </TableCell>
+                                    <TableCell>
                                         <div className="flex gap-2 justify-end">
                                             <button onClick={() => handleEdit(u)} className="text-blue-600 hover:text-blue-800">
                                                 <Edit size={16} />
                                             </button>
-                                            <button onClick={() => handleDelete(u.id)} className="text-red-500 hover:text-red-700">
+                                            <button
+                                                onClick={() => handleSoftDelete(u)}
+                                                className={u.isActive ? 'text-red-500 hover:text-red-700' : 'text-green-600 hover:text-green-800'}
+                                                title={u.isActive ? 'Архивировать' : 'Восстановить'}
+                                            >
                                                 <Trash2 size={16} />
                                             </button>
                                         </div>

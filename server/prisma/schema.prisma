@@ -149,6 +149,7 @@ model UnitOfMeasure {
   id        Int      @id @default(autoincrement())
   name      String   @unique
   isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   products  Product[]
@@ -293,7 +294,10 @@ model Supplier {
   legalName    String?
   altName      String?           // Альтернативное название поставщика
   phone        String?           // Телефон поставщика
-  telegram     String?           // Telegram поставщика
+  telegram     String?           // Telegram username поставщика
+  telegramChatId  BigInt?        // Telegram chat/group ID для отправки заказов
+  telegramThreadId Int?          // Topic thread ID (опционально)
+  telegramEnabled  Boolean       @default(false) // Разрешена ли отправка
   isActive     Boolean           @default(true)  // Статус активности
   primaryMmlId Int?              // FK -> ProductionMml (первичный MML поставщика)
   createdAt    DateTime          @default(now())
@@ -313,6 +317,29 @@ model Supplier {
   supplierReturns     SupplierReturn[]
   supplierPayments    SupplierPayment[]
   supplierLedger      SupplierLedger[]
+  // Telegram send logs
+  orderTelegramLogs   OrderTelegramLog[]
+}
+
+// Лог отправок заказов поставщику в Telegram
+model OrderTelegramLog {
+  id          Int       @id @default(autoincrement())
+  orderId     Int?
+  supplierId  Int
+  chatId      BigInt
+  threadId    Int?
+  status      String    @default("QUEUED")
+  // QUEUED | SENT | FAILED
+  text        String?
+  error       String?
+  sentByUserId Int?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  supplier    Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([supplierId, createdAt])
+  @@index([orderId])
 }
 
 model SupplierProduct {

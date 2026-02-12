@@ -38,7 +38,7 @@ export const createSubcategory = async (req: Request, res: Response) => {
         if (error.code === 'P2002') {
             return res.status(400).json({ error: 'DUPLICATE', message: 'Подкатегория с таким названием уже существует.' });
         }
-        res.status(500).json({ error: 'Failed to create subcategory' });
+        res.status(500).json({ error: 'SERVER_ERROR', message: 'Не удалось создать подкатегорию. Проверьте логи сервера.' });
     }
 };
 
