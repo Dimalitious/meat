@@ -9,14 +9,32 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { Readable } from 'stream';
 
+// ============================================
+// Whitelist of allowed customer fields
+// ============================================
+function pickCustomerData(body: any) {
+    const fields: Record<string, any> = {};
+    const allowed = [
+        'code', 'name', 'legalName', 'inn',
+        'telegramGroupName', 'telegramGroupUsername',
+        'districtId', 'managerId',
+    ] as const;
+    for (const key of allowed) {
+        if (body[key] !== undefined) {
+            fields[key] = body[key] ?? null;
+        }
+    }
+    return fields;
+}
+
 export const getCustomers = async (req: Request, res: Response) => {
     try {
         const { search } = req.query;
         let where: any = {};
         if (search) {
             where.OR = [
-                { code: { contains: String(search) } },
-                { name: { contains: String(search) } }
+                { code: { contains: String(search), mode: 'insensitive' } },
+                { name: { contains: String(search), mode: 'insensitive' } }
             ];
         }
         const items = await prisma.customer.findMany({
@@ -26,26 +44,41 @@ export const getCustomers = async (req: Request, res: Response) => {
         });
         res.json(items);
     } catch (error) {
-        res.status(500).json({ error: 'Failed' });
+        res.status(500).json({ error: 'Не удалось загрузить клиентов' });
     }
 };
 
 export const createCustomer = async (req: Request, res: Response) => {
     try {
-        const item = await prisma.customer.create({ data: req.body });
+        const data = pickCustomerData(req.body);
+        if (!data.code || !data.name) {
+            return res.status(400).json({ error: 'Код и название обязательны' });
+        }
+        const item = await prisma.customer.create({ data: data as any });
         res.status(201).json(item);
-    } catch (error) {
-        res.status(400).json({ error: 'Failed' });
+    } catch (error: any) {
+        console.error('Create customer error:', error);
+        if (error?.code === 'P2002') {
+            return res.status(409).json({ error: 'Клиент с таким кодом уже существует' });
+        }
+        res.status(400).json({ error: 'Не удалось создать клиента' });
     }
 };
 
 export const updateCustomer = async (req: Request, res: Response) => {
     try {
         const { code } = req.params as { code: string };
-        const item = await prisma.customer.update({ where: { code }, data: req.body });
+        const data = pickCustomerData(req.body);
+        // Don't allow changing code via update
+        delete data.code;
+        const item = await prisma.customer.update({ where: { code }, data });
         res.json(item);
-    } catch (error) {
-        res.status(400).json({ error: 'Failed' });
+    } catch (error: any) {
+        console.error('Update customer error:', error);
+        if (error?.code === 'P2025') {
+            return res.status(404).json({ error: 'Клиент не найден' });
+        }
+        res.status(400).json({ error: 'Не удалось обновить клиента' });
     }
 };
 
@@ -54,8 +87,17 @@ export const deleteCustomer = async (req: Request, res: Response) => {
         const { code } = req.params as { code: string };
         await prisma.customer.delete({ where: { code } });
         res.json({ message: 'Deleted' });
-    } catch (error) {
-        res.status(400).json({ error: 'Failed' });
+    } catch (error: any) {
+        console.error('Delete customer error:', error);
+        if (error?.code === 'P2025') {
+            return res.status(404).json({ error: 'Клиент не найден' });
+        }
+        if (error?.code === 'P2003') {
+            return res.status(409).json({
+                error: 'Нельзя удалить клиента: есть связанные данные (заказы, карточки, Telegram). Отключите клиента вместо удаления.',
+            });
+        }
+        res.status(400).json({ error: 'Не удалось удалить клиента' });
     }
 };
 
@@ -563,7 +605,12 @@ export const importCustomersFromZip = async (req: Request, res: Response) => {
                     if (fs.existsSync(photosDir)) {
                         for (let photoIdx = 0; photoIdx < photoFiles.length; photoIdx++) {
                             const photoFilename = String(photoFiles[photoIdx]).trim();
-                            const photoPath = path.join(photosDir, photoFilename);
+                            // Path traversal protection: resolve and validate within photosDir
+                            const photoPath = path.resolve(photosDir, photoFilename);
+                            if (!photoPath.startsWith(path.resolve(photosDir))) {
+                                results.errors.push(`Карточка строка ${i + 1}: недопустимый путь к фото ${photoFilename}`);
+                                continue;
+                            }
 
                             if (fs.existsSync(photoPath)) {
                                 // Читаем файл и сохраняем как base64 URL или загружаем на сервер
