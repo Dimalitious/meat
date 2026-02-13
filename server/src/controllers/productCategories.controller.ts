@@ -207,6 +207,9 @@ export async function bulkProductCategories(req: Request, res: Response) {
         if (!Array.isArray(ids) || ids.length === 0)
             return res.status(400).json({ error: 'IDS_REQUIRED' });
 
+        if (ids.length > 100)
+            return res.status(400).json({ error: 'TOO_MANY_IDS', message: 'Максимум 100 элементов за раз.' });
+
         if (!['enable', 'disable', 'delete'].includes(action))
             return res.status(400).json({ error: 'INVALID_ACTION' });
 

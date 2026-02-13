@@ -2045,8 +2045,7 @@ model ProductCategory {
 
   products       Product[]
 
-  @@index([isActive])
-  @@index([deletedAt])
+  @@index([isActive, deletedAt])
 }
 
 model ProductSubcategory {
