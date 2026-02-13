@@ -299,7 +299,7 @@ model Supplier {
   altName      String?           // Альтернативное название поставщика
   phone        String?           // Телефон поставщика
   telegram     String?           // Telegram username поставщика
-  telegramChatId  BigInt?        // Telegram chat/group ID для отправки заказов
+  telegramChatId  BigInt?        @unique // Telegram chat/group ID (1↔1: одна группа = один поставщик)
   telegramThreadId Int?          // Topic thread ID (опционально)
   telegramEnabled  Boolean       @default(false) // Разрешена ли отправка
   isActive     Boolean           @default(true)  // Статус активности
@@ -321,11 +321,14 @@ model Supplier {
   supplierReturns     SupplierReturn[]
   supplierPayments    SupplierPayment[]
   supplierLedger      SupplierLedger[]
-  // Telegram send logs
+  // Telegram send logs (legacy — для заказов)
   orderTelegramLogs   OrderTelegramLog[]
+  // Telegram messages (new — для поставщиков: акты, заказы, подтверждения)
+  telegramMessages    SupplierTelegramMessage[]
 }
 
-// Лог отправок заказов поставщику в Telegram
+/// @deprecated Use SupplierTelegramMessage for supplier communications
+// Лог отправок заказов поставщику в Telegram (legacy)
 model OrderTelegramLog {
   id          Int       @id @default(autoincrement())
   orderId     Int?
@@ -344,6 +347,53 @@ model OrderTelegramLog {
 
   @@index([supplierId, createdAt])
   @@index([orderId])
+}
+
+// ============================================
+// Supplier Telegram Messages (new — outbox + confirmations)
+// ============================================
+
+enum SupplierTelegramPayloadType {
+  STATEMENT     // Акт сверки
+  ORDER         // Заказ / заявка
+  TEXT          // Произвольное сообщение
+}
+
+enum SupplierTelegramMessageStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+model SupplierTelegramMessage {
+  id            Int       @id @default(autoincrement())
+  supplierId    Int
+  supplier      Supplier  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  chatId        BigInt
+  threadId      Int?
+
+  payloadType   SupplierTelegramPayloadType
+  payloadRefId  Int?      // позже: id акта/закупки/заявки
+
+  status        SupplierTelegramMessageStatus @default(QUEUED)
+  messageId     Int?      // Telegram message_id для editMessageText
+  error         String?
+
+  // Inline-кнопка подтверждения (будет позже)
+  confirmToken  String?   @unique
+
+  // Фиксация подтверждения
+  confirmedAt                DateTime?
+  confirmedByTelegramUserId  BigInt?
+  confirmedByUsername        String?
+  confirmedByName            String?
+
+  createdAt     DateTime  @default(now())
+  sentAt        DateTime?
+
+  @@index([supplierId, createdAt])
+  @@index([chatId, createdAt])
 }
 
 model SupplierProduct {

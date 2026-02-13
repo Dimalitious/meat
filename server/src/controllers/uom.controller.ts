@@ -194,7 +194,7 @@ export const fillDefaults = async (req: Request, res: Response) => {
                     }
                 }
             }
-        });
+        }, { timeout: 30000 });
 
         res.json({
             message: `Готово: создано ${created}, обновлено ${updated}, уже было ${skipped}`,

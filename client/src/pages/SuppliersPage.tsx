@@ -12,7 +12,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Plus, X, Save, Settings } from 'lucide-react';
+import { Plus, X, Save, Settings, MessageCircle } from 'lucide-react';
 
 interface Mml {
     id: number;
@@ -32,6 +32,9 @@ interface Supplier {
     altName?: string;
     phone?: string;
     telegram?: string;
+    telegramChatId?: string | null;   // BigInt comes as string from API
+    telegramThreadId?: number | null;
+    telegramEnabled?: boolean;
     isActive: boolean;
     primaryMmlId?: number | null;
     primaryMml?: Mml | null;
@@ -62,6 +65,9 @@ const SuppliersPage = () => {
         altName: '',
         phone: '',
         telegram: '',
+        telegramChatId: '',
+        telegramThreadId: null,
+        telegramEnabled: false,
         primaryMmlId: null,
     });
 
@@ -107,6 +113,9 @@ const SuppliersPage = () => {
             altName: supplier.altName || '',
             phone: supplier.phone || '',
             telegram: supplier.telegram || '',
+            telegramChatId: supplier.telegramChatId || '',
+            telegramThreadId: supplier.telegramThreadId ?? null,
+            telegramEnabled: supplier.telegramEnabled || false,
             primaryMmlId: supplier.primaryMmlId || null,
         });
         setIsModalOpen(true);
@@ -121,6 +130,9 @@ const SuppliersPage = () => {
             altName: '',
             phone: '',
             telegram: '',
+            telegramChatId: '',
+            telegramThreadId: null,
+            telegramEnabled: false,
             primaryMmlId: null,
         });
         setIsModalOpen(true);
@@ -196,6 +208,10 @@ const SuppliersPage = () => {
                 altName: formData.altName || null,
                 phone: formData.phone || null,
                 telegram: formData.telegram || null,
+                // Telegram group settings (chatId sent as string for BigInt safety)
+                telegramChatId: formData.telegramChatId || null,
+                telegramThreadId: formData.telegramThreadId || null,
+                telegramEnabled: formData.telegramEnabled || false,
                 primaryMmlId: formData.primaryMmlId || null,
             };
 
@@ -531,6 +547,48 @@ const SuppliersPage = () => {
                                         placeholder="@username"
                                     />
                                 </div>
+                            </div>
+
+                            {/* Telegram-группа поставщика */}
+                            <div className="border-t border-slate-100 pt-4 mt-2">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <MessageCircle size={16} className="text-blue-500" />
+                                    <span className="text-sm font-medium text-slate-700">Telegram-группа</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">Chat ID группы</label>
+                                        <Input
+                                            value={formData.telegramChatId || ''}
+                                            onChange={e => setFormData({ ...formData, telegramChatId: e.target.value })}
+                                            placeholder="-1001234567890"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-600 mb-1">Thread ID (тема)</label>
+                                        <Input
+                                            type="number"
+                                            value={formData.telegramThreadId ?? ''}
+                                            onChange={e => setFormData({
+                                                ...formData,
+                                                telegramThreadId: e.target.value ? Number(e.target.value) : null
+                                            })}
+                                            placeholder="Опционально"
+                                        />
+                                    </div>
+                                </div>
+                                <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={formData.telegramEnabled || false}
+                                        onChange={e => setFormData({ ...formData, telegramEnabled: e.target.checked })}
+                                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    <span className="text-sm text-slate-700">Отправка в Telegram включена</span>
+                                </label>
+                                {formData.telegramEnabled && !formData.telegramChatId && (
+                                    <p className="text-xs text-red-500 mt-1">⚠ Укажите Chat ID, чтобы включить отправку</p>
+                                )}
                             </div>
 
                             {/* Первичный MML */}

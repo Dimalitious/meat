@@ -39,6 +39,13 @@ import warehousesRoutes from './routes/warehouses.routes';
 
 app.use(cors());
 app.set('trust proxy', 1); // Railway/Nginx proxy support
+
+// BigInt-safe JSON serialization for all res.json() calls
+// Without this, Supplier.telegramChatId (BigInt) crashes JSON.stringify
+app.set('json replacer', (_key: string, value: unknown) =>
+    typeof value === 'bigint' ? value.toString() : value
+);
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
