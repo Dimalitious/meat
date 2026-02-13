@@ -135,16 +135,19 @@ model Product {
   // Supplier Account Module
   supplierReturnItems      SupplierReturnItem[]
 
-  // Product Catalog: Country & Subcategory
+  // Product Catalog: Country & Subcategory & Category
   countryId         Int?
   country           Country?           @relation(fields: [countryId], references: [id])
   subcategoryId     Int?
   subcategory       ProductSubcategory? @relation(fields: [subcategoryId], references: [id])
+  categoryId        Int?
+  categoryRel       ProductCategory?   @relation(fields: [categoryId], references: [id])
   productParams     ParamValue[]       @relation("ProductParams")
   paramExclusions   ProductParamExclusion[]
 
   @@index([countryId])
   @@index([subcategoryId])
+  @@index([categoryId])
 }
 
 model UnitOfMeasure {
@@ -2029,6 +2032,21 @@ model Country {
   updatedAt DateTime @updatedAt
 
   products  Product[]
+}
+
+model ProductCategory {
+  id             Int       @id @default(autoincrement())
+  name           String
+  nameNormalized String    @unique
+  isActive       Boolean   @default(true)
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  products       Product[]
+
+  @@index([isActive])
+  @@index([deletedAt])
 }
 
 model ProductSubcategory {

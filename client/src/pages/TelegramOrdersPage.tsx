@@ -133,7 +133,7 @@ export default function TelegramOrdersPage() {
     const loadReferenceData = useCallback(async () => {
         try {
             const [productsRes, customersRes] = await Promise.all([
-                fetch(`${API_URL}/api/products?status=active`),
+                fetch(`${API_URL}/api/products`),
                 fetch(`${API_URL}/api/customers`)
             ]);
             setProducts(await productsRes.json());

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 // Получить журнал прайс-листов с фильтрацией по датам
 export const getPurchasePriceLists = async (req: Request, res: Response) => {
@@ -217,6 +218,13 @@ export const createPurchasePriceList = async (req: Request, res: Response) => {
 
         // Создаём прайс-лист с поставщиками и товарами в транзакции
         const priceList = await prisma.$transaction(async (tx) => {
+            // Product status guard: batch-validate all productIds
+            const allProductIds: Array<number | string> = [];
+            for (const s of suppliers) {
+                for (const it of s.items || []) allProductIds.push(it.productId);
+            }
+            await assertActiveProductsOrThrow(tx, allProductIds);
+
             // Создаём шапку прайса
             const pl = await tx.purchasePriceList.create({
                 data: {
@@ -282,6 +290,7 @@ export const createPurchasePriceList = async (req: Request, res: Response) => {
             warnings: priceList.warnings.length > 0 ? priceList.warnings : undefined
         });
     } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         console.error('Create purchase price list error:', error);
         res.status(400).json({ error: 'Не удалось создать прайс: ' + (error.message || '') });
     }
@@ -316,6 +325,13 @@ export const updatePurchasePriceList = async (req: Request, res: Response) => {
 
         // Обновляем в транзакции
         await prisma.$transaction(async (tx) => {
+            // Product status guard: batch-validate all productIds
+            const allProductIds: Array<number | string> = [];
+            for (const s of suppliers) {
+                for (const it of s.items || []) allProductIds.push(it.productId);
+            }
+            await assertActiveProductsOrThrow(tx, allProductIds);
+
             // Обновляем шапку
             await tx.purchasePriceList.update({
                 where: { id: priceListId },
@@ -368,6 +384,7 @@ export const updatePurchasePriceList = async (req: Request, res: Response) => {
 
         res.json({ success: true, message: 'Прайс-лист обновлён' });
     } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         console.error('Update purchase price list error:', error);
         res.status(400).json({ error: 'Не удалось обновить прайс: ' + (error.message || '') });
     }

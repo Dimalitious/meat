@@ -116,7 +116,7 @@ export default function MmlReferencePage() {
             const res = await axios.get(`${API_URL}/api/products`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
-            setProducts(res.data.filter((p: any) => p.status === 'active'));
+            setProducts(res.data);
         } catch (err) {
             console.error('Failed to fetch products:', err);
         }

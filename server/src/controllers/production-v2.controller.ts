@@ -12,6 +12,7 @@ import {
     handleMmlGuardError,
     MmlGuardError,
 } from '../services/mml.service';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 const prisma = new PrismaClient();
 
@@ -199,42 +200,54 @@ export const createMml = async (req: Request, res: Response) => {
             return res.status(401).json({ error: 'User not authenticated' });
         }
 
-        // Проверка: есть ли уже current (не удалённая) версия MML для этого товара?
-        const existing = await getCurrentMmlByProductId(prisma, Number(productId));
+        const result = await prisma.$transaction(async (tx) => {
+            // Product status guard
+            await assertActiveProductsOrThrow(tx, [productId]);
 
-        if (existing) {
-            return res.status(400).json({ error: 'У товара уже есть техкарта. Создайте новую версию через клонирование.' });
-        }
+            // Проверка: есть ли уже current (не удалённая) версия MML для этого товара?
+            const existing = await getCurrentMmlByProductId(tx, Number(productId));
 
-        // Определить следующий номер версии (на случай если все предыдущие удалены)
-        const maxVersion = await prisma.productionMml.aggregate({
-            where: { productId: Number(productId) },
-            _max: { version: true },
-        });
-        const nextVersion = (maxVersion._max.version ?? 0) + 1;
-
-        const mml = await prisma.productionMml.create({
-            data: {
-                productId: Number(productId),
-                createdBy: userId,
-                version: nextVersion,
-            },
-            include: {
-                product: {
-                    select: { id: true, code: true, name: true, priceListName: true }
-                },
-                creator: {
-                    select: { id: true, name: true, username: true }
-                }
+            if (existing) {
+                const e: any = new Error('MML_EXISTS');
+                e.status = 400;
+                e.payload = { error: 'У товара уже есть техкарта. Создайте новую версию через клонирование.' };
+                throw e;
             }
+
+            // Определить следующий номер версии (на случай если все предыдущие удалены)
+            const maxVersion = await tx.productionMml.aggregate({
+                where: { productId: Number(productId) },
+                _max: { version: true },
+            });
+            const nextVersion = (maxVersion._max.version ?? 0) + 1;
+
+            const mml = await tx.productionMml.create({
+                data: {
+                    productId: Number(productId),
+                    createdBy: userId,
+                    version: nextVersion,
+                },
+                include: {
+                    product: {
+                        select: { id: true, code: true, name: true, priceListName: true }
+                    },
+                    creator: {
+                        select: { id: true, name: true, username: true }
+                    }
+                }
+            });
+
+            return mml;
         });
 
         // Возвращаем с пустым деревом для нового MML
         res.status(201).json({
-            ...mml,
+            ...result,
             rootNodes: []
         });
-    } catch (error) {
+    } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
+        if (handleMmlGuardError(res, error)) return;
         console.error('createMml error:', error);
         res.status(500).json({ error: 'Failed to create MML' });
     }
@@ -248,36 +261,47 @@ export const addRootNode = async (req: Request, res: Response) => {
         const mmlId = Number(req.params.id);
         const { productId } = req.body;
 
-        // Проверка: MML существует и доступен для структурных изменений
-        const mml = await prisma.productionMml.findUnique({ where: { id: mmlId } });
-        if (!mml) {
-            return res.status(404).json({ error: 'MML not found' });
-        }
-        await assertMmlMutable(prisma, mml);
+        const result = await prisma.$transaction(async (tx) => {
+            // Product status guard
+            await assertActiveProductsOrThrow(tx, [productId]);
 
-        // Получить максимальный sortOrder
-        const lastNode = await prisma.productionMmlNode.findFirst({
-            where: { mmlId, parentNodeId: null },
-            orderBy: { sortOrder: 'desc' }
-        });
-        const sortOrder = (lastNode?.sortOrder ?? -1) + 1;
-
-        const node = await prisma.productionMmlNode.create({
-            data: {
-                mmlId,
-                parentNodeId: null,
-                productId: Number(productId),
-                sortOrder
-            },
-            include: {
-                product: {
-                    select: { id: true, code: true, name: true, priceListName: true }
-                }
+            // Проверка: MML существует и доступен для структурных изменений
+            const mml = await tx.productionMml.findUnique({ where: { id: mmlId } });
+            if (!mml) {
+                const e: any = new Error('MML_NOT_FOUND');
+                e.status = 404;
+                e.payload = { error: 'MML not found' };
+                throw e;
             }
+            await assertMmlMutable(tx, mml);
+
+            // Получить максимальный sortOrder
+            const lastNode = await tx.productionMmlNode.findFirst({
+                where: { mmlId, parentNodeId: null },
+                orderBy: { sortOrder: 'desc' }
+            });
+            const sortOrder = (lastNode?.sortOrder ?? -1) + 1;
+
+            const node = await tx.productionMmlNode.create({
+                data: {
+                    mmlId,
+                    parentNodeId: null,
+                    productId: Number(productId),
+                    sortOrder
+                },
+                include: {
+                    product: {
+                        select: { id: true, code: true, name: true, priceListName: true }
+                    }
+                }
+            });
+
+            return node;
         });
 
-        res.status(201).json(node);
-    } catch (error) {
+        res.status(201).json(result);
+    } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         if (handleMmlGuardError(res, error)) return;
         console.error('addRootNode error:', error);
         res.status(500).json({ error: 'Failed to add root node' });
@@ -293,42 +317,56 @@ export const addChildNode = async (req: Request, res: Response) => {
         const parentNodeId = Number(req.params.parentNodeId);
         const { productId } = req.body;
 
-        // Проверка: MML существует и доступен для структурных изменений
-        const mml = await prisma.productionMml.findUnique({ where: { id: mmlId } });
-        if (!mml) {
-            return res.status(404).json({ error: 'MML not found' });
-        }
-        await assertMmlMutable(prisma, mml);
+        const result = await prisma.$transaction(async (tx) => {
+            // Product status guard
+            await assertActiveProductsOrThrow(tx, [productId]);
 
-        // Проверка что родительский узел существует
-        const parentNode = await prisma.productionMmlNode.findUnique({ where: { id: parentNodeId } });
-        if (!parentNode || parentNode.mmlId !== mmlId) {
-            return res.status(400).json({ error: 'Parent node not found' });
-        }
-
-        // Получить максимальный sortOrder среди детей
-        const lastChild = await prisma.productionMmlNode.findFirst({
-            where: { mmlId, parentNodeId },
-            orderBy: { sortOrder: 'desc' }
-        });
-        const sortOrder = (lastChild?.sortOrder ?? -1) + 1;
-
-        const node = await prisma.productionMmlNode.create({
-            data: {
-                mmlId,
-                parentNodeId,
-                productId: Number(productId),
-                sortOrder
-            },
-            include: {
-                product: {
-                    select: { id: true, code: true, name: true, priceListName: true }
-                }
+            // Проверка: MML существует и доступен для структурных изменений
+            const mml = await tx.productionMml.findUnique({ where: { id: mmlId } });
+            if (!mml) {
+                const e: any = new Error('MML_NOT_FOUND');
+                e.status = 404;
+                e.payload = { error: 'MML not found' };
+                throw e;
             }
+            await assertMmlMutable(tx, mml);
+
+            // Проверка что родительский узел существует
+            const parentNode = await tx.productionMmlNode.findUnique({ where: { id: parentNodeId } });
+            if (!parentNode || parentNode.mmlId !== mmlId) {
+                const e: any = new Error('PARENT_NOT_FOUND');
+                e.status = 400;
+                e.payload = { error: 'Parent node not found' };
+                throw e;
+            }
+
+            // Получить максимальный sortOrder среди детей
+            const lastChild = await tx.productionMmlNode.findFirst({
+                where: { mmlId, parentNodeId },
+                orderBy: { sortOrder: 'desc' }
+            });
+            const sortOrder = (lastChild?.sortOrder ?? -1) + 1;
+
+            const node = await tx.productionMmlNode.create({
+                data: {
+                    mmlId,
+                    parentNodeId,
+                    productId: Number(productId),
+                    sortOrder
+                },
+                include: {
+                    product: {
+                        select: { id: true, code: true, name: true, priceListName: true }
+                    }
+                }
+            });
+
+            return node;
         });
 
-        res.status(201).json(node);
-    } catch (error) {
+        res.status(201).json(result);
+    } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         if (handleMmlGuardError(res, error)) return;
         console.error('addChildNode error:', error);
         res.status(500).json({ error: 'Failed to add child node' });

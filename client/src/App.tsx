@@ -31,6 +31,7 @@ import ProductionV3Page from './pages/ProductionV3Page';
 import UnitsOfMeasurePage from './pages/UnitsOfMeasurePage';
 import CountriesPage from './pages/CountriesPage';
 import SubcategoriesPage from './pages/SubcategoriesPage';
+import ProductCategoriesPage from './pages/ProductCategoriesPage';
 
 import PurchasePricePage from './pages/PurchasePricePage';
 
@@ -109,6 +110,7 @@ function App() {
             <Route path="/dicts/uom" element={<ProtectedRoute><UnitsOfMeasurePage /></ProtectedRoute>} />
             <Route path="/dicts/countries" element={<ProtectedRoute><CountriesPage /></ProtectedRoute>} />
             <Route path="/dicts/subcategories" element={<ProtectedRoute><SubcategoriesPage /></ProtectedRoute>} />
+            <Route path="/dicts/categories" element={<ProtectedRoute><ProductCategoriesPage /></ProtectedRoute>} />
             <Route path="/warehouse" element={<ProtectedRoute><WarehousePage /></ProtectedRoute>} />
             <Route path="/import" element={<ProtectedRoute><ImportPage /></ProtectedRoute>} />
             <Route path="/assembly" element={<ProtectedRoute><AssemblyPage /></ProtectedRoute>} />

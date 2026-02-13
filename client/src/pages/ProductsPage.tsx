@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import api from '../config/axios';
+import { useAuth } from '../context/AuthContext';
 import {
     Table,
     TableHeader,
@@ -30,9 +31,13 @@ interface Product {
     country?: { id: number; name: string; isActive: boolean } | null;
     subcategoryId?: number | null;
     subcategory?: { id: number; name: string; isActive: boolean; deletedAt?: string | null } | null;
+    categoryId?: number | null;
+    categoryRel?: { id: number; name: string; isActive: boolean; deletedAt?: string | null } | null;
 }
 
 const ProductsPage = () => {
+    const { user } = useAuth();
+    const isAdmin = user?.roles?.includes('ADMIN') ?? false;
     const [products, setProducts] = useState<Product[]>([]);
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -63,12 +68,14 @@ const ProductsPage = () => {
     const [uoms, setUoms] = useState<{ id: number; name: string; isDefault: boolean }[]>([]);
     const [countries, setCountries] = useState<{ id: number; name: string; isActive: boolean }[]>([]);
     const [subcategories, setSubcategories] = useState<{ id: number; name: string; isActive: boolean; deletedAt?: string | null }[]>([]);
+    const [categories, setCategories] = useState<{ id: number; name: string; isActive: boolean; deletedAt?: string | null }[]>([]);
 
     useEffect(() => {
         fetchProducts();
         fetchUoms();
         fetchCountries();
         fetchSubcategories();
+        fetchCategories();
     }, []);
 
     const fetchUoms = async () => {
@@ -98,9 +105,19 @@ const ProductsPage = () => {
         }
     };
 
+    const fetchCategories = async () => {
+        try {
+            const res = await api.get('/api/product-categories/active');
+            setCategories(res.data);
+        } catch (error) {
+            console.error('Failed to fetch categories', error);
+        }
+    };
+
     const fetchProducts = async () => {
         try {
-            const res = await api.get('/api/products');
+            const url = isAdmin ? '/api/products?showInactive=true' : '/api/products';
+            const res = await api.get(url);
             setProducts(res.data);
         } catch (err) {
             console.error(err);
@@ -132,6 +149,7 @@ const ProductsPage = () => {
             uomId: defaultUom ? defaultUom.id : undefined,
             countryId: undefined,
             subcategoryId: undefined,
+            categoryId: undefined,
         });
         setIsModalOpen(true);
     };
@@ -208,6 +226,7 @@ const ProductsPage = () => {
                 uomId: formData.uomId ? Number(formData.uomId) : null,
                 countryId: formData.countryId ? Number(formData.countryId) : null,
                 subcategoryId: formData.subcategoryId ? Number(formData.subcategoryId) : null,
+                categoryId: formData.categoryId ? Number(formData.categoryId) : null,
             };
 
             if (editingProduct) {
@@ -348,6 +367,13 @@ const ProductsPage = () => {
         return subcategories;
     }, [subcategories, editingProduct]);
 
+    const allCategories = useMemo(() => {
+        if (editingProduct?.categoryRel && !categories.find(c => c.id === editingProduct.categoryRel!.id)) {
+            return [...categories, { ...editingProduct.categoryRel, isActive: false }];
+        }
+        return categories;
+    }, [categories, editingProduct]);
+
     if (loading) return <div className="p-8 text-center text-slate-500">Загрузка...</div>;
 
     return (
@@ -365,7 +391,7 @@ const ProductsPage = () => {
                     <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
                         📥 Загрузить Excel
                     </Button>
-                    {selectedCodes.size > 0 && (
+                    {isAdmin && selectedCodes.size > 0 && (
                         <Button onClick={deactivateSelected} variant="outline" className="flex items-center gap-2 text-orange-600 border-orange-300 hover:bg-orange-50">
                             ⏸ Отключить ({selectedCodes.size})
                         </Button>
@@ -616,6 +642,21 @@ const ProductsPage = () => {
                                         ))}
                                     </select>
                                 </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Категория</label>
+                                    <select
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        value={formData.categoryId || ''}
+                                        onChange={e => setFormData({ ...formData, categoryId: Number(e.target.value) || undefined })}
+                                    >
+                                        <option value="">Без категории</option>
+                                        {allCategories.map(c => (
+                                            <option key={c.id} value={c.id} disabled={!c.isActive || !!c.deletedAt} className={!c.isActive || !!c.deletedAt ? 'text-slate-400 bg-slate-50' : ''}>
+                                                {c.name} {c.deletedAt ? '(удалена)' : !c.isActive ? '(архив)' : ''}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
                             </div>
 
                             <div className="border-t border-slate-100 pt-4">
@@ -659,7 +700,7 @@ const ProductsPage = () => {
                                 <Button type="submit" className="flex items-center gap-2">
                                     <Save size={16} /> Сохранить
                                 </Button>
-                                {editingProduct && (
+                                {isAdmin && editingProduct && (
                                     <button
                                         type="button"
                                         onClick={() => handleToggleStatus(editingProduct.code, editingProduct.status)}

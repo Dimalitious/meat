@@ -4,6 +4,7 @@ import { prisma } from '../db';
 import { ORDER_STATUS, isValidTransition, getStatusDisplayName } from '../constants';
 import { getDateRangeForTashkent, formatIdnFromDate } from '../utils/date.utils';
 import { resolveGeoSnapshot } from '../services/geoSnapshot.service';
+import { assertActiveProductsOrThrow, assertActiveProductsIfAnyOrThrow } from '../utils/productGuards';
 
 // Get all orders (with optional filters) - Journal style
 export const getOrders = async (req: Request, res: Response) => {
@@ -119,6 +120,10 @@ export const createOrder = async (req: Request, res: Response) => {
                 });
             }
 
+            // Product status guard: all items must be active
+            const productIds = validItems.map(v => v.productId);
+            await assertActiveProductsOrThrow(tx, productIds);
+
             // 2. Create Order
             const order = await tx.order.create({
                 data: {
@@ -146,7 +151,7 @@ export const createOrder = async (req: Request, res: Response) => {
 
         res.status(201).json(result);
     } catch (error: any) {
-        if (error?.status) return res.status(error.status).json({ error: error.error });
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         console.error(error);
         res.status(400).json({ error: 'Failed to create order' });
     }
@@ -207,6 +212,12 @@ export const updateOrder = async (req: Request, res: Response) => {
                         weightToDistribute: item.weightToDistribute == null ? 0 : Number(item.weightToDistribute),
                     });
                 }
+
+                // Product status guard: only check NEW productIds (delta)
+                const oldSet = new Set(oldItems.map((x: any) => x.productId));
+                const newProductIds = validItems.map(v => v.productId);
+                const deltaProductIds = newProductIds.filter(pid => !oldSet.has(pid));
+                await assertActiveProductsIfAnyOrThrow(tx, deltaProductIds);
 
                 // 4. Update order with new items
                 const order = await tx.order.update({
@@ -282,7 +293,8 @@ export const updateOrder = async (req: Request, res: Response) => {
             });
             res.json(order);
         }
-    } catch (error) {
+    } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         console.error('Update order error:', error);
         res.status(400).json({ error: 'Failed to update order' });
     }
@@ -407,6 +419,13 @@ export const editOrder = async (req: Request, res: Response) => {
                     }
                 }
 
+                // Product status guard: only check NEW productIds (delta)
+                const oldSet = new Set(existingOrder!.items.map((x: any) => x.productId));
+                const deltaProductIds = items
+                    .map((it: any) => Number(it.productId))
+                    .filter((pid: number) => Number.isFinite(pid) && pid > 0 && !oldSet.has(pid));
+                await assertActiveProductsIfAnyOrThrow(tx, deltaProductIds);
+
                 // Удаляем старые items
                 await tx.orderItem.deleteMany({
                     where: { orderId: Number(id) }
@@ -510,6 +529,7 @@ export const editOrder = async (req: Request, res: Response) => {
 
         res.json(result);
     } catch (error: any) {
+        if (error?.status && error?.payload) return res.status(error.status).json(error.payload);
         console.error('editOrder error:', error);
         if (error.message === 'Order not found') {
             return res.status(404).json({ error: 'Заказ не найден' });

@@ -42,6 +42,17 @@ export async function confirmDraft(
         return { error: 'Нет распознанных товаров. Отредактируйте черновик.' };
     }
 
+    // Guard: all products must be active (v5.6 §5.1)
+    const productIds = [...new Set(validItems.map((i: any) => i.productId!))];
+    const inactiveProducts = await prisma.product.findMany({
+        where: { id: { in: productIds }, status: { not: 'active' } },
+        select: { id: true, code: true, name: true, status: true },
+    });
+    if (inactiveProducts.length > 0) {
+        const names = inactiveProducts.map((p: any) => `${p.code} (${p.name})`).join(', ');
+        return { error: `Товары не активны: ${names}. Удалите их из черновика или активируйте.` };
+    }
+
     // Получить текущие цены для клиента
     const prices = await getCustomerPrices(draft.customerId, validItems.map((i: any) => i.productId!));
 

@@ -98,6 +98,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 { label: 'Ед. измерения', path: '/dicts/uom', icon: <FileText size={18} />, permission: 'catalog.products' },
                 { label: 'Страны', path: '/dicts/countries', icon: <FileText size={18} />, permission: 'catalog.products' },
                 { label: 'Подкатегории', path: '/dicts/subcategories', icon: <FileText size={18} />, permission: 'catalog.products' },
+                { label: 'Категории', path: '/dicts/categories', icon: <FileText size={18} />, permission: 'catalog.products' },
             ]
         },
         {

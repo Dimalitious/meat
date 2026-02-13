@@ -132,6 +132,9 @@ app.use('/api/countries', countriesRoutes);
 import subcategoriesRoutes from './routes/subcategories.routes';
 app.use('/api/subcategories', subcategoriesRoutes);
 
+import productCategoriesRoutes from './routes/productCategories.routes';
+app.use('/api/product-categories', productCategoriesRoutes);
+
 import paramValuesRoutes from './routes/paramValues.routes';
 app.use('/api/param-values', paramValuesRoutes);
 
