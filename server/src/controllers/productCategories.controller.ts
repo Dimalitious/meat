@@ -95,7 +95,23 @@ export async function createProductCategory(req: Request, res: Response) {
             e instanceof Prisma.PrismaClientKnownRequestError &&
             e.code === 'P2002'
         ) {
-            return res.status(400).json({ error: 'CATEGORY_ALREADY_EXISTS' });
+            // Atomic restore: if a deleted category with same nameNormalized exists, resurrect it
+            const nameNormalized = normalizeKey(req.body?.name);
+            const deleted = await prisma.productCategory.findFirst({
+                where: { nameNormalized, deletedAt: { not: null } },
+            });
+            if (deleted) {
+                const restored = await prisma.productCategory.update({
+                    where: { id: deleted.id },
+                    data: {
+                        name: normalizeName(req.body?.name),
+                        isActive: true,
+                        deletedAt: null,
+                    },
+                });
+                return res.status(201).json(restored);
+            }
+            return res.status(409).json({ error: 'CATEGORY_ALREADY_EXISTS' });
         }
         console.error('createProductCategory error:', e);
         res.status(500).json({ error: 'INTERNAL' });
@@ -129,7 +145,7 @@ export async function updateProductCategory(req: Request, res: Response) {
             e instanceof Prisma.PrismaClientKnownRequestError &&
             e.code === 'P2002'
         ) {
-            return res.status(400).json({ error: 'CATEGORY_ALREADY_EXISTS' });
+            return res.status(409).json({ error: 'CATEGORY_ALREADY_EXISTS' });
         }
         console.error('updateProductCategory error:', e);
         res.status(500).json({ error: 'INTERNAL' });
@@ -158,15 +174,16 @@ export async function toggleProductCategory(req: Request, res: Response) {
     }
 }
 
-// ── DELETE /:id  (ADMIN, soft-delete) ──────────────────
+// ── DELETE /:id  (ADMIN, soft-delete, idempotent) ──────
 export async function deleteProductCategory(req: Request, res: Response) {
     try {
         const id = Number(req.params.id);
 
         const existing = await prisma.productCategory.findUnique({ where: { id } });
         if (!existing) return res.status(404).json({ error: 'CATEGORY_NOT_FOUND' });
-        if (existing.deletedAt)
-            return res.status(400).json({ error: 'CATEGORY_DELETED' });
+
+        // Idempotent: already deleted → return current state
+        if (existing.deletedAt) return res.json(existing);
 
         const updated = await prisma.productCategory.update({
             where: { id },

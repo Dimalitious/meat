@@ -1,11 +1,12 @@
 -- ТЗ v5.6: Data Migration — populate ProductCategory from legacy category strings
 -- Run this AFTER prisma migrate deploy
+-- Normalization matches app: trim + collapse spaces + lower
 
 -- Step 1: Populate ProductCategory from distinct non-null product.category values
 INSERT INTO "ProductCategory" ("name", "nameNormalized", "isActive", "createdAt", "updatedAt")
 SELECT DISTINCT
-    TRIM(category),
-    LOWER(TRIM(category)),
+    REGEXP_REPLACE(TRIM(category), '\s+', ' ', 'g'),
+    LOWER(REGEXP_REPLACE(TRIM(category), '\s+', ' ', 'g')),
     true,
     NOW(),
     NOW()
@@ -18,7 +19,7 @@ ON CONFLICT ("nameNormalized") DO NOTHING;
 UPDATE "Product" p
 SET "categoryId" = pc.id
 FROM "ProductCategory" pc
-WHERE LOWER(TRIM(p.category)) = pc."nameNormalized"
+WHERE LOWER(REGEXP_REPLACE(TRIM(p.category), '\s+', ' ', 'g')) = pc."nameNormalized"
   AND p.category IS NOT NULL
   AND TRIM(p.category) != ''
   AND p."categoryId" IS NULL;
