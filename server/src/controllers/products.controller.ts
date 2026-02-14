@@ -1,10 +1,31 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
 
+// Helper: parse and validate integer FK id from request
+function parseIntId(value: any, fieldName: string): number {
+    if (value === '' || value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
+        throw Object.assign(new Error(`${fieldName}: значение обязательно.`), {
+            statusCode: 400, errorCode: 'INVALID_ID',
+        });
+    }
+    const n = Number(value);
+    if (!Number.isInteger(n) || n <= 0) {
+        throw Object.assign(new Error(`${fieldName}: ожидается целое число > 0, получено "${value}"`), {
+            statusCode: 400, errorCode: 'INVALID_ID',
+        });
+    }
+    return n;
+}
+
 export const getProducts = async (req: Request, res: Response) => {
     try {
         const { search, category } = req.query;
+        const categoryIdFilter = req.query.categoryId as string | undefined;
         let showInactive = req.query.showInactive as string | undefined;
+
+        // Pagination (defaults: page=1, pageSize=50, max 200)
+        const page = Math.max(1, Number(req.query.page) || 1);
+        const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50));
 
         // RBAC: only ADMIN can request inactive products
         const isAdmin = req.user?.roles?.includes('ADMIN') ?? false;
@@ -19,26 +40,42 @@ export const getProducts = async (req: Request, res: Response) => {
 
         if (search) {
             where.OR = [
-                { code: { contains: String(search) } },
-                { name: { contains: String(search) } },
-                { priceListName: { contains: String(search) } }
+                { code: { contains: String(search), mode: 'insensitive' } },
+                { name: { contains: String(search), mode: 'insensitive' } },
+                { priceListName: { contains: String(search), mode: 'insensitive' } }
             ];
         }
-        if (category && category !== 'All') {
+        // Filter by categoryId (FK) — priority over legacy category string
+        if (categoryIdFilter && categoryIdFilter !== 'All') {
+            const parsed = Number(categoryIdFilter);
+            if (!Number.isInteger(parsed) || parsed <= 0) {
+                return res.status(400).json({ error: 'INVALID_QUERY', message: 'categoryId должен быть целым числом > 0.' });
+            }
+            where.categoryId = parsed;
+        } else if (category && category !== 'All') {
+            // Legacy fallback: filter by category string if categoryId not provided
             where.category = String(category);
         }
 
-        const products = await prisma.product.findMany({
-            where,
-            include: {
-                uom: true,
-                country: true,
-                subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } },
-                categoryRel: { select: { id: true, name: true, isActive: true, deletedAt: true } }
-            },
-            orderBy: { name: 'asc' }
-        });
-        res.json(products);
+        const include = {
+            uom: true,
+            country: true,
+            subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } },
+            categoryRel: { select: { id: true, name: true, isActive: true, deletedAt: true } }
+        };
+
+        // Always return envelope { data, total, page, pageSize }
+        const [products, total] = await Promise.all([
+            prisma.product.findMany({
+                where,
+                include,
+                orderBy: { name: 'asc' },
+                skip: (page - 1) * pageSize,
+                take: pageSize,
+            }),
+            prisma.product.count({ where }),
+        ]);
+        res.json({ data: products, total, page, pageSize });
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch products' });
     }
@@ -71,28 +108,29 @@ export const createProduct = async (req: Request, res: Response) => {
         const isAdmin = req.user?.roles?.includes('ADMIN') ?? false;
         const safeStatus = isAdmin && status ? status : 'active';
 
-        // Validate country & subcategory (required for manual create)
+        // Validate required FK ids
         if (!countryId) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Страна обязательна.' });
         }
         if (!subcategoryId) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Подкатегория обязательна.' });
         }
+        const parsedCountryId = parseIntId(countryId, 'countryId');
+        const parsedSubcategoryId = parseIntId(subcategoryId, 'subcategoryId');
+        const parsedUomId = uomId ? parseIntId(uomId, 'uomId') : null;
+        const parsedCategoryId = categoryId ? parseIntId(categoryId, 'categoryId') : null;
 
-        // Validate referenced entities are active
-        const queries: Promise<any>[] = [
-            prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
-            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true, deletedAt: true } }),
-        ];
-        // UoM isActive validation (v5.6 §7.2)
-        if (uomId) {
-            queries.push(prisma.unitOfMeasure.findUnique({ where: { id: Number(uomId) }, select: { isActive: true } }));
-        }
-        // CategoryId validation (v5.6 R2)
-        if (categoryId) {
-            queries.push(prisma.productCategory.findUnique({ where: { id: Number(categoryId) }, select: { isActive: true, deletedAt: true } }));
-        }
-        const [country, subcategory, uomCheck, categoryCheck] = await Promise.all(queries);
+        // Validate referenced entities are active (fixed-position array to avoid index shift)
+        const [country, subcategory, uomCheck, categoryCheck] = await Promise.all([
+            prisma.country.findUnique({ where: { id: parsedCountryId }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: parsedSubcategoryId }, select: { isActive: true, deletedAt: true } }),
+            parsedUomId
+                ? prisma.unitOfMeasure.findUnique({ where: { id: parsedUomId }, select: { isActive: true } })
+                : Promise.resolve(null),
+            parsedCategoryId
+                ? prisma.productCategory.findUnique({ where: { id: parsedCategoryId }, select: { isActive: true, deletedAt: true } })
+                : Promise.resolve(null),
+        ]);
 
         if (!country?.isActive) {
             return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
@@ -132,10 +170,10 @@ export const createProduct = async (req: Request, res: Response) => {
                 coefficient,
                 lossNorm,
                 participatesInProduction,
-                uomId: uomId ? Number(uomId) : null,
-                countryId: Number(countryId),
-                subcategoryId: Number(subcategoryId),
-                categoryId: categoryId ? Number(categoryId) : null,
+                uomId: parsedUomId,
+                countryId: parsedCountryId,
+                subcategoryId: parsedSubcategoryId,
+                categoryId: parsedCategoryId,
             },
             include: {
                 uom: true,
@@ -147,6 +185,9 @@ export const createProduct = async (req: Request, res: Response) => {
         res.status(201).json(product);
     } catch (error: any) {
         console.error('createProduct error:', error);
+        if (error.statusCode && error.errorCode) {
+            return res.status(error.statusCode).json({ error: error.errorCode, message: error.message });
+        }
         if (error.code === 'P2002') {
             return res.status(409).json({ error: 'DUPLICATE', message: 'Товар с таким кодом уже существует.' });
         }
@@ -167,26 +208,29 @@ export const updateProduct = async (req: Request, res: Response) => {
             }
         }
 
-        // Validate country & subcategory (required for manual update)
+        // Validate required FK ids
         if (!countryId) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Страна обязательна.' });
         }
         if (!subcategoryId) {
             return res.status(400).json({ error: 'VALIDATION_ERROR', message: 'Подкатегория обязательна.' });
         }
+        const parsedCountryId = parseIntId(countryId, 'countryId');
+        const parsedSubcategoryId = parseIntId(subcategoryId, 'subcategoryId');
+        const parsedUomId = uomId ? parseIntId(uomId, 'uomId') : null;
+        const parsedCategoryId = categoryId ? parseIntId(categoryId, 'categoryId') : null;
 
-        // Validate referenced entities are active
-        const queries: Promise<any>[] = [
-            prisma.country.findUnique({ where: { id: Number(countryId) }, select: { isActive: true } }),
-            prisma.productSubcategory.findUnique({ where: { id: Number(subcategoryId) }, select: { isActive: true, deletedAt: true } }),
-        ];
-        if (uomId) {
-            queries.push(prisma.unitOfMeasure.findUnique({ where: { id: Number(uomId) }, select: { isActive: true } }));
-        }
-        if (categoryId) {
-            queries.push(prisma.productCategory.findUnique({ where: { id: Number(categoryId) }, select: { isActive: true, deletedAt: true } }));
-        }
-        const [country, subcategory, uomCheck, categoryCheck] = await Promise.all(queries);
+        // Validate referenced entities are active (fixed-position array to avoid index shift)
+        const [country, subcategory, uomCheck, categoryCheck] = await Promise.all([
+            prisma.country.findUnique({ where: { id: parsedCountryId }, select: { isActive: true } }),
+            prisma.productSubcategory.findUnique({ where: { id: parsedSubcategoryId }, select: { isActive: true, deletedAt: true } }),
+            parsedUomId
+                ? prisma.unitOfMeasure.findUnique({ where: { id: parsedUomId }, select: { isActive: true } })
+                : Promise.resolve(null),
+            parsedCategoryId
+                ? prisma.productCategory.findUnique({ where: { id: parsedCategoryId }, select: { isActive: true, deletedAt: true } })
+                : Promise.resolve(null),
+        ]);
 
         if (!country?.isActive) {
             return res.status(400).json({ error: 'INACTIVE_COUNTRY', message: 'Нельзя выбрать архивную страну.' });
@@ -215,66 +259,72 @@ export const updateProduct = async (req: Request, res: Response) => {
             }
         }
 
-        // Guard: changing subcategoryId is blocked if active variants exist
-        const existing = await prisma.product.findUnique({ where: { code }, select: { id: true, subcategoryId: true, categoryId: true, category: true } });
-        if (existing && existing.subcategoryId && existing.subcategoryId !== Number(subcategoryId)) {
-            const activeVariants = await prisma.customerProductVariant.count({
-                where: {
-                    isActive: true,
-                    customerProduct: { productId: existing.id },
-                },
-            });
-            if (activeVariants > 0) {
-                return res.status(409).json({
-                    error: 'SUBCATEGORY_CHANGE_BLOCKED',
-                    message: `Сначала деактивируйте ${activeVariants} вариантов в персональных каталогах клиентов.`,
+        // Use transaction with FOR UPDATE lock to prevent TOCTOU race on variant check
+        const product = await prisma.$transaction(async (tx) => {
+            // Lock the product row (SELECT ... FOR UPDATE)
+            const locked: any[] = await tx.$queryRaw`SELECT id, "subcategoryId", "categoryId", category FROM "Product" WHERE code = ${code} FOR UPDATE`;
+            const existing = locked[0] ?? null;
+
+            // Guard: changing subcategoryId is blocked if active variants exist
+            if (existing && existing.subcategoryId && existing.subcategoryId !== parsedSubcategoryId) {
+                const activeVariants = await tx.customerProductVariant.count({
+                    where: {
+                        isActive: true,
+                        customerProduct: { productId: existing.id },
+                    },
                 });
+                if (activeVariants > 0) {
+                    throw Object.assign(new Error(`Сначала деактивируйте ${activeVariants} вариантов в персональных каталогах клиентов.`), {
+                        statusCode: 409,
+                        errorCode: 'SUBCATEGORY_CHANGE_BLOCKED',
+                    });
+                }
             }
-        }
 
-        // R2 categoryId fallback (v5.6 §8.1):
-        // If categoryId is provided → validate and write it + dual-write legacy
-        // If categoryId NOT provided → do NOT touch category/categoryId (preserve existing)
-        const data: any = {
-            name,
-            altName,
-            priceListName,
-            status,
-            coefficient,
-            lossNorm,
-            participatesInProduction,
-            uomId: uomId ? Number(uomId) : null,
-            countryId: Number(countryId),
-            subcategoryId: Number(subcategoryId),
-        };
+            // Build update data
+            const data: any = {
+                name,
+                altName,
+                priceListName,
+                status,
+                coefficient,
+                lossNorm,
+                participatesInProduction,
+                uomId: parsedUomId,
+                countryId: parsedCountryId,
+                subcategoryId: parsedSubcategoryId,
+            };
 
-        if (categoryId !== undefined) {
-            data.categoryId = categoryId ? Number(categoryId) : null;
-            // Dual-write legacy category string only when categoryId changes (v5.6 §4)
-            if (categoryId && categoryCheck && existing && existing.categoryId !== Number(categoryId)) {
-                // Resolve name from ProductCategory
-                const cat = await prisma.productCategory.findUnique({ where: { id: Number(categoryId) }, select: { name: true } });
-                if (cat) data.category = cat.name;
+            if (categoryId !== undefined) {
+                data.categoryId = parsedCategoryId;
+                // Dual-write legacy category string only when categoryId changes (v5.6 §4)
+                if (parsedCategoryId && categoryCheck && existing && existing.categoryId !== parsedCategoryId) {
+                    const cat = await tx.productCategory.findUnique({ where: { id: parsedCategoryId }, select: { name: true } });
+                    if (cat) data.category = cat.name;
+                }
+            } else {
+                if (category !== undefined) data.category = category;
             }
-        } else {
-            // Do NOT include category in data — preserve existing legacy string
-            // Only pass category from body if it's explicitly provided (e.g. from older frontend)
-            if (category !== undefined) data.category = category;
-        }
 
-        const product = await prisma.product.update({
-            where: { code },
-            data,
-            include: {
-                uom: true,
-                country: true,
-                subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } },
-                categoryRel: { select: { id: true, name: true, isActive: true } },
-            }
+            return tx.product.update({
+                where: { code },
+                data,
+                include: {
+                    uom: true,
+                    country: true,
+                    subcategory: { select: { id: true, name: true, isActive: true, deletedAt: true } },
+                    categoryRel: { select: { id: true, name: true, isActive: true } },
+                }
+            });
         });
+
         res.json(product);
     } catch (error: any) {
         console.error('updateProduct error:', error);
+        // Handle custom error from transaction (SUBCATEGORY_CHANGE_BLOCKED)
+        if (error.statusCode && error.errorCode) {
+            return res.status(error.statusCode).json({ error: error.errorCode, message: error.message });
+        }
         if (error.code === 'P2025') {
             return res.status(404).json({ error: 'NOT_FOUND', message: 'Товар не найден.' });
         }
@@ -285,32 +335,47 @@ export const updateProduct = async (req: Request, res: Response) => {
     }
 };
 
-// Отключить/включить товар (переключение статуса)
-export const deactivateProduct = async (req: Request, res: Response) => {
+// DELETE /:code — архивировать товар (всегда inactive, идемпотентно)
+export const archiveProduct = async (req: Request, res: Response) => {
     try {
         const { code } = req.params as { code: string };
 
-        const product = await prisma.product.findUnique({
-            where: { code }
-        });
-
+        const product = await prisma.product.findUnique({ where: { code }, select: { status: true } });
         if (!product) {
-            return res.status(404).json({ error: 'Товар не найден' });
+            return res.status(404).json({ error: 'NOT_FOUND', message: 'Товар не найден.' });
         }
 
-        // Переключить статус: active <-> inactive
+        if (product.status === 'inactive') {
+            // Already inactive — idempotent, just confirm
+            return res.json({ message: 'Товар уже отключён.', status: 'inactive' });
+        }
+
+        await prisma.product.update({ where: { code }, data: { status: 'inactive' } });
+        res.json({ message: 'Товар отключён.', status: 'inactive' });
+    } catch (error) {
+        console.error('archiveProduct error:', error);
+        res.status(500).json({ error: 'Не удалось архивировать товар.' });
+    }
+};
+
+// PATCH /toggle/:code — переключить статус (active ↔ inactive)
+export const toggleProduct = async (req: Request, res: Response) => {
+    try {
+        const { code } = req.params as { code: string };
+
+        const product = await prisma.product.findUnique({ where: { code }, select: { status: true } });
+        if (!product) {
+            return res.status(404).json({ error: 'NOT_FOUND', message: 'Товар не найден.' });
+        }
+
         const newStatus = product.status === 'active' ? 'inactive' : 'active';
+        await prisma.product.update({ where: { code }, data: { status: newStatus } });
 
-        await prisma.product.update({
-            where: { code },
-            data: { status: newStatus }
-        });
-
-        const message = newStatus === 'inactive' ? 'Товар отключён' : 'Товар активирован';
+        const message = newStatus === 'inactive' ? 'Товар отключён.' : 'Товар активирован.';
         res.json({ message, status: newStatus });
     } catch (error) {
-        console.error('Deactivate product error:', error);
-        res.status(400).json({ error: 'Не удалось изменить статус товара' });
+        console.error('toggleProduct error:', error);
+        res.status(500).json({ error: 'Не удалось изменить статус товара.' });
     }
 };
 

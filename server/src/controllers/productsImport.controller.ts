@@ -104,10 +104,59 @@ export async function importProductsFromExcel(req: Request, res: Response) {
             const uomByName = new Map<string, UomRow>(allUoms.map((u) => [u.name.toLowerCase(), u]));
             const catByNorm = new Map<string, CatRow>(allCategories.map((c) => [c.nameNormalized, c]));
 
+            // ── Batch pre-create/restore categories only from rows likely to succeed
+            // (rows with valid code + name + not duplicate — avoids creating orphan categories)
+            let createdCategories = 0;
+            let restoredCategories = 0;
+            const uniqueCatKeys = new Set<string>();
+            const catNameByKey = new Map<string, string>(); // normalized → display name
+            for (const r of rows) {
+                const rowCode = String(r.code ?? '').trim();
+                const rowName = normalizeName(r.name);
+                // Skip rows that will fail basic validation anyway
+                if (!rowCode || !rowName || dupCodes.has(rowCode)) continue;
+
+                const catStr = String(r.category ?? '').trim();
+                if (catStr) {
+                    const key = normalizeKey(catStr);
+                    uniqueCatKeys.add(key);
+                    if (!catNameByKey.has(key)) catNameByKey.set(key, normalizeName(catStr));
+                }
+            }
+            // Create or restore categories in batch
+            for (const key of uniqueCatKeys) {
+                const existing = catByNorm.get(key);
+                if (existing && existing.deletedAt) {
+                    // Restore soft-deleted category
+                    try {
+                        const restored = await prisma.productCategory.update({
+                            where: { id: existing.id },
+                            data: { deletedAt: null, isActive: true },
+                        });
+                        catByNorm.set(key, { ...restored, nameNormalized: key, deletedAt: null });
+                        restoredCategories++;
+                    } catch (_) { /* keep existing in map, per-row will catch */ }
+                } else if (!existing) {
+                    // Create new category
+                    try {
+                        const created = await prisma.productCategory.create({
+                            data: { name: catNameByKey.get(key)!, nameNormalized: key, isActive: true },
+                        });
+                        catByNorm.set(key, { ...created, deletedAt: null });
+                    } catch (e: any) {
+                        if (e.code === 'P2002') {
+                            const retry = await prisma.productCategory.findUnique({ where: { nameNormalized: key } });
+                            if (retry) catByNorm.set(key, retry);
+                        }
+                    }
+                }
+                // else: existing && !deletedAt — already usable, skip
+            }
+
             // ── Process rows one by one
             const imported: string[] = [];
             const updated: string[] = [];
-            const skipped: Array<{ row: number; code: string; error: string; field?: string }> = [];
+            const errors: Array<{ row: number; code?: string; error: string; message?: string; field?: string }> = [];
 
             for (let i = 0; i < rows.length; i++) {
                 const r = rows[i];
@@ -116,12 +165,12 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                 const name = normalizeName(r.name);
 
                 // Required fields
-                if (!code) { skipped.push({ row: rowNum, code: '', error: 'CODE_REQUIRED' }); continue; }
-                if (!name) { skipped.push({ row: rowNum, code, error: 'NAME_REQUIRED' }); continue; }
+                if (!code) { errors.push({ row: rowNum, error: 'CODE_REQUIRED', message: 'Код товара обязателен.' }); continue; }
+                if (!name) { errors.push({ row: rowNum, code, error: 'NAME_REQUIRED', message: 'Наименование обязательно.' }); continue; }
 
                 // Dedup check (v5.6 §5.4)
                 if (dupCodes.has(code)) {
-                    skipped.push({ row: rowNum, code, error: 'DUPLICATE_CODE_IN_FILE' });
+                    errors.push({ row: rowNum, code, error: 'DUPLICATE_CODE_IN_FILE', message: `Код "${code}" встречается в файле несколько раз.` });
                     continue;
                 }
 
@@ -131,8 +180,8 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                 if (uomStr) {
                     const key = uomStr.toLowerCase();
                     const uom = uomByCode.get(key) || uomByName.get(key);
-                    if (!uom) { skipped.push({ row: rowNum, code, error: 'UOM_NOT_FOUND', field: 'uom' }); continue; }
-                    if (!uom.isActive) { skipped.push({ row: rowNum, code, error: 'INACTIVE_UOM', field: 'uom' }); continue; }
+                    if (!uom) { errors.push({ row: rowNum, code, error: 'UOM_NOT_FOUND', field: 'uom', message: `ЕИ "${uomStr}" не найдена.` }); continue; }
+                    if (!uom.isActive) { errors.push({ row: rowNum, code, error: 'INACTIVE_UOM', field: 'uom', message: `ЕИ "${uomStr}" неактивна.` }); continue; }
                     uomId = uom.id;
                 }
 
@@ -141,8 +190,8 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                 const countryStr = String(r.country ?? '').trim();
                 if (countryStr) {
                     const country = countryByName.get(countryStr.toLowerCase());
-                    if (!country) { skipped.push({ row: rowNum, code, error: 'COUNTRY_NOT_FOUND', field: 'country' }); continue; }
-                    if (!country.isActive) { skipped.push({ row: rowNum, code, error: 'INACTIVE_COUNTRY', field: 'country' }); continue; }
+                    if (!country) { errors.push({ row: rowNum, code, error: 'COUNTRY_NOT_FOUND', field: 'country', message: `Страна "${countryStr}" не найдена.` }); continue; }
+                    if (!country.isActive) { errors.push({ row: rowNum, code, error: 'INACTIVE_COUNTRY', field: 'country', message: `Страна "${countryStr}" неактивна.` }); continue; }
                     countryId = country.id;
                 }
 
@@ -151,9 +200,9 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                 const subcatStr = String(r.subcategory ?? '').trim();
                 if (subcatStr) {
                     const subcat = subcatByName.get(subcatStr.toLowerCase());
-                    if (!subcat) { skipped.push({ row: rowNum, code, error: 'SUBCATEGORY_NOT_FOUND', field: 'subcategory' }); continue; }
-                    if (subcat.deletedAt) { skipped.push({ row: rowNum, code, error: 'SUBCATEGORY_DELETED', field: 'subcategory' }); continue; }
-                    if (!subcat.isActive) { skipped.push({ row: rowNum, code, error: 'INACTIVE_SUBCATEGORY', field: 'subcategory' }); continue; }
+                    if (!subcat) { errors.push({ row: rowNum, code, error: 'SUBCATEGORY_NOT_FOUND', field: 'subcategory', message: `Подкатегория "${subcatStr}" не найдена.` }); continue; }
+                    if (subcat.deletedAt) { errors.push({ row: rowNum, code, error: 'SUBCATEGORY_DELETED', field: 'subcategory', message: `Подкатегория "${subcatStr}" удалена.` }); continue; }
+                    if (!subcat.isActive) { errors.push({ row: rowNum, code, error: 'INACTIVE_SUBCATEGORY', field: 'subcategory', message: `Подкатегория "${subcatStr}" неактивна.` }); continue; }
                     subcategoryId = subcat.id;
                 }
 
@@ -164,8 +213,8 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                     const catKey = normalizeKey(catStr);
                     const existing = catByNorm.get(catKey);
                     if (existing) {
-                        if (existing.deletedAt) { skipped.push({ row: rowNum, code, error: 'CATEGORY_DELETED', field: 'category' }); continue; }
-                        if (!existing.isActive) { skipped.push({ row: rowNum, code, error: 'INACTIVE_CATEGORY', field: 'category' }); continue; }
+                        if (existing.deletedAt) { errors.push({ row: rowNum, code, error: 'CATEGORY_DELETED', field: 'category', message: `Категория "${catStr}" удалена.` }); continue; }
+                        if (!existing.isActive) { errors.push({ row: rowNum, code, error: 'INACTIVE_CATEGORY', field: 'category', message: `Категория "${catStr}" неактивна.` }); continue; }
                         categoryId = existing.id;
                     } else {
                         // Auto-create
@@ -175,6 +224,7 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                             });
                             categoryId = created.id;
                             catByNorm.set(catKey, { ...created, deletedAt: null });
+                            createdCategories++;
                         } catch (e: any) {
                             if (e.code === 'P2002') {
                                 const retry = await prisma.productCategory.findUnique({ where: { nameNormalized: catKey } });
@@ -183,7 +233,7 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                                     catByNorm.set(catKey, retry);
                                 }
                             } else {
-                                skipped.push({ row: rowNum, code, error: 'CATEGORY_CREATE_FAILED', field: 'category' });
+                                errors.push({ row: rowNum, code, error: 'CATEGORY_CREATE_FAILED', field: 'category', message: `Не удалось создать категорию "${catStr}".` });
                                 continue;
                             }
                         }
@@ -221,20 +271,26 @@ export async function importProductsFromExcel(req: Request, res: Response) {
                     }
                 } catch (e: any) {
                     if (e.code === 'P2002') {
-                        skipped.push({ row: rowNum, code, error: 'CODE_ALREADY_EXISTS' });
+                        errors.push({ row: rowNum, code, error: 'CODE_ALREADY_EXISTS', message: `Код "${code}" уже существует.` });
                     } else {
-                        skipped.push({ row: rowNum, code, error: 'ROW_FAILED', field: e.message?.slice(0, 100) });
+                        errors.push({ row: rowNum, code, error: 'ROW_FAILED', message: e.message?.slice(0, 200) });
                     }
                 }
             }
 
             res.json({
-                success: true,
-                imported: imported.length,
-                updated: updated.length,
-                skipped: skipped.length,
-                errors: skipped.slice(0, 50),
-                totalErrors: skipped.length,
+                success: errors.length === 0,
+                stats: {
+                    totalRows: rows.length,
+                    importedCount: imported.length,
+                    updatedCount: updated.length,
+                    errorCount: errors.length,
+                    createdCategories,
+                    restoredCategories,
+                },
+                imported,
+                updated,
+                errors: errors.slice(0, 100), // cap detail list
             });
         } catch (error: any) {
             console.error('importProductsFromExcel error:', error);
@@ -242,3 +298,4 @@ export async function importProductsFromExcel(req: Request, res: Response) {
         }
     });
 }
+
