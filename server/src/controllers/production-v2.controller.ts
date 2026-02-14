@@ -964,6 +964,9 @@ export const createProductionRun = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'productId is required' });
         }
 
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [Number(productId)]);
+
         // 1. Найти текущую версию MML (MAX version, not deleted)
         const mmlHeader = await requireCurrentMmlByProductId(prisma, Number(productId));
 
@@ -3271,6 +3274,9 @@ export const createAdjustment = async (req: Request, res: Response) => {
         if (!productId || !deltaWeight) {
             return res.status(400).json({ error: 'productId and deltaWeight are required' });
         }
+
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [Number(productId)]);
 
         const adjustment = await prisma.productionAdjustment.create({
             data: {

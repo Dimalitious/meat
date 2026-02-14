@@ -122,6 +122,11 @@ export const updateMmlItem = async (req: Request, res: Response) => {
             return res.status(400).json({ error: 'MML is locked and cannot be edited' });
         }
 
+        // Guard: component product must be active
+        if (componentProductId) {
+            await assertActiveProductsOrThrow(prisma, [componentProductId]);
+        }
+
         const item = await prisma.productionMmlItem.update({
             where: { mmlId_lineNo: { mmlId, lineNo } },
             data: { componentProductId },
@@ -245,6 +250,9 @@ export const createBatch = async (req: Request, res: Response) => {
         const { productId } = req.body;
         const userId = (req as any).user.userId;
 
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [productId]);
+
         // Find MML for this product (if exists and locked)
         const mml = await prisma.productionMml.findFirst({
             where: { productId, isLocked: true },
@@ -350,6 +358,10 @@ export const updateBatchItem = async (req: Request, res: Response) => {
 
         const updateData: any = {};
         if (componentProductId !== undefined) {
+            // Guard: component product must be active
+            if (componentProductId) {
+                await assertActiveProductsOrThrow(prisma, [componentProductId]);
+            }
             updateData.componentProductId = componentProductId;
         }
         if (value !== undefined) {

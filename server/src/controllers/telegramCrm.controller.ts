@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../db';
 import { confirmDraft, cancelDraft } from '../services/draftService';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 // ============================================
 // Генерация bind-кода (без O/0/I/1)
@@ -195,6 +196,15 @@ export async function updateDraft(req: Request, res: Response) {
 
         // Update items if provided
         if (items && Array.isArray(items)) {
+            // Guard: new productIds must be active (soft-delta)
+            const existingProductIds = new Set(draft.items.map((i: any) => i.productId).filter(Boolean));
+            const newProductIds = items
+                .filter((i: any) => i.productId && !existingProductIds.has(i.productId))
+                .map((i: any) => i.productId);
+            if (newProductIds.length > 0) {
+                await assertActiveProductsOrThrow(prisma, newProductIds);
+            }
+
             for (const item of items) {
                 if (item.id) {
                     await prisma.orderDraftItem.update({
