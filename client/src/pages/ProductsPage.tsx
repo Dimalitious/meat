@@ -12,6 +12,7 @@ import {
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Plus, X, Save, Settings, Download, Upload } from 'lucide-react';
+import { SearchableSelect } from '../components/ui/SearchableSelect';
 
 interface Product {
     id: number;
@@ -637,34 +638,24 @@ const ProductsPage = () => {
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Подкатегория *</label>
-                                    <select
-                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        value={formData.subcategoryId || ''}
-                                        onChange={e => setFormData({ ...formData, subcategoryId: Number(e.target.value) || undefined })}
+                                    <SearchableSelect
+                                        options={allSubcategories}
+                                        value={formData.subcategoryId ?? undefined}
+                                        onChange={v => setFormData({ ...formData, subcategoryId: v })}
+                                        placeholder="Найти подкатегорию..."
+                                        emptyLabel="Выберите подкатегорию"
                                         required
-                                    >
-                                        <option value="">Выберите подкатегорию</option>
-                                        {allSubcategories.map(s => (
-                                            <option key={s.id} value={s.id} disabled={!s.isActive || !!s.deletedAt} className={!s.isActive || !!s.deletedAt ? 'text-slate-400 bg-slate-50' : ''}>
-                                                {s.name} {s.deletedAt ? '(удалена)' : !s.isActive ? '(архив)' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
+                                    />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-slate-700 mb-1">Категория</label>
-                                    <select
-                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                        value={formData.categoryId || ''}
-                                        onChange={e => setFormData({ ...formData, categoryId: Number(e.target.value) || undefined })}
-                                    >
-                                        <option value="">Без категории</option>
-                                        {allCategories.map(c => (
-                                            <option key={c.id} value={c.id} disabled={!c.isActive || !!c.deletedAt} className={!c.isActive || !!c.deletedAt ? 'text-slate-400 bg-slate-50' : ''}>
-                                                {c.name} {c.deletedAt ? '(удалена)' : !c.isActive ? '(архив)' : ''}
-                                            </option>
-                                        ))}
-                                    </select>
+                                    <SearchableSelect
+                                        options={allCategories}
+                                        value={formData.categoryId ?? undefined}
+                                        onChange={v => setFormData({ ...formData, categoryId: v })}
+                                        placeholder="Найти категорию..."
+                                        emptyLabel="Без категории"
+                                    />
                                 </div>
                             </div>
 
