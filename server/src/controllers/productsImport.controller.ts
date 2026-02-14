@@ -22,7 +22,7 @@ const normalizeKey = (raw: any): string =>
 export async function downloadImportTemplate(_req: Request, res: Response) {
     try {
         const headers = [
-            ['code', 'name', 'altName', 'category', 'subcategory', 'uom', 'country', 'priceListName', 'coefficient', 'lossNorm', 'participatesInProduction'],
+            ['Код', 'Наименование', 'Альт. наименование', 'Категория', 'Подкатегория', 'Ед. измерения', 'Страна', 'Наименование прайс-листа', 'Коэффициент', 'Норма потерь', 'Участвует в производстве'],
         ];
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.aoa_to_sheet(headers);
@@ -63,7 +63,23 @@ export async function importProductsFromExcel(req: Request, res: Response) {
             // Parse Excel
             const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
             const ws = wb.Sheets[wb.SheetNames[0]];
-            const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+            // Map Russian headers → internal English keys (supports both languages)
+            const headerMap: Record<string, string> = {
+                'Код': 'code', 'Наименование': 'name', 'Альт. наименование': 'altName',
+                'Категория': 'category', 'Подкатегория': 'subcategory', 'Ед. измерения': 'uom',
+                'Страна': 'country', 'Наименование прайс-листа': 'priceListName',
+                'Коэффициент': 'coefficient', 'Норма потерь': 'lossNorm',
+                'Участвует в производстве': 'participatesInProduction',
+            };
+            const rows = rawRows.map((r) => {
+                const mapped: any = {};
+                for (const [key, val] of Object.entries(r)) {
+                    mapped[headerMap[key] || key] = val;
+                }
+                return mapped;
+            });
 
             if (rows.length === 0) {
                 return res.status(400).json({ error: 'EMPTY_FILE', message: 'Файл пуст.' });
