@@ -1,8 +1,7 @@
 import { Request, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../db';
 import { assertMmlUsableForNewOps, handleMmlGuardError } from '../services/mml.service';
-
-const prisma = new PrismaClient();
 
 // Типы для запросов
 interface LoadFromPurchaseParams {

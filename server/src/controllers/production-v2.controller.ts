@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { getUtcRangeFromYmd } from '../utils/dateRange';
 import {
     assertMmlUsableForNewOps,
@@ -13,8 +13,7 @@ import {
     MmlGuardError,
 } from '../services/mml.service';
 import { assertActiveProductsOrThrow } from '../utils/productGuards';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
 
 // ============================================
 // MML - Управление техкартами

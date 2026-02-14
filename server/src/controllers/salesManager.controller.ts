@@ -1,12 +1,9 @@
 import { Request, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../db';
 import { getAllowedCustomerIds, assertCustomerAccess } from '../services/salesManagerAccess.service';
 import { buildStatement } from '../services/salesManagerStatement.service';
 import { resolveGeoSnapshot } from '../services/geoSnapshot.service';
-
-// Cast to any: new models (CustomerSalesManager, CustomerMoneyRefund, OrderDraft fields)
-// are not in the generated client until `npx prisma generate` is re-run.
-const prisma = new PrismaClient() as any;
 
 // ============================================
 // HELPERS

@@ -1,7 +1,5 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
 
 // Get list of orders ready for assembly (status = new or processing)
 export const getOrdersForAssembly = async (req: Request, res: Response) => {

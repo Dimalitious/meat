@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../db';
 import { syncPurchaseLedger } from '../services/supplierLedger.service';
-
-const prisma = new PrismaClient();
 
 // ============================================
 // ЖУРНАЛ ЗАКУПОК
