@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import api from '../config/axios';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -12,7 +11,7 @@ import {
 } from '../components/ui/Table';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
-import { Plus, X, Save, Settings } from 'lucide-react';
+import { Plus, X, Save, Settings, Download, Upload } from 'lucide-react';
 
 interface Product {
     id: number;
@@ -35,6 +34,22 @@ interface Product {
     categoryRel?: { id: number; name: string; isActive: boolean; deletedAt?: string | null } | null;
 }
 
+interface ImportError {
+    row: number;
+    code?: string;
+    column?: string;
+    error: string;
+    message?: string;
+}
+
+interface ImportResult {
+    success: boolean;
+    imported: number;
+    updated: number;
+    skipped: number;
+    errors: ImportError[];
+}
+
 const ProductsPage = () => {
     const { user } = useAuth();
     const isAdmin = user?.roles?.includes('ADMIN') ?? false;
@@ -47,6 +62,10 @@ const ProductsPage = () => {
     const [filterName, setFilterName] = useState('');
     const [filterCategory, setFilterCategory] = useState('');
     const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
+
+    // Import state
+    const [importResult, setImportResult] = useState<ImportResult | null>(null);
+    const [importLoading, setImportLoading] = useState(false);
 
     const [formData, setFormData] = useState<Partial<Product>>({
         code: '',
@@ -243,110 +262,46 @@ const ProductsPage = () => {
         }
     };
 
-    // Excel import - BATCH VERSION (fast)
+    // Server-side Excel import (ТЗ §11.4)
+    const handleDownloadTemplate = async () => {
+        try {
+            const res = await api.get('/api/products/import-template', { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = 'products_import_template.xlsx';
+            link.click();
+            window.URL.revokeObjectURL(url);
+        } catch (err: any) {
+            alert('Ошибка скачивания шаблона: ' + (err.response?.data?.error || err.message));
+        }
+    };
+
     const handleExcelImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = async (evt) => {
-            try {
-                const data = evt.target?.result;
-                const workbook = XLSX.read(data, { type: 'binary' });
-                const sheetName = workbook.SheetNames[0];
-                const sheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(sheet);
-
-                if (jsonData.length === 0) {
-                    alert('Файл Excel пуст или не содержит данных');
-                    return;
-                }
-
-                // DEBUG: Show parsed headers
-                const headers = Object.keys(jsonData[0] as object);
-                console.log('Excel Headers:', headers);
-                console.log('Total rows:', jsonData.length);
-
-                // Helper function to get value case-insensitively
-                const getVal = (row: any, ...keys: string[]) => {
-                    for (const key of keys) {
-                        const found = Object.keys(row).find(k => k.toLowerCase().trim() === key.toLowerCase().trim());
-                        if (found && row[found] !== undefined && row[found] !== null && row[found] !== '') {
-                            return String(row[found]);
-                        }
-                    }
-                    return '';
-                };
-
-                // Collect all products for batch import
-                const products: Array<{
-                    code: string;
-                    name: string;
-                    altName?: string;
-                    priceListName?: string;
-                    category?: string;
-                    status?: string;
-                    coefficient?: number;
-                    lossNorm?: number;
-                }> = [];
-
-                let skipped = 0;
-
-                for (let i = 0; i < jsonData.length; i++) {
-                    const row = jsonData[i] as any;
-                    const rowNum = i + 2;
-
-                    const code = getVal(row, 'код', 'code');
-                    const name = getVal(row, 'название', 'полное название', 'name');
-
-                    if (!code || !name) {
-                        console.log(`Row ${rowNum}: missing code or name`);
-                        skipped++;
-                        continue;
-                    }
-
-                    products.push({
-                        code,
-                        name,
-                        altName: getVal(row, 'альт. название', 'альтернативное название', 'altname') || undefined,
-                        priceListName: getVal(row, 'название прайс-листа', 'прайс-лист', 'прайс', 'pricelistname') || undefined,
-                        category: getVal(row, 'категория', 'category') || undefined,
-                        // Преобразуем русский статус в английский
-                        status: (() => {
-                            const s = getVal(row, 'статус', 'status').toLowerCase();
-                            if (s === 'активный' || s === 'активен' || s === 'active' || s === '') return 'active';
-                            return 'inactive';
-                        })(),
-                        coefficient: Number(getVal(row, 'коэфф.', 'коэфф', 'coefficient') || 1),
-                        lossNorm: Number(getVal(row, 'потери%', 'потери', 'lossnorm') || 0)
-                    });
-                }
-
-                if (products.length === 0) {
-                    alert(`Не найдено записей для импорта.\nПропущено: ${skipped}\n\nКолонки в файле: ${headers.join(', ')}\n\nУбедитесь что есть колонки "Код" и "Полное название" (или "Название")`);
-                    return;
-                }
-
-                console.log(`Sending batch import for ${products.length} products...`);
-
-                const response = await api.post('/api/products/batch-upsert', { products });
-
-                const result = response.data;
-                let message = `✅ Импорт завершён!\n\nДобавлено: ${result.imported}\nОбновлено: ${result.updated}`;
-                if (skipped > 0) message += `\nПропущено: ${skipped}`;
-                if (result.totalErrors > 0) {
-                    message += `\n\nОшибки (${result.totalErrors}):\n${result.errors.join('\n')}`;
-                }
-
-                alert(message);
-                fetchProducts();
-            } catch (err: any) {
-                console.error('Excel import error:', err);
-                alert('Ошибка импорта Excel: ' + (err.response?.data?.error || err.message));
-            }
-        };
-        reader.readAsBinaryString(file);
         e.target.value = '';
+
+        setImportLoading(true);
+        setImportResult(null);
+        try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await api.post('/api/products/import', fd, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            setImportResult(res.data);
+            fetchProducts();
+        } catch (err: any) {
+            const data = err.response?.data;
+            if (data?.errors) {
+                setImportResult(data);
+            } else {
+                alert('Ошибка импорта: ' + (data?.error || err.message));
+            }
+        } finally {
+            setImportLoading(false);
+        }
     };
 
     const filteredProducts = useMemo(() => {
@@ -388,9 +343,21 @@ const ProductsPage = () => {
                         onChange={handleExcelImport}
                         className="hidden"
                     />
-                    <Button onClick={() => fileInputRef.current?.click()} variant="outline" className="flex items-center gap-2">
-                        📥 Загрузить Excel
-                    </Button>
+                    {isAdmin && (
+                        <>
+                            <Button onClick={handleDownloadTemplate} variant="outline" className="flex items-center gap-2">
+                                <Download size={16} /> Шаблон
+                            </Button>
+                            <Button
+                                onClick={() => fileInputRef.current?.click()}
+                                variant="outline"
+                                className="flex items-center gap-2"
+                                disabled={importLoading}
+                            >
+                                <Upload size={16} /> {importLoading ? 'Импорт...' : 'Импорт Excel'}
+                            </Button>
+                        </>
+                    )}
                     {isAdmin && selectedCodes.size > 0 && (
                         <Button onClick={deactivateSelected} variant="outline" className="flex items-center gap-2 text-orange-600 border-orange-300 hover:bg-orange-50">
                             ⏸ Отключить ({selectedCodes.size})
@@ -401,6 +368,48 @@ const ProductsPage = () => {
                     </Button>
                 </div>
             </div>
+
+            {/* Import result report */}
+            {importResult && (
+                <div className="bg-white rounded-md border border-slate-200 p-4 shadow-sm">
+                    <div className="flex justify-between items-center mb-3">
+                        <h3 className="font-semibold text-slate-800">Результат импорта</h3>
+                        <button onClick={() => setImportResult(null)} className="text-slate-400 hover:text-slate-600">
+                            <X size={18} />
+                        </button>
+                    </div>
+                    <div className="flex gap-4 text-sm mb-3">
+                        <span className="text-green-600">✅ Добавлено: {importResult.imported}</span>
+                        <span className="text-blue-600">🔄 Обновлено: {importResult.updated}</span>
+                        {importResult.skipped > 0 && <span className="text-yellow-600">⏭ Пропущено: {importResult.skipped}</span>}
+                        {importResult.errors.length > 0 && <span className="text-red-600">❌ Ошибок: {importResult.errors.length}</span>}
+                    </div>
+                    {importResult.errors.length > 0 && (
+                        <div className="max-h-60 overflow-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-200 text-left">
+                                        <th className="py-1 px-2 w-16">Строка</th>
+                                        <th className="py-1 px-2 w-24">Код</th>
+                                        <th className="py-1 px-2 w-32">Ошибка</th>
+                                        <th className="py-1 px-2">Описание</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {importResult.errors.map((err, i) => (
+                                        <tr key={i} className="border-b border-slate-100 text-red-700">
+                                            <td className="py-1 px-2">{err.row}</td>
+                                            <td className="py-1 px-2">{err.code || '—'}</td>
+                                            <td className="py-1 px-2 font-mono text-xs">{err.error}</td>
+                                            <td className="py-1 px-2">{err.message || '—'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="bg-white rounded-md border border-slate-200 overflow-hidden shadow-sm">
                 <div className="overflow-x-auto">

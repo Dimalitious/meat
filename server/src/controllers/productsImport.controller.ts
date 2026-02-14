@@ -22,16 +22,16 @@ const normalizeKey = (raw: any): string =>
 export async function downloadImportTemplate(_req: Request, res: Response) {
     try {
         const headers = [
-            ['code', 'name', 'altName', 'priceListName', 'category', 'status', 'coefficient', 'lossNorm', 'uom', 'country', 'subcategory'],
+            ['code', 'name', 'altName', 'category', 'subcategory', 'uom', 'country', 'priceListName', 'coefficient', 'lossNorm', 'participatesInProduction'],
         ];
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.aoa_to_sheet(headers);
 
         // Column widths
         ws['!cols'] = [
-            { wch: 12 }, { wch: 30 }, { wch: 25 }, { wch: 25 },
-            { wch: 18 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
-            { wch: 10 }, { wch: 15 }, { wch: 20 },
+            { wch: 12 }, { wch: 30 }, { wch: 25 }, { wch: 18 },
+            { wch: 20 }, { wch: 10 }, { wch: 15 }, { wch: 25 },
+            { wch: 12 }, { wch: 10 }, { wch: 22 },
         ];
 
         XLSX.utils.book_append_sheet(wb, ws, 'Products');
