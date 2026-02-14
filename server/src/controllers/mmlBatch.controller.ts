@@ -3,9 +3,8 @@
 // that have been replaced by ProductionRun, ProductionRunValue, ProductionMmlNode in the current schema.
 // It is kept for reference but should be rewritten or removed.
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 // ========== MML CONTROLLER ==========
 
@@ -70,6 +69,9 @@ export const createMml = async (req: Request, res: Response) => {
         if (existing) {
             return res.status(400).json({ error: 'MML already exists for this product' });
         }
+
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [productId]);
 
         const mml = await prisma.productionMml.create({
             data: {

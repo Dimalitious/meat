@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../db';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 // Получить все карточки клиента
 export const getCustomerCards = async (req: Request, res: Response) => {
@@ -119,6 +120,9 @@ export const addCardItem = async (req: Request, res: Response) => {
     try {
         const { cardId } = req.params;
         const { productId, description, sortOrder } = req.body;
+
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [Number(productId)]);
 
         const item = await prisma.customerCardItem.upsert({
             where: {

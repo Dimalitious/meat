@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../db';
+import { assertActiveProductsOrThrow } from '../utils/productGuards';
 
 // ============================================
 // CUSTOMER PRODUCTS - Персональный каталог товаров клиента
@@ -84,6 +83,9 @@ export const addCustomerProduct = async (req: Request, res: Response) => {
             return res.status(404).json({ error: 'Product not found' });
         }
 
+        // Guard: product must be active
+        await assertActiveProductsOrThrow(prisma, [productId]);
+
         // Создаём связь (upsert для избежания дубликатов)
         const customerProduct = await prisma.customerProduct.upsert({
             where: {
@@ -141,6 +143,9 @@ export const addCustomerProductsBulk = async (req: Request, res: Response) => {
         if (!customer) {
             return res.status(404).json({ error: 'Customer not found' });
         }
+
+        // Guard: all products must be active
+        await assertActiveProductsOrThrow(prisma, productIds);
 
         // Получаем текущий максимальный sortOrder
         const maxSortOrder = await prisma.customerProduct.aggregate({
